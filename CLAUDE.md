@@ -100,7 +100,7 @@ pyproject.toml                     # uv workspace 4 包
 - 部署目录：`/opt/beeos`
 - systemd unit：`beeos.service`
 - 反向代理：nginx 已存在，新加 `conf.d/beeos.conf`
-- 域名：**待定**（建议 `beeos.agentbeeline.com` 子域名）
+- 域名：**demo 阶段 IP-only**（V1+ 接入域名 + HTTPS）
 
 ## 共享记忆
 

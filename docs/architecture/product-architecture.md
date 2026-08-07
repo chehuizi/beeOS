@@ -247,8 +247,8 @@ T+46:00  下载 ZIP（报表 + 凭证 + 审计日志）
 ```
 客户数据中心
 └── beeos-server (1 台)
-      ├── https://beeos.example.com:8443 (Portal)
-      ├── https://beeos.example.com:8443/admin (Beekeeper Console)
+      ├── http://101.37.146.194 (Portal) — demo 阶段 IP-only
+      ├── http://101.37.146.194/admin (Beekeeper Console)
       ├── postgres (本地)
       └── redis (本地)
 ```

@@ -1,32 +1,40 @@
 # beeOS ECS 部署 Runbook
 
 > 镜像 [domain-box 的部署模式](../domain-box/../domain-box/docs/DEPLOY.md) 但适配 Docker Compose 多服务架构。
+>
+> **当前阶段**：IP-only，无 HTTPS。域名 / 证书 / 反代鉴权 等在 V1+ 接入。
 
 ## 主机
 
 - **ECS**：阿里云 ECS（**与 domain-box 同台**：`101.37.146.194`）
-- **域名**：复用 `www.agentbeeline.com` 的 nginx（**待定 — 是否给 beeOS 配独立子域名**）
+- **访问方式**：直接 IP，**demo 阶段暂不绑域名**
 - **OS**：Ubuntu 22.04 LTS
 
 ## 架构概览
 
 ```
 ECS (101.37.146.194)
-├─ nginx (80/443) → 已有，运行 agentbeeline.com
-│   └─ 新增 /etc/nginx/conf.d/beeos.conf (待配置)
+├─ nginx (80) → 反向代理
+│   └─ /etc/nginx/conf.d/beeos.conf
 │
 └─ beeOS 栈 (/opt/beeos)
    ├─ systemd unit: beeos.service
    ├─ Docker Compose
-   │   ├─ postgres  (pgvector, 5432, 本地)
-   │   ├─ redis     (6379, 本地)
-   │   ├─ queen     (8080)
-   │   └─ portal    (3000)
+   │   ├─ postgres  (pgvector, 5432, 仅 127.0.0.1)
+   │   ├─ redis     (6379,     仅 127.0.0.1)
+   │   ├─ queen     (8080,     仅 127.0.0.1)
+   │   └─ portal    (3000,     仅 127.0.0.1)
    └─ 数据卷
        ├─ postgres-data
        ├─ redis-data
        └─ box-data
 ```
+
+**外部访问**：
+
+- `http://101.37.146.194/` → Portal (3000)
+- `http://101.37.146.194/api/` → Queen API (8080)
+- 后台端口（5432/6379/3000/8080）**仅 127.0.0.1 监听**，通过 nginx 80 端口对外
 
 **与 domain-box 的差异**：
 
@@ -141,8 +149,9 @@ BEEOOS_LLM_FALLBACK_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 BEEOOS_VENDOR_TELEMETRY_ENABLED=false
 
 # === Portal ===
-BEEOOS_PORTAL_URL=https://<your-domain>
-BEEOOS_CORS_ALLOWED_ORIGINS=["https://<your-domain>"]
+# demo 阶段：直接填 IP。V1 接入域名后改 https://<your-domain>
+BEEOOS_PORTAL_URL=http://101.37.146.194
+BEEOOS_CORS_ALLOWED_ORIGINS=["http://101.37.146.194"]
 ```
 
 **生成强随机密钥**：
@@ -151,30 +160,30 @@ BEEOOS_CORS_ALLOWED_ORIGINS=["https://<your-domain>"]
 openssl rand -base64 32  # 用于 master_key 和 api_token_secret
 ```
 
-### 5. Nginx
+### 5. Nginx（IP-only，无 HTTPS）
 
 ```bash
-# 复制配置
+# 复制配置（已硬编码 default_server，无 SSL 块）
 sudo cp /opt/beeos/deploy/nginx/beeos.conf /etc/nginx/conf.d/beeos.conf
-
-# 替换域名占位符
-sudo sed -i 's/_/<your-domain>/g' /etc/nginx/conf.d/beeos.conf
-sudo sed -i 's|/etc/nginx/ssl/beeos|/etc/nginx/ssl/<your-domain>|g' /etc/nginx/conf.d/beeos.conf
-
-# 准备 SSL 证书（Let's Encrypt）
-sudo certbot --nginx -d <your-domain>
 
 # 测试 & 重启
 sudo nginx -t
 sudo systemctl reload nginx
 ```
 
+**V1+ 升级 HTTPS 的备忘**（写在 nginx conf 注释里）：
+
+1. 准备证书：`certbot certonly --nginx -d <your-domain>`
+2. 改 nginx 监听 443 + 加 ssl_certificate
+3. 加 80 → 443 redirect server {}
+4. 改 `BEEOOS_PORTAL_URL` / `BEEOOS_CORS_ALLOWED_ORIGINS` 为 `https://`
+
 ### 6. 防火墙
 
 ```bash
 # 阿里云安全组 + 本地 iptables 都放行
 sudo ufw allow 80/tcp
-sudo ufw allow 443/tcp
+# 443 暂不开
 # 3000 / 5432 / 6379 / 8080 必须仅 127.0.0.1 监听，绝不外暴露
 ```
 
@@ -228,10 +237,10 @@ curl -fsS -o /dev/null -w 'http_code=%{http_code}\n' http://127.0.0.1:3000/
 ssh root@101.37.146.194 'cd /opt/beeos && docker compose ps'
 
 # 公网 HTTPS
-curl -fsS https://<your-domain>/health
+curl -fsS http://101.37.146.194/health
 
 # 女王 API 鉴权（应当 401）
-curl -fsS -o /dev/null -w 'http_code=%{http_code}\n' https://<your-domain>/api/v0/queen/jobs
+curl -fsS -o /dev/null -w 'http_code=%{http_code}\n' http://101.37.146.194/api/v0/queen/jobs
 ```
 
 ---

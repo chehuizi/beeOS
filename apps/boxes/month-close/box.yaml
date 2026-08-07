@@ -1,0 +1,76 @@
+# MonthCloseBox 清单
+# 对应 [技术架构 §4.4]
+box:
+  id: month-close
+  name: 月结自动化
+  version: "0.1.0"
+  description: 把会计所月结流程（拉余额 / 对账 / 分类 / 出表 / 审批）封装为可被 Bee 调用的模块
+  industry: 会计
+
+# 暴露给 Bee 的模块清单
+modules:
+  - name: accounts_payable_query
+    description: 查应付账款
+    input_schema:
+      period: string  # YYYY-MM
+      client_id: string?
+    output_schema: array
+
+  - name: accounts_receivable_query
+    description: 查应收账款
+    input_schema:
+      period: string
+      client_id: string?
+    output_schema: array
+
+  - name: bank_reconcile
+    description: 银行对账
+    input_schema:
+      period: string
+    output_schema:
+      matched: integer
+      unmatched: array
+
+  - name: expense_classify
+    description: 费用按科目分类
+    input_schema:
+      vouchers: array
+    output_schema: array
+
+  - name: report_generate
+    description: 生成三大报表
+    input_schema:
+      period: string
+    output_schema:
+      pdf_url: string
+
+  - name: evidence_collect
+    description: 凭证归集
+    input_schema:
+      period: string
+    output_schema:
+      zip_url: string
+
+  - name: signoff_request
+    description: 发起审批
+    input_schema:
+      report_url: string
+      approver: string
+    output_schema:
+      signoff_id: string
+
+# 写死的工作流（MVP 阶段，不调 LLM 拆解）
+# 对应 [技术架构 §4.4 月结流程编排]
+workflow:
+  - step: pull_balances
+    module: [accounts_payable_query, accounts_receivable_query]
+  - step: reconcile
+    module: bank_reconcile
+  - step: classify
+    module: expense_classify
+  - step: generate_reports
+    module: report_generate
+  - step: collect_evidence
+    module: evidence_collect
+  - step: request_signoff
+    module: signoff_request

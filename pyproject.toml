@@ -1,0 +1,76 @@
+[project]
+name = "beeos"
+version = "0.1.0"
+description = "beeOS - 私有化 AI 数字员工平台"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+authors = [
+    { name = "beeOS Authors" }
+]
+
+# 根目录不打包，只作为 workspace 入口
+[tool.uv]
+dev-dependencies = [
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+    "pre-commit>=3.8.0",
+]
+
+# uv workspace：所有 Python 包都作为成员
+[tool.uv.workspace]
+members = [
+    "packages/beeos-core",
+    "apps/queen",
+    "apps/bee",
+    "apps/boxes/month-close",
+]
+
+# 统一工具配置
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "N",   # pep8-naming
+    "S",   # flake8-bandit (security)
+    "C4",  # flake8-comprehensions
+    "RET", # flake8-return
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "S101",  # 允许测试中使用 assert
+    "B008",  # FastAPI 依赖注入需要函数调用
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "S105", "S106"]  # 测试允许测试断言和假密码
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "unit: 单元测试",
+    "integration: 集成测试",
+    "e2e: 端到端测试",
+    "slow: 慢速测试",
+]

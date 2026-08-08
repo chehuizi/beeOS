@@ -20,17 +20,14 @@ COPY apps/queen/pyproject.toml apps/queen/
 COPY apps/bee/pyproject.toml apps/bee/
 COPY apps/boxes/month-close/pyproject.toml apps/boxes/month-close/
 
-# 安装依赖
-RUN uv sync --frozen --no-install-project
-
-# 复制源码
+# 复制源码（先复制再 sync，否则 install project 找不到 src）
 COPY packages/beeos-core/src packages/beeos-core/src
 COPY apps/queen/src apps/queen/src
 COPY apps/bee/src apps/bee/src
 COPY apps/boxes/month-close/src apps/boxes/month-close/src
 COPY apps/boxes/month-close/box.yaml apps/boxes/month-close/
 
-# 构建所有包
+# 安装整个 workspace（包括所有项目 = 创建 queen 脚本入口）
 RUN uv sync --frozen
 
 # === Runtime 镜像 ===

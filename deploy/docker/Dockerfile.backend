@@ -29,7 +29,7 @@ COPY apps/boxes/month-close/box.yaml apps/boxes/month-close/
 
 # 安装整个 workspace（包括所有项目 = 创建 queen 脚本入口）
 RUN uv sync --frozen --all-packages && \
-    uv pip install \
+    uv pip install --no-deps \
         packages/beeos-core \
         apps/queen \
         apps/bee \

@@ -29,6 +29,13 @@ members = [
     "apps/boxes/month-close",
 ]
 
+# workspace 内的包需要显式声明来源
+[tool.uv.sources]
+beeos-core = { workspace = true }
+queen = { workspace = true }
+bee = { workspace = true }
+month-close-box = { workspace = true }
+
 # 统一工具配置
 [tool.ruff]
 line-length = 100

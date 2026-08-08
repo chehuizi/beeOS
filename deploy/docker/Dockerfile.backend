@@ -28,7 +28,12 @@ COPY apps/boxes/month-close/src apps/boxes/month-close/src
 COPY apps/boxes/month-close/box.yaml apps/boxes/month-close/
 
 # 安装整个 workspace（包括所有项目 = 创建 queen 脚本入口）
-RUN uv sync --frozen --all-packages
+RUN uv sync --frozen --all-packages && \
+    uv pip install \
+        packages/beeos-core \
+        apps/queen \
+        apps/bee \
+        apps/boxes/month-close
 
 # === Runtime 镜像 ===
 FROM python:3.12-slim AS runtime

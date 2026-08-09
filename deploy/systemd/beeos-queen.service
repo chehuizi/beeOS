@@ -1,0 +1,32 @@
+[Unit]
+Description=beeOS Queen - 调度服务（M2 单进程模式）
+Documentation=https://github.com/chehuizi/beeOS
+After=network-online.target postgresql.service redis.service
+Wants=network-online.target
+Requires=postgresql.service redis.service
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/opt/beeos
+EnvironmentFile=/opt/beeos/.env
+Environment="PATH=/opt/beeos/venv/bin:/usr/local/bin:/usr/bin"
+ExecStart=/opt/beeos/venv/bin/queen
+Restart=on-failure
+RestartSec=10
+
+# 资源限制（1.8GB 内存，给 Queen 留 600MB）
+MemoryMax=600M
+TasksMax=100
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=beeos-queen
+
+# 环境
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=multi-user.target

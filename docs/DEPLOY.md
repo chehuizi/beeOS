@@ -1,6 +1,6 @@
 # beeOS ECS 部署 Runbook
 
-> 镜像 [domain-box 的部署模式](../domain-box/../domain-box/docs/DEPLOY.md) 但适配 Docker Compose 多服务架构。
+> 镜像 [domain-box 的部署模式](../domain-box/../domain-box/docs/DEPLOY.md) 但**抛弃 Docker，全程原生 systemd**。
 >
 > **当前阶段**：IP-only，无 HTTPS。域名 / 证书 / 反代鉴权 等在 V1+ 接入。
 
@@ -8,33 +8,30 @@
 
 - **ECS**：阿里云 ECS（**与 domain-box 同台**：`101.37.146.194`）
 - **访问方式**：直接 IP，**demo 阶段暂不绑域名**
-- **OS**：Ubuntu 22.04 LTS
+- **OS**：阿里云 Linux 3（alinux 3，RHEL 8 兼容）
 
 ## 架构概览
 
 ```
-ECS (101.37.146.194)
-├─ nginx (80) → 反向代理
-│   └─ /etc/nginx/conf.d/beeos.conf
-│
-└─ beeOS 栈 (/opt/beeos)
-   ├─ systemd unit: beeos.service
-   ├─ Docker Compose
-   │   ├─ postgres  (pgvector, 5432, 仅 127.0.0.1)
-   │   ├─ redis     (6379,     仅 127.0.0.1)
-   │   ├─ queen     (8080,     仅 127.0.0.1)
-   │   └─ portal    (3000,     仅 127.0.0.1)
-   └─ 数据卷
-       ├─ postgres-data
-       ├─ redis-data
-       └─ box-data
+ECS (101.37.146.194) — 4 个 native systemd units
+├─ nginx.service          (80 → 8080)
+├─ postgresql.service      (5432, 仅 127.0.0.1)
+├─ redis.service           (6379, 仅 127.0.0.1)
+└─ beeos-queen.service     (8080, 仅 127.0.0.1)
+                            ├─ venv: /opt/beeos/venv
+                            └─ .env: /opt/beeos/.env
 ```
+
+**零 Docker**：所有服务都是系统包 + systemd，**1 人天部署**实际只需要 5 分钟。
 
 **外部访问**：
 
-- `http://101.37.146.194/` → Portal (3000)
-- `http://101.37.146.194/api/` → Queen API (8080)
-- 后台端口（5432/6379/3000/8080）**仅 127.0.0.1 监听**，通过 nginx 80 端口对外
+- `http://101.37.146.194/health` → Queen 健康检查
+- `http://101.37.146.194/api/` → Queen API（待 V1 实现）
+- 后台端口（5432/6379/8080）**仅 127.0.0.1 监听**，通过 nginx 80 端口对外
+
+---
+
 
 **与 domain-box 的差异**：
 
@@ -58,15 +55,39 @@ ssh root@101.37.146.194
 
 # 创建 deploy 用户（如果还没有）
 id deploy || useradd -m -s /bin/bash deploy
-usermod -aG docker deploy
 
 # beeOS 目录
 mkdir -p /opt/beeos
 chown -R deploy:deploy /opt/beeos
+```
 
-# 数据持久化目录
-mkdir -p /var/lib/beeos/{postgres,redis,boxes}
-chown -R deploy:deploy /var/lib/beeos
+> **不用加 docker 组** —— 全部原生 systemd，不依赖 Docker
+
+### 2. 安装 PostgreSQL + Redis（系统包）
+
+```bash
+# alinux 3 默认 PG 11（够 MVP 用，V1+ 升级 PG 14 + pgvector）
+yum module enable -y postgresql:11
+yum install -y postgresql-server postgresql-contrib redis
+
+# 初始化 + 启动
+postgresql-setup --initdb
+systemctl enable --now postgresql
+systemctl enable --now redis
+
+# 创建 beeos 用户 + 数据库
+sudo -u postgres psql -c "CREATE USER beeos WITH PASSWORD 'beeos-demo-password-change-me';"
+sudo -u postgres psql -c "CREATE DATABASE beeos OWNER beeos;"
+sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE beeos TO beeos;"
+
+# 改 pg_hba.conf 允许密码登录（默认是 ident）
+sed -i "s|^host.*all.*all.*127.0.0.1/32.*ident|host all all 127.0.0.1/32 md5|" /var/lib/pgsql/data/pg_hba.conf
+sed -i "s|^host.*all.*all.*::1/128.*ident|host all all ::1/128 md5|" /var/lib/pgsql/data/pg_hba.conf
+systemctl reload postgresql
+
+# 验证
+PGPASSWORD=beeos-demo-password-change-me psql -h 127.0.0.1 -U beeos -d beeos -c "SELECT 1;"
+redis-cli ping  # 期望 PONG
 ```
 
 ### 2. Docker 安装（如果还没有）
@@ -79,35 +100,43 @@ systemctl enable docker
 systemctl start docker
 ```
 
-### 3. Systemd Unit
+### 3. Systemd Unit（Queen）
 
 ```bash
-cat > /etc/systemd/system/beeos.service <<'EOF'
+# 复制（在 deploy/ 目录下）
+cp /opt/beeos/deploy/systemd/beeos-queen.service /etc/systemd/system/
+
+systemctl daemon-reload
+systemctl enable --now beeos-queen
+```
+
+`beeos-queen.service` 内容：
+
+```ini
 [Unit]
-Description=beeOS - 私有化 AI 数字员工平台
-After=network-online.target docker.service
+Description=beeOS Queen - 调度服务
+After=network-online.target postgresql.service redis.service
 Wants=network-online.target
-Requires=docker.service
+Requires=postgresql.service redis.service
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
+Type=simple
 User=deploy
+Group=deploy
 WorkingDirectory=/opt/beeos
 EnvironmentFile=/opt/beeos/.env
-ExecStart=/usr/bin/docker compose -f /opt/beeos/docker-compose.yml up -d
-ExecStop=/usr/bin/docker compose -f /opt/beeos/docker-compose.yml down
-ExecReload=/usr/bin/docker compose -f /opt/beeos/docker-compose.yml restart
-TimeoutStartSec=300
-TimeoutStopSec=60
+Environment="PATH=/opt/beeos/venv/bin:/usr/local/bin:/usr/bin"
+ExecStart=/opt/beeos/venv/bin/queen
+Restart=on-failure
+RestartSec=10
+MemoryMax=600M
+TasksMax=100
 
 [Install]
 WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable beeos
 ```
+
+> **关键约束**：`Requires=postgresql.service redis.service` —— Queen 启动依赖 PG/Redis 先就绪。
 
 ### 4. 环境变量（host-resident，绝不进入 tarball）
 
@@ -119,15 +148,15 @@ BEEOOS_INSTANCE_ID=prod-01
 BEEOOS_ENV=production
 BEEOOS_LOG_LEVEL=INFO
 
-# === 数据库 ===
-BEEOOS_POSTGRES_HOST=postgres
+# === 数据库（127.0.0.1 = 本机系统服务） ===
+BEEOOS_POSTGRES_HOST=127.0.0.1
 BEEOOS_POSTGRES_PORT=5432
 BEEOOS_POSTGRES_DB=beeos
 BEEOOS_POSTGRES_USER=beeos
-BEEOOS_POSTGRES_PASSWORD=<from secrets manager>
+BEEOOS_POSTGRES_PASSWORD=beeos-demo-password-change-me
 
-# === Redis ===
-BEEOOS_REDIS_HOST=redis
+# === Redis（同本机） ===
+BEEOOS_REDIS_HOST=127.0.0.1
 BEEOOS_REDIS_PORT=6379
 BEEOOS_REDIS_PASSWORD=
 
@@ -160,66 +189,101 @@ BEEOOS_CORS_ALLOWED_ORIGINS=["http://101.37.146.194"]
 openssl rand -base64 32  # 用于 master_key 和 api_token_secret
 ```
 
-### 5. Nginx（IP-only，无 HTTPS）
+### 5. 拉取源码 + 装 Python venv
 
 ```bash
-# 复制配置（已硬编码 default_server，无 SSL 块）
-sudo cp /opt/beeos/deploy/nginx/beeos.conf /etc/nginx/conf.d/beeos.conf
+cd /opt/beeos  # 已有源码目录（或从 git clone 拉）
 
-# 测试 & 重启
-sudo nginx -t
-sudo systemctl reload nginx
+# 装 deploy 用户的 uv
+sudo -u deploy curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 建 venv（用 deploy 用户，避免 root 路径权限问题）
+sudo -u deploy bash -c "
+  export PATH=\$HOME/.local/bin:\$PATH
+  cd /opt/beeos
+  uv venv --python 3.12 venv
+  uv pip install \
+    --python ./venv/bin/python \
+    -e packages/beeos-core \
+    -e apps/queen \
+    -e apps/bee \
+    -e apps/boxes/month-close \
+    --index-url https://mirrors.aliyun.com/pypi/simple/
+"
 ```
 
-**V1+ 升级 HTTPS 的备忘**（写在 nginx conf 注释里）：
+> `--index-url` 重要：ECS 包装 PyPI 出口走 aliyun 镜像，避免超时。
 
-1. 准备证书：`certbot certonly --nginx -d <your-domain>`
-2. 改 nginx 监听 443 + 加 ssl_certificate
-3. 加 80 → 443 redirect server {}
-4. 改 `BEEOOS_PORTAL_URL` / `BEEOOS_CORS_ALLOWED_ORIGINS` 为 `https://`
-
-### 6. 防火墙
+### 6. Nginx
 
 ```bash
-# 阿里云安全组 + 本地 iptables 都放行
+cp /opt/beeos/deploy/nginx/beeos.conf /etc/nginx/conf.d/beeos.conf
+nginx -t
+systemctl reload nginx
+```
+
+### 7. 防火墙
+
+```bash
+# 阿里云安全组 + 本地 iptables 放行 80
 sudo ufw allow 80/tcp
-# 443 暂不开
-# 3000 / 5432 / 6379 / 8080 必须仅 127.0.0.1 监听，绝不外暴露
-```
-
-### 7. 主机环境检查
-
-```bash
-# 部署前必跑
-bash /opt/beeos/deploy/scripts/check-server.sh
+# 5432 / 6379 / 8080 必须仅 127.0.0.1 监听，绝不外暴露
 ```
 
 ---
 
-## 部署
+## 部署验证
+
+```bash
+# 1. 检查 4 个 systemd 服务
+systemctl list-units --type=service --state=running | grep -E "beeos|postgres|redis|nginx"
+
+# 2. Queen /health
+curl -fsS http://127.0.0.1:8080/health
+# 期望: {"status":"ok","service":"queen","version":"0.1.0"}
+
+# 3. 公网健康检查（通过 nginx）
+curl -fsS http://101.37.146.194/health
+
+# 4. PG 连接
+PGPASSWORD=beeos-demo-password-change-me psql -h 127.0.0.1 -U beeos -d beeos -c "SELECT 1;"
+
+# 5. Redis
+redis-cli ping  # 期望 PONG
+```
+
+---
+
+## 部署（无 Docker 流程）
 
 ```bash
 # 本地
 cd /Users/chehuizi/Desktop/code/beeOS
-bash scripts/deploy-to-ecs.sh
-```
 
-脚本步骤：
+# 打包源码（不含 venv / node_modules / .env）
+tar --exclude='.git' --exclude='venv' --exclude='node_modules' \
+    --exclude='__pycache__' --exclude='*.pyc' \
+    -czf /tmp/beeos-src.tgz \
+    apps packages deploy docs scripts docker-compose.yml \
+    pyproject.toml uv.lock README.md CLAUDE.md LICENSE
 
-1. 记录当前 commit
-2. 本地 build docker 镜像
-3. 打包源码 + 镜像 tarball
-4. SCP 到 ECS `/tmp/`
-5. SSH 到 ECS 加载镜像 + 覆盖源码
-6. `systemctl restart beeos`
-7. 跑 smoke checks
+# Ship 到 ECS
+scp /tmp/beeos-src.tgz root@101.37.146.194:/tmp/
 
-参数：
-
-```bash
-bash scripts/deploy-to-ecs.sh --dry-run        # 只打印
-bash scripts/deploy-to-ecs.sh --skip-build     # 不重建镜像
-bash scripts/deploy-to-ecs.sh --host user@ip   # 自定义目标
+# ECS 上解压
+ssh root@101.37.146.194 '
+  cd /opt/beeos
+  tar -xzf /tmp/beeos-src.tgz
+  chown -R deploy:deploy /opt/beeos
+  # 同步 venv
+  sudo -u deploy bash -c "
+    export PATH=\$HOME/.local/bin:\$PATH
+    cd /opt/beeos
+    uv pip install --python ./venv/bin/python -e packages/beeos-core -e apps/queen -e apps/bee -e apps/boxes/month-close --index-url https://mirrors.aliyun.com/pypi/simple/ 2>&1 | tail -3
+  "
+  # 重启
+  systemctl restart beeos-queen
+'
 ```
 
 ---
@@ -227,57 +291,41 @@ bash scripts/deploy-to-ecs.sh --host user@ip   # 自定义目标
 ## 部署后 Smoke Checks
 
 ```bash
-# Queen API 健康
+# 系统服务状态
+ssh root@101.37.146.194 'systemctl list-units --type=service --state=running | grep -E "beeos|postgres|redis|nginx"'
+
+# Queen 健康
 curl -fsS http://127.0.0.1:8080/health
 
-# Portal 渲染
-curl -fsS -o /dev/null -w 'http_code=%{http_code}\n' http://127.0.0.1:3000/
-
-# 容器状态
-ssh root@101.37.146.194 'cd /opt/beeos && docker compose ps'
-
-# 公网 HTTPS
+# 公网（通过 nginx）
 curl -fsS http://101.37.146.194/health
 
-# 女王 API 鉴权（应当 401）
-curl -fsS -o /dev/null -w 'http_code=%{http_code}\n' http://101.37.146.194/api/v0/queen/jobs
+# 数据库连接
+ssh root@101.37.146.194 'PGPASSWORD=beeos-demo-password-change-me psql -h 127.0.0.1 -U beeos -d beeos -c "SELECT 1;"'
+
+# Redis
+ssh root@101.37.146.194 'redis-cli ping'
 ```
 
 ---
 
 ## 回滚
 
-脚本不自动 commit。回滚 = 部署上一个 commit：
-
 ```bash
 # 1. 找到上一个 commit
 git log --oneline -10
 
-# 2. 切到上一个 commit，部署
+# 2. 切到上一个 commit，打包
 git checkout <previous-sha>
-bash scripts/deploy-to-ecs.sh
+tar -czf /tmp/beeos-prev.tgz ...
 
-# 3. 切回主线
-git checkout feature/init
+# 3. ECS 上覆盖 + 重启
+ssh root@101.37.146.194 'cd /opt/beeos && tar -xzf /tmp/beeos-prev.tgz && systemctl restart beeos-queen'
+
+# 4. 数据库回滚（如果 schema 不兼容）
+ssh root@101.37.146.194 'pg_dump -U beeos beeos > /tmp/beeos-prev.sql'  # 部署前
+ssh root@101.37.146.194 'psql -U beeos beeos < /tmp/beeos-prev.sql'   # 回滚后
 ```
-
-### 数据库回滚（更复杂）
-
-数据迁移一旦上线，**回滚需要手动**：
-
-```bash
-# 1. 部署前手动备份
-ssh root@101.37.146.194 'docker compose exec -T postgres pg_dump -U beeos beeos > /tmp/beeos-prev.sql'
-
-# 2. 回滚到旧版本
-git checkout <previous-sha>
-bash scripts/deploy-to-ecs.sh
-
-# 3. 如果 schema 不兼容，需要恢复 DB
-ssh root@101.37.146.194 'cat /tmp/beeos-prev.sql | docker compose exec -T postgres psql -U beeos beeos'
-```
-
-**M1 阶段 schema 频繁变动**，建议每次部署前都 dump 一份。
 
 ---
 

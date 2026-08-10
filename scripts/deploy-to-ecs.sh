@@ -1,23 +1,32 @@
 #!/usr/bin/env bash
-# beeOS ECS 部署脚本
-# 镜像 domain-box/scripts/deploy-to-ecs.sh 模式，但适配 Docker Compose 多服务
+# beeOS ECS 部署脚本（无 Docker，原生 systemd）
+# 镜像 domain-box/scripts/deploy-to-ecs.sh 模式，但适配 4-unit 现状
+#
+# 部署链路：
+#   1. 本地 git SHA 记录
+#   2. 打包源码 tarball（不含 venv / .env / 大文件）
+#   3. scp 到 ECS /tmp/
+#   4. ECS 上 tar -xzf 到 /opt/beeos
+#   5. uv pip sync venv（增量同步 Python 依赖）
+#   6. systemctl daemon-reload + restart beeos-queen
+#   7. 4-unit smoke check（systemctl is-active / curl /health / redis-cli ping / psql SELECT 1）
 #
 # 与 domain-box 的差异：
 #   - domain-box: 单 Next.js 进程 + 裸跑
-#   - beeOS: 多服务（PG + Redis + Queen + Portal）→ Docker Compose, systemd 管编排
-#   - 镜像本地 build → tarball 到 ECS → docker load → docker compose up
+#   - beeOS: 4 个 native systemd unit（nginx / postgresql / redis / beeos-queen）+ uv pip sync
 #
 # 用法：
 #   bash scripts/deploy-to-ecs.sh                  # 完整部署
 #   bash scripts/deploy-to-ecs.sh --dry-run        # 只打印命令
-#   bash scripts/deploy-to-ecs.sh --skip-build     # 不重建镜像
+#   bash scripts/deploy-to-ecs.sh --skip-pip       # 不同步 venv
 #   bash scripts/deploy-to-ecs.sh --host <user@ip> # 自定义目标
 #
 # 部署前清单：
 #   1. 提交所有要发的改动（脚本不自动 commit）
-#   2. 本地有 docker（用于 build 镜像）
-#   3. 本地 ssh 能免密登录 ECS（~/.ssh/config 或 key in known_hosts）
-#   4. ECS 上 /opt/beeos/.env 已就位（脚本不传 .env，全部 host-resident）
+#   2. 本地 ssh 能免密登录 ECS（~/.ssh/config 或 key in known_hosts）
+#   3. ECS 上 /opt/beeos/.env 已就位（脚本不传 .env，全部 host-resident）
+#   4. ECS 上 4 个 systemd unit 的依赖服务（postgresql / redis）已就绪
+#   5. 如果是首次部署，先按 docs/DEPLOY.md §一次性环境配置 装好 PG/Redis/venv/nginx
 
 set -euo pipefail
 
@@ -27,14 +36,14 @@ STAGE="${STAGE:-/tmp/beeos-deploy}"
 LOCAL="${LOCAL:-$PWD}"
 
 DRY_RUN=false
-SKIP_BUILD=false
+SKIP_PIP=false
 for arg in "$*"; do
   case "$arg" in
     --dry-run) DRY_RUN=true ;;
-    --skip-build) SKIP_BUILD=true ;;
+    --skip-pip) SKIP_PIP=true ;;
     --host) shift; REMOTE="$1"; shift ;;
     -h|--help)
-      echo "Usage: $0 [--dry-run] [--skip-build] [--host user@host]"
+      echo "Usage: $0 [--dry-run] [--skip-pip] [--host user@host]"
       exit 0
       ;;
     *) echo "unknown arg: $arg" >&2; exit 1 ;;
@@ -56,18 +65,12 @@ HEAD_SHA=$(git rev-parse HEAD)
 HEAD_SHORT=$(git rev-parse --short HEAD)
 echo "==> deploying beeOS commit: $HEAD_SHORT ($HEAD_SHA)"
 
-# --- 2. 本地 build 镜像 ---
-if ! $SKIP_BUILD; then
-  echo "==> building docker images locally"
-  run docker compose build
-fi
-
-# --- 3. 打包源代码 + docker-compose.yml ---
-echo "==> staging tarball at $STAGE/beeos-$HEAD_SHORT.tgz"
+# --- 2. 打包源码 tarball ---
+echo "==> staging source tarball at $STAGE/beeos-$HEAD_SHORT.tgz"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 
-# 源码部分（不含 node_modules / .venv / .next / 大文件）
+# 源码部分（不含 venv / node_modules / .next / .env / 缓存）
 tar -czf "$STAGE/beeos-$HEAD_SHORT.tgz" \
   --exclude='.git' \
   --exclude='.env' \
@@ -85,114 +88,70 @@ tar -czf "$STAGE/beeos-$HEAD_SHORT.tgz" \
   --exclude='*.egg-info' \
   --exclude='coverage' \
   --exclude='htmlcov' \
-  apps packages deploy docs scripts docker-compose.yml pyproject.toml uv.lock 2>/dev/null || \
-tar -czf "$STAGE/beeos-$HEAD_SHORT.tgz" \
-  --exclude='.git' \
-  --exclude='.env' \
-  --exclude='.env.local' \
-  --exclude='venv' \
-  --exclude='.venv' \
-  --exclude='node_modules' \
-  --exclude='apps/portal/node_modules' \
-  --exclude='apps/portal/.next' \
-  --exclude='.pytest_cache' \
-  --exclude='.mypy_cache' \
-  --exclude='.ruff_cache' \
-  --exclude='__pycache__' \
-  --exclude='*.pyc' \
-  --exclude='*.egg-info' \
-  --exclude='coverage' \
-  --exclude='htmlcov' \
-  apps packages deploy docs scripts docker-compose.yml pyproject.toml
+  apps packages deploy docs scripts pyproject.toml uv.lock
 
 test -s "$STAGE/beeos-$HEAD_SHORT.tgz" || { echo "tarball empty"; exit 1; }
 
-# --- 4. 镜像 tarball（应用定义所需镜像）---
-echo "==> exporting docker images"
-mkdir -p "$STAGE/images"
-for service in postgres redis queen portal; do
-  image=$(docker compose config --images 2>/dev/null | grep -E "($service|beeos).*(:|$)" | head -1 || echo "")
-  if [ -n "$image" ]; then
-    echo "    saving $image"
-    run docker save "$image" -o "$STAGE/images/${service}.tar"
-  fi
-done
-
-# 把 images 子目录压进主 tarball
-tar -czf "$STAGE/beeos-images-$HEAD_SHORT.tgz" -C "$STAGE" images
-
-# --- 5. ship 到 ECS ---
-echo "==> shipping tarballs to $REMOTE"
+# --- 3. ship 到 ECS ---
+echo "==> shipping tarball to $REMOTE"
 run scp "$STAGE/beeos-$HEAD_SHORT.tgz" "$REMOTE:/tmp/"
-run scp "$STAGE/beeos-images-$HEAD_SHORT.tgz" "$REMOTE:/tmp/"
 
-# --- 6. 在 ECS 上：解压 + 加载镜像 + 重启 ---
+# --- 4. 在 ECS 上：解压 + 同步 venv + 重启 ---
 echo "==> deploying on $REMOTE"
 run ssh "$REMOTE" "
   set -e
+  cd $REMOTE_DIR
 
-  # 6.1 准备目录
-  mkdir -p $REMOTE_DIR
-  cd /tmp
-
-  # 6.2 加载 docker 镜像
-  echo '--- loading docker images ---'
-  rm -rf /tmp/beeos-images
-  mkdir /tmp/beeos-images
-  tar -xzf /tmp/beeos-images-$HEAD_SHORT.tgz -C /tmp/beeos-images
-  for img in /tmp/beeos-images/images/*.tar; do
-    [ -f \"\$img\" ] || continue
-    docker load -i \"\$img\" < /dev/null
-  done
-  rm -rf /tmp/beeos-images
-  rm -f /tmp/beeos-images-$HEAD_SHORT.tgz
-
-  # 6.3 解压源码到 overlay 目录
+  # 4.1 解压 overlay
   echo '--- extracting source overlay ---'
-  rm -rf /tmp/beeos-extract
-  mkdir /tmp/beeos-extract
-  tar -xzf /tmp/beeos-$HEAD_SHORT.tgz -C /tmp/beeos-extract
+  tar -xzf /tmp/beeos-$HEAD_SHORT.tgz
 
-  # 6.4 清理旧 src（避免 stale 文件干扰）
-  rm -rf $REMOTE_DIR/apps/queen/src $REMOTE_DIR/apps/bee/src
-  rm -rf $REMOTE_DIR/apps/boxes/month-close/src $REMOTE_DIR/apps/portal/src
-  rm -rf $REMOTE_DIR/packages/beeos-core/src
-  rm -rf $REMOTE_DIR/deploy $REMOTE_DIR/scripts $REMOTE_DIR/docs
+  # 4.2 修复 owner
+  chown -R deploy:deploy $REMOTE_DIR/apps $REMOTE_DIR/packages $REMOTE_DIR/deploy $REMOTE_DIR/scripts $REMOTE_DIR/docs 2>/dev/null || true
 
-  # 6.5 拷贝新文件
-  cp -r --no-preserve=mode,ownership /tmp/beeos-extract/apps $REMOTE_DIR/
-  cp -r --no-preserve=mode,ownership /tmp/beeos-extract/packages $REMOTE_DIR/
-  cp -r --no-preserve=mode,ownership /tmp/beeos-extract/deploy $REMOTE_DIR/
-  cp -r --no-preserve=mode,ownership /tmp/beeos-extract/scripts $REMOTE_DIR/ || true
-  cp -r --no-preserve=mode,ownership /tmp/beeos-extract/docs $REMOTE_DIR/ || true
-  cp --no-preserve=mode,ownership /tmp/beeos-extract/docker-compose.yml $REMOTE_DIR/
-  cp --no-preserve=mode,ownership /tmp/beeos-extract/pyproject.toml $REMOTE_DIR/ || true
-  cp --no-preserve=mode,ownership /tmp/beeos-extract/uv.lock $REMOTE_DIR/ || true
+  # 4.3 同步 Python venv（增量）
+  $(if $SKIP_PIP; then echo "  echo '--- skipping venv sync (--skip-pip) ---'"; else echo "  sudo -u deploy bash -c '
+    export PATH=\$HOME/.local/bin:\$PATH
+    uv pip install --python ./venv/bin/python \\
+      -e packages/beeos-core \\
+      -e apps/queen \\
+      -e apps/bee \\
+      -e apps/boxes/month-close \\
+      --index-url https://mirrors.aliyun.com/pypi/simple/ 2>&1 | tail -5
+  '"; fi)
 
-  chown -R deploy:deploy $REMOTE_DIR/apps $REMOTE_DIR/packages $REMOTE_DIR/deploy $REMOTE_DIR/scripts $REMOTE_DIR/docs $REMOTE_DIR/docker-compose.yml 2>/dev/null || true
+  # 4.4 reload systemd（如果 service 文件变了）+ restart Queen
+  echo '--- restarting beeos-queen ---'
+  systemctl daemon-reload
+  systemctl restart beeos-queen
+  sleep 3
 
-  rm -rf /tmp/beeos-extract
+  # 4.5 清理
   rm -f /tmp/beeos-$HEAD_SHORT.tgz
 "
 
-# --- 7. 重启服务 ---
-echo "==> restarting beeos"
-run ssh "$REMOTE" "systemctl restart beeos && sleep 5"
-
-# --- 8. smoke checks ---
+# --- 5. smoke checks ---
 echo "==> smoke checks"
 run ssh "$REMOTE" "
   set -e
-  echo '--- queen /health ---'
-  curl -fsS http://127.0.0.1:8080/health || echo '  queen /health failed'
-  echo '--- portal / ---'
-  curl -fsS -o /dev/null -w '  http_code=%{http_code}\n' http://127.0.0.1:3000/ || echo '  portal / failed'
-  echo '--- docker compose ps ---'
-  cd $REMOTE_DIR && docker compose ps
+  echo '--- 4 unit status ---'
+  systemctl is-active nginx postgresql redis beeos-queen
+
+  echo '--- Queen /health (127.0.0.1:8080) ---'
+  curl -fsS http://127.0.0.1:8080/health
+
+  echo '--- Portal /health (公网 nginx 80) ---'
+  curl -fsS -o /dev/null -w '  http_code=%{http_code}\n' http://127.0.0.1:80/health
+
+  echo '--- PostgreSQL SELECT 1 ---'
+  PGPASSWORD=beeos-demo-password-change-me psql -h 127.0.0.1 -U beeos -d beeos -c 'SELECT 1;'
+
+  echo '--- Redis ping ---'
+  redis-cli ping
 "
 
 echo ""
 echo "==> deploy complete"
 echo "    deployed commit: $HEAD_SHORT"
-echo "    rollback:        ssh $REMOTE  然后 cd /opt/beeos && git checkout <previous-sha> （先在 ECS 上 git init）"
-echo "    verify:          https://<your-domain>/"
+echo "    rollback:        在本地 git checkout <previous-sha> 后重跑此脚本"
+echo "    verify:          http://101.37.146.194/"

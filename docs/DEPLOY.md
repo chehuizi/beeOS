@@ -37,12 +37,12 @@ ECS (101.37.146.194) — 4 个 native systemd units
 
 | 维度 | domain-box | beeOS |
 |---|---|---|
-| 进程 | 单 Next.js 裸跑 | Docker Compose 4 容器 |
+| 进程 | 单 Next.js 裸跑 | 4 个 native systemd unit（nginx / postgresql / redis / beeos-queen） |
 | 数据 | SQLite 文件 | PostgreSQL + pgvector |
 | 缓存 | 无 | Redis |
-| systemd | `domainbox-console` | `beeos` (管整个 compose) |
-| 端口 | 4002 | 3000 + 8080（nginx 转发） |
-| 部署单元 | tarball 源码 | tarball 源码 + docker images |
+| systemd | `domainbox-console` | `beeos-queen`（外加 nginx / postgresql / redis 三个系统 unit） |
+| 端口 | 4002 | 80（nginx）+ 5432 / 6379 / 8080 仅 127.0.0.1 |
+| 部署单元 | tarball 源码 | tarball 源码 + `uv pip install` venv |
 
 ---
 
@@ -88,16 +88,6 @@ systemctl reload postgresql
 # 验证
 PGPASSWORD=beeos-demo-password-change-me psql -h 127.0.0.1 -U beeos -d beeos -c "SELECT 1;"
 redis-cli ping  # 期望 PONG
-```
-
-### 2. Docker 安装（如果还没有）
-
-```bash
-# Ubuntu 22.04 + Docker 官方源
-curl -fsSL https://get.docker.com -o get-docker.sh
-sh get-docker.sh
-systemctl enable docker
-systemctl start docker
 ```
 
 ### 3. Systemd Unit（Queen）
@@ -264,7 +254,7 @@ cd /Users/chehuizi/Desktop/code/beeOS
 tar --exclude='.git' --exclude='venv' --exclude='node_modules' \
     --exclude='__pycache__' --exclude='*.pyc' \
     -czf /tmp/beeos-src.tgz \
-    apps packages deploy docs scripts docker-compose.yml \
+    apps packages deploy docs scripts \
     pyproject.toml uv.lock README.md CLAUDE.md LICENSE
 
 # Ship 到 ECS
@@ -334,41 +324,41 @@ ssh root@101.37.146.194 'psql -U beeos beeos < /tmp/beeos-prev.sql'   # 回滚�
 ### 查看日志
 
 ```bash
-# 用 journald（systemd 启动）
-ssh root@101.37.146.194 'journalctl -u beeos -f'
+# Queen journald 日志
+ssh root@101.37.146.194 'journalctl -u beeos-queen -f'
 
-# 直接看容器日志
-ssh root@101.37.146.194 'cd /opt/beeos && docker compose logs -f'
+# 最近 200 行
+ssh root@101.37.146.194 'journalctl -u beeos-queen -n 200 --no-pager'
 
-# 单容器
-ssh root@101.37.146.194 'docker compose logs -f queen'
+# nginx 访问/错误日志
+ssh root@101.37.146.194 'tail -f /var/log/nginx/beeos.{access,error}.log'
 ```
 
 ### 备份
 
 ```bash
 # DB 每日备份（写到 deploy/scripts/backup.sh，未实现 M1）
-ssh root@101.37.146.194 'docker compose exec -T postgres pg_dump -U beeos beeos > /var/backups/beeos-$(date +%Y%m%d).sql'
+ssh root@101.37.146.194 'pg_dump -U beeos -h 127.0.0.1 beeos > /var/backups/beeos-$(date +%Y%m%d).sql'
 ```
 
-### 升级镜像
+### 升级
 
 ```bash
-# 拉新镜像 + 重启
-ssh root@101.37.146.194 'cd /opt/beeos && docker compose pull && systemctl restart beeos'
+# 重跑部署脚本即可（scp 源码 + uv pip sync + restart）
+bash scripts/deploy-to-ecs.sh
 ```
 
-### 重启单个服务
+### 重启 Queen
 
 ```bash
-ssh root@101.37.196.194 'cd /opt/beeos && docker compose restart queen'
+ssh root@101.37.146.194 'systemctl restart beeos-queen'
 ```
 
 ### 切换主备模型
 
 ```bash
 # 编辑 /opt/beeos/.env，交换 BEEOOS_LLM_PRIMARY / FALLBACK
-ssh root@101.37.146.194 'cd /opt/beeos && docker compose restart queen'
+ssh root@101.37.146.194 'systemctl restart beeos-queen'
 ```
 
 ### 凭证轮换
@@ -376,7 +366,7 @@ ssh root@101.37.146.194 'cd /opt/beeos && docker compose restart queen'
 ```bash
 # 1. 在 Beekeeper Console /api/credentials 更新
 # 2. 或手动：重启 Queen 加载新 .env
-ssh root@101.37.146.194 'systemctl restart beeos'
+ssh root@101.37.146.194 'systemctl restart beeos-queen'
 ```
 
 ---
@@ -385,12 +375,14 @@ ssh root@101.37.146.194 'systemctl restart beeos'
 
 | 现象 | 检查 |
 |---|---|
-| Portal 502 | `docker compose ps` 看 queen 是否健康 |
-| Queen 启动失败 | `docker compose logs queen` |
-| DB 连接失败 | `docker compose exec postgres pg_isready` |
-| 模型调用慢 | `journalctl -u beeos` 看 LLM 调用耗时 |
+| Portal 502 | `systemctl status beeos-queen` 看 Queen 是否健康 |
+| Queen 启动失败 | `journalctl -u beeos-queen -n 200 --no-pager` |
+| DB 连接失败 | `pg_isready -h 127.0.0.1 -p 5432` / `systemctl status postgresql` |
+| Redis 连接失败 | `redis-cli -h 127.0.0.1 ping` / `systemctl status redis` |
+| 模型调用慢 | `journalctl -u beeos-queen` 看 LLM 调用耗时 |
 | 磁盘满 | `df -h /var/lib/beeos` |
-| 内存爆 | `docker stats` |
+| 内存爆 | `systemctl status beeos-queen` 看 MemoryMax / `free -h` |
+| nginx 配置错 | `nginx -t` 然后 `systemctl reload nginx` |
 
 ---
 

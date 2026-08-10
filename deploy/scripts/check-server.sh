@@ -40,23 +40,41 @@ if [ "${DISK_FREE_GB}" -lt 50 ]; then
     echo "❌ 磁盘至少需要 50 GB 可用，当前 ${DISK_FREE_GB}"
 fi
 
-# 5. Docker
-if command -v docker >/dev/null 2>&1; then
-    DOCKER_VERSION=$(docker --version | awk '{print $3}' | tr -d ',')
-    echo "✅ Docker: ${DOCKER_VERSION}"
+# 5. PostgreSQL
+if command -v psql >/dev/null 2>&1; then
+    PSQL_VERSION=$(psql --version | awk '{print $3}')
+    echo "✅ PostgreSQL 客户端: ${PSQL_VERSION}"
+    if pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1; then
+        echo "✅ PostgreSQL 服务: 127.0.0.1:5432 可连"
+    else
+        echo "❌ PostgreSQL 未在 5432 监听（systemctl status postgresql）"
+    fi
 else
-    echo "❌ Docker 未安装"
+    echo "❌ psql 未安装（yum install postgresql）"
 fi
 
-# 6. Docker Compose
-if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-    COMPOSE_VERSION=$(docker compose version --short)
-    echo "✅ Docker Compose: ${COMPOSE_VERSION}"
+# 6. Redis
+if command -v redis-cli >/dev/null 2>&1; then
+    REDIS_VERSION=$(redis-cli --version | awk '{print $2}')
+    echo "✅ Redis 客户端: ${REDIS_VERSION}"
+    if redis-cli -h 127.0.0.1 ping >/dev/null 2>&1; then
+        echo "✅ Redis 服务: 127.0.0.1:6379 PONG"
+    else
+        echo "❌ Redis 未响应（systemctl status redis）"
+    fi
 else
-    echo "❌ Docker Compose 未安装"
+    echo "❌ redis-cli 未安装（yum install redis）"
 fi
 
-# 7. Network
+# 7. beeos-queen systemd unit
+if systemctl list-unit-files beeos-queen.service >/dev/null 2>&1; then
+    STATE=$(systemctl is-enabled beeos-queen.service 2>/dev/null || echo "disabled")
+    echo "✅ beeos-queen.service: ${STATE}"
+else
+    echo "⚠️  beeos-queen.service 未安装（部署时会 cp 到 /etc/systemd/system/）"
+fi
+
+# 8. Network
 echo "✅ DNS 解析测试:"
 if getent hosts api.deepseek.com >/dev/null 2>&1; then
     echo "   ✅ DeepSeek API 可达"

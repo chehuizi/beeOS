@@ -60,6 +60,69 @@
 | **SSO** | Single Sign-On | 单点登录（V1+） |
 | **pgvector** | PostgreSQL 向量扩展 | 用于知识库 |
 | **litellm** | LLM 多模型统一接口库 | 模型 AB 用 |
+
+---
+
+## 1.5 命名规范：Job vs Task
+
+### 核心规则
+
+**beeOS 用 Job，不用 Task。**
+
+| 维度 | Job（用） | Task（不用） |
+|---|---|---|
+| 范围 | 用户视角的端到端工作单元 | 仅在内部子步骤场景使用（V1+） |
+| 生命周期 | 完整 5 状态机（Queued → Done / Failed）| 短促、原子、瞬时 |
+| 持久化 | Hive 存 jobs 表，5 年保留 | 不持久 |
+| 可见性 | 用户在 Portal 看到、监控看到 | 仅 Queen 内部调度时使用 |
+| 计费 | 1 个 Job = 1 次付费单位 | 不计费 |
+| 跨 Box | 可以从 BoxA 跳到 BoxB | 不可跨 Box |
+| API | `/api/v0/queen/jobs` | （不暴露）|
+| 中文 | 工单 / 任务 | 步骤（仅内部） |
+
+### 行业依据
+
+| 框架 | 用词 | 含义 |
+|---|---|---|
+| **Sidekiq / Hangfire / BullMQ** | Job | 异步队列行业标准 |
+| **Celery** | Task | Python 异步任务 |
+| **Airflow** | DAG / Task | DAG 是端到端，Task 是节点 |
+| **AWS Batch / Azure Batch** | Job | 一次性工作 |
+| **阿里云 SchedulerX** | Job | 调度任务 |
+
+**Job = 异步任务队列的公认术语**，beeOS 是异步任务系统，沿用业内习惯。
+
+### 唯一例外：V1+ 子任务
+
+如果未来要做"**大 Job 拆成多个子任务并行**"：
+
+```
+Job: 月结 2026-07                                 (用户视角)
+  ├─ Task: 拉余额（5 分钟）                       (系统视角)
+  ├─ Task: 银行对账（10 分钟）
+  ├─ Task: 出报表（5 分钟）
+  └─ Task: 凭证归集（10 分钟）
+```
+
+- **Job** = 用户视角，端到端
+- **Task** = 系统视角，原子步骤，可并行
+
+**MVP 阶段不引入 Task**，等真要并行编排（V1+）才用。
+
+### 代码层一致性
+
+✅ **保留**：
+- `class Job` ORM 表
+- `JobStatus` 枚举
+- `POST /api/v0/queen/jobs` API
+- `/jobs.html` / `/jobs/new.html` Portal
+- 数据库表名 `jobs`
+- 日志字段 `job_id`
+
+❌ **不引入**：
+- `Task` class、MVP 阶段
+- `/tasks` API 路径
+- `task_id` 字段
 | **k3s** | 轻量 K8s 发行版 | V1+ 部署 |
 | **AB 切换** | 多模型主备切换 | 单一供应商故障时切走 |
 

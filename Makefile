@@ -1,10 +1,13 @@
 # beeOS Makefile - 便捷命令
 # 见 [技术架构 §3 部署架构]
+#
+# Linux only：macOS 开发者用 brew services 自行起 PG/Redis
+# 无 Docker / 无 Node.js：本地开发 = systemctl 起 PG/Redis + uv run queen + nginx 服务静态 Portal
 
-.PHONY: help install dev test lint format type-check up down logs clean \
-        queen bee box-month-close portal \
+.PHONY: help install dev test lint format type-check up-services down-services \
+        ps logs-queen clean dev-queen dev-portal \
         db-migrate db-shell redis-shell \
-        seed-license
+        bee box-month-close seed-license deploy-check
 
 # === 帮助 ===
 help:  ## 显示所有命令
@@ -14,39 +17,29 @@ help:  ## 显示所有命令
 # === 安装依赖 ===
 install:  ## 安装所有 Python 依赖 (uv sync)
 	uv sync --all-extras --dev
-	cd apps/portal && npm install
 
-# === 开发环境 ===
-up:  ## 启动 Docker Compose 开发环境
-	docker compose up -d
-	@echo "✅ BeeOS 已启动"
-	@echo "   Portal:  http://localhost:3000"
-	@echo "   Queen:   http://localhost:8080/health"
-	@echo "   PG:      localhost:5432 (beeos/beeos-dev-password)"
-	@echo "   Redis:   localhost:6379"
+# === 开发环境（Linux/systemctl） ===
+up-services:  ## 启动本机 PG + Redis（Queen 单独跑 dev-queen）
+	systemctl start postgresql redis
+	@echo "✅ PG + Redis 已就绪"
+	@echo "   PG:    localhost:5432 (beeos/beeos-dev-password)"
+	@echo "   Redis: localhost:6379"
+	@echo "   下一步: make dev-queen"
 
-down:  ## 停止 Docker Compose
-	docker compose down
+down-services:  ## 停止本机 PG + Redis
+	systemctl stop postgresql redis
+	@echo "✅ PG + Redis 已停止"
 
-logs:  ## 查看所有服务日志
-	docker compose logs -f
-
-logs-queen:  ## 查看 Queen 日志
-	docker compose logs -f queen
-
-logs-portal:  ## 查看 Portal 日志
-	docker compose logs -f portal
-
-clean:  ## 删除所有容器 + 数据卷 (危险!)
-	docker compose down -v
-	rm -rf .venv apps/portal/node_modules apps/portal/.next
+ps:  ## 查看 4 个 systemd unit 状态
+	systemctl status postgresql redis beeos-queen nginx --no-pager || true
 
 # === 本地开发（不走 Docker） ===
-dev-queen:  ## 本地启动 Queen（需要 PG / Redis 已跑）
+dev-queen:  ## 本地启动 Queen（需要 PG / Redis 已起）
 	uv run queen
 
-dev-portal:  ## 本地启动 Portal
-	cd apps/portal && npm run dev
+dev-portal:  ## 打开 Portal（nginx 直服务静态文件，80 端口）
+	@echo "Portal 是 nginx 服务的静态文件，无 dev 进程。"
+	@echo "开发时直接编辑 apps/portal/*.html，浏览器打开 http://localhost/ 即可。"
 
 # === 代码质量 ===
 lint:  ## Ruff lint
@@ -68,29 +61,22 @@ test-cov:  ## pytest + coverage
 db-migrate:  ## 应用数据库迁移（待实现）
 	@echo "TODO: alembic 迁移（V1 接入）"
 
-db-shell:  ## PostgreSQL 交互 shell
-	docker compose exec postgres psql -U beeos beeos
+db-shell:  ## PostgreSQL 交互 shell（走本机 PG，不走 Docker）
+	psql -h localhost -U beeos -d beeos
 
-redis-shell:  ## Redis 交互 shell
-	docker compose exec redis redis-cli
+redis-shell:  ## Redis 交互 shell（走本机 Redis，不走 Docker）
+	redis-cli -h localhost
 
-# === 服务容器 ===
-queen:  ## 仅启动 Queen 容器
-	docker compose up -d queen
+# === 服务（开发期随 Queen 跑） ===
+bee:  ## Bee（M1 stub：随 Queen 进程启动）
+	@echo "M1: Bee 随 Queen 启动，V1 拆为独立容器（暂无）"
 
-bee:  ## 启动 Bee 容器（M1 stub）
-	@echo "M1: Bee 随 Queen 启动，V1 拆为独立容器"
-
-box-month-close:  ## 启动 MonthCloseBox
-	@echo "M1: MonthCloseBox 随 Queen 启动，V1 拆为独立容器"
-
-portal:  ## 仅启动 Portal
-	docker compose up -d portal
+box-month-close:  ## MonthCloseBox（M1 stub：随 Queen 进程启动）
+	@echo "M1: MonthCloseBox 随 Queen 启动，V1 拆为独立容器（暂无）"
 
 # === 部署辅助 ===
 seed-license:  ## 生成测试 License（V1 实现）
 	@echo "V1: License 生成器接入"
 
-# === 1 人天部署脚本（M1 占位） ===
 deploy-check:  ## 检查服务器是否满足部署要求
 	bash deploy/scripts/check-server.sh

@@ -55,36 +55,10 @@ jobs:
           flags: python
           fail_ci_if_error: false
 
-  # === 前端 (Next.js) ===
-  frontend:
-    name: Frontend (lint + type-check + build)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/portal
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: apps/portal/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Type check
-        run: npm run type-check
-
-      - name: Build
-        run: npm run build
-        env:
-          NEXT_PUBLIC_API_URL: http://localhost:8080
+  # === 前端 (static HTML) ===
+  # M1 阶段 Portal 是手写静态 HTML（apps/portal/*.html + Alpine.js CDN），
+  # 无 Node.js / 无构建。V1+ 若引入 Beekeeper Console 子模块再加回 job。
+  # 详见 docs/architecture/tech-architecture.md §4.8
 
   # === 文档检查 (确保 Mermaid 语法合法) ===
   docs:

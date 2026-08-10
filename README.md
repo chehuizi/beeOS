@@ -23,7 +23,7 @@ beeOS 是"AI 数字员工的私有化车间"。把"会计月结"这种专业场�
 
 ### 前置条件
 
-- Docker + Docker Compose
+- Linux（systemctl）+ PostgreSQL + Redis（系统包；macOS 开发者用 `brew services`）
 - 4 核 CPU / 8 GB RAM / 50 GB 磁盘（推荐 8 核 / 16 GB / 200 GB）
 - 公网出口（用于 LLM API）
 
@@ -38,28 +38,29 @@ cd beeOS
 cp .env.example .env
 # 编辑 .env，填入 LLM API Key
 
-# 3. 启动
-make up
+# 3. 启动（Linux/systemctl）
+make up-services  # 启动本机 PG + Redis
+make dev-queen    # 裸跑 Queen（另一终端）
 
 # 4. 访问
-# Portal:    http://localhost:3000
+# Portal:    http://localhost/  (nginx 80 服务静态 HTML)
 # Queen API: http://localhost:8080/health
 ```
 
 ### 常用命令
 
 ```bash
-make help         # 查看所有命令
-make up           # 启动开发环境
-make down         # 停止
-make logs         # 查看日志
-make dev-queen    # 本地启动 Queen（不走 Docker）
-make dev-portal   # 本地启动 Portal
-make test         # 跑测试
-make lint         # lint 检查
-make type-check   # mypy
-make db-shell     # 打开 PostgreSQL
-make redis-shell  # 打开 Redis
+make help           # 查看所有命令
+make up-services    # 启动本机 PG + Redis（Linux/systemctl）
+make down-services  # 停止本机 PG + Redis
+make ps             # 查看 4 个 systemd unit 状态
+make dev-queen      # 裸跑 Queen（需 PG/Redis 已就绪）
+make logs-queen     # journalctl -u beeos-queen -f
+make test           # 跑测试
+make lint           # lint 检查
+make type-check     # mypy
+make db-shell       # 打开本机 PostgreSQL
+make redis-shell    # 打开本机 Redis
 ```
 
 ---
@@ -72,7 +73,7 @@ beeOS/
 │   ├── queen/                     # 调度服务（FastAPI）
 │   ├── bee/                       # 执行引擎（ReAct）
 │   ├── boxes/month-close/         # 业务 Box（月结 M1）
-│   └── portal/                    # Web 前端（Next.js）
+│   └── portal/                    # Web 前端（静态 HTML + Alpine.js，nginx 服务）
 ├── packages/
 │   └── beeos-core/                # 跨服务共享代码
 │       ├── config.py              # 配置
@@ -81,13 +82,13 @@ beeOS/
 │       ├── logging.py             # 日志
 │       └── models.py              # ORM 模型
 ├── deploy/
-│   ├── docker/                    # Docker 镜像
+│   ├── systemd/                   # systemd unit（beeos-queen.service）
+│   ├── nginx/                     # nginx 反代 + 静态 Portal 配置
 │   └── scripts/                   # 部署脚本
 ├── docs/
 │   ├── business-model.md          # 商业模型 v0.1
 │   ├── architecture/              # 3 份架构 + 全景图 + 1-pager
 │   └── design/                    # 原始讨论归档
-├── docker-compose.yml             # 开发环境
 ├── pyproject.toml                 # uv workspace 根
 └── Makefile                       # 便捷命令
 ```

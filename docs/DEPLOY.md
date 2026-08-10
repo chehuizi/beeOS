@@ -250,8 +250,8 @@ redis-cli ping  # 期望 PONG
 # 本地
 cd /Users/chehuizi/Desktop/code/beeOS
 
-# 打包源码（不含 venv / node_modules / .env）
-tar --exclude='.git' --exclude='venv' --exclude='node_modules' \
+# 打包源码（不含 venv / .env）
+tar --exclude='.git' --exclude='venv' \
     --exclude='__pycache__' --exclude='*.pyc' \
     -czf /tmp/beeos-src.tgz \
     apps packages deploy docs scripts \

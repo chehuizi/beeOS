@@ -70,16 +70,13 @@ echo "==> staging source tarball at $STAGE/beeos-$HEAD_SHORT.tgz"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 
-# 源码部分（不含 venv / node_modules / .next / .env / 缓存）
+# 源码部分（不含 venv / .env / 缓存）
 tar -czf "$STAGE/beeos-$HEAD_SHORT.tgz" \
   --exclude='.git' \
   --exclude='.env' \
   --exclude='.env.local' \
   --exclude='venv' \
   --exclude='.venv' \
-  --exclude='node_modules' \
-  --exclude='apps/portal/node_modules' \
-  --exclude='apps/portal/.next' \
   --exclude='.pytest_cache' \
   --exclude='.mypy_cache' \
   --exclude='.ruff_cache' \

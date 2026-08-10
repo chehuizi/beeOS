@@ -1,5 +1,5 @@
 [Unit]
-Description=beeOS Queen - 调度服务（M2 单进程模式）
+Description=beeOS Queen - 调度服务（FastAPI）
 Documentation=https://github.com/chehuizi/beeOS
 After=network-online.target postgresql.service redis.service
 Wants=network-online.target

@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>任务列表 - beeOS</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+</head>
+<body class="bg-gray-50" x-data="jobsPage()" x-init="init()">
+
+  <nav class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-6">
+      <h1 class="text-xl font-bold text-gray-900">🐝 beeOS</h1>
+      <a href="/" class="text-gray-700 hover:text-gray-900">仪表盘</a>
+      <a href="/jobs.html" class="text-blue-600 font-semibold">任务</a>
+      <a href="/audit.html" class="text-gray-700 hover:text-gray-900">审计</a>
+    </div>
+    <div class="text-sm text-gray-500" x-text="now"></div>
+  </nav>
+
+  <main class="max-w-6xl mx-auto px-6 py-8">
+    <div class="flex items-center justify-between mb-6">
+      <h2 class="text-2xl font-bold">任务列表</h2>
+      <a href="/jobs/new.html" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">+ 发起月结</a>
+    </div>
+
+    <div x-show="loading" class="text-center py-12 text-gray-500">加载中...</div>
+
+    <div x-show="error" class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-4">
+      <strong>错误：</strong> <span x-text="error"></span>
+    </div>
+
+    <div x-show="!loading && jobs.length === 0 && !error" class="bg-white p-12 rounded-lg border border-gray-200 text-center text-gray-500">
+      <div class="text-4xl mb-2">📭</div>
+      <div>暂无任务</div>
+      <div class="text-sm mt-2">点击右上角"发起月结"开始第一个任务</div>
+    </div>
+
+    <div x-show="jobs.length > 0" class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-gray-50 text-gray-700">
+          <tr>
+            <th class="px-4 py-3 text-left">任务 ID</th>
+            <th class="px-4 py-3 text-left">类型</th>
+            <th class="px-4 py-3 text-left">状态</th>
+            <th class="px-4 py-3 text-left">开始时间</th>
+            <th class="px-4 py-3 text-left">进度</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100">
+          <template x-for="job in jobs" :key="job.job_id">
+            <tr class="hover:bg-gray-50">
+              <td class="px-4 py-3 font-mono text-xs text-gray-600" x-text="job.job_id.substring(0, 8)"></td>
+              <td class="px-4 py-3" x-text="job.bee_type"></td>
+              <td class="px-4 py-3">
+                <span class="px-2 py-1 rounded text-xs font-semibold" :class="statusColor(job.status)" x-text="job.status"></span>
+              </td>
+              <td class="px-4 py-3 text-gray-600" x-text="formatTime(job.started_at)"></td>
+              <td class="px-4 py-3">
+                <div class="w-24 bg-gray-100 rounded h-2">
+                  <div class="bg-blue-500 h-2 rounded" :style="`width: ${(job.progress || 0) * 100}%`"></div>
+                </div>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </main>
+
+  <script>
+    function jobsPage() {
+      return {
+        loading: true,
+        error: null,
+        jobs: [],
+        now: new Date().toLocaleString('zh-CN'),
+
+        async init() {
+          setInterval(() => { this.now = new Date().toLocaleString('zh-CN'); }, 1000);
+          await this.loadJobs();
+          // 自动刷新
+          setInterval(() => this.loadJobs(), 10000);
+        },
+
+        async loadJobs() {
+          try {
+            const r = await fetch('/api/v0/jobs');
+            if (r.status === 404) {
+              // API 还未实现
+              this.jobs = [];
+              this.loading = false;
+              return;
+            }
+            if (!r.ok) throw new Error('Queen 返回 ' + r.status);
+            this.jobs = await r.json();
+          } catch (e) {
+            this.error = e.message;
+          } finally {
+            this.loading = false;
+          }
+        },
+
+        statusColor(s) {
+          return {
+            'Queued': 'bg-gray-100 text-gray-700',
+            'Running': 'bg-blue-100 text-blue-700',
+            'AwaitingHuman': 'bg-yellow-100 text-yellow-700',
+            'Done': 'bg-green-100 text-green-700',
+            'Failed': 'bg-red-100 text-red-700',
+          }[s] || 'bg-gray-100 text-gray-700';
+        },
+
+        formatTime(t) {
+          if (!t) return '-';
+          return new Date(t).toLocaleString('zh-CN');
+        }
+      }
+    }
+  </script>
+</body>
+</html>

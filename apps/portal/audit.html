@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>审计日志 - beeOS</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+</head>
+<body class="bg-gray-50" x-data="auditPage()" x-init="init()">
+
+  <nav class="bg-white border-b border-gray-200 px-6 py-3 flex items-center gap-6">
+    <h1 class="text-xl font-bold text-gray-900">🐝 beeOS</h1>
+    <a href="/" class="text-gray-700 hover:text-gray-900">仪表盘</a>
+    <a href="/jobs.html" class="text-gray-700 hover:text-gray-900">任务</a>
+    <a href="/audit.html" class="text-blue-600 font-semibold">审计</a>
+  </nav>
+
+  <main class="max-w-6xl mx-auto px-6 py-8">
+    <h2 class="text-2xl font-bold mb-6">审计日志</h2>
+
+    <div class="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-3 rounded mb-4 text-sm">
+      <strong>说明：</strong>审计日志采用哈希链防篡改，按法规要求保留 5 年。
+      仅 IT 治理员可查看。
+    </div>
+
+    <div x-show="loading" class="text-center py-12 text-gray-500">加载中...</div>
+
+    <div x-show="error" class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-4">
+      <strong>错误：</strong> <span x-text="error"></span>
+    </div>
+
+    <div x-show="!loading && entries.length === 0 && !error" class="bg-white p-12 rounded-lg border border-gray-200 text-center text-gray-500">
+      <div class="text-4xl mb-2">🔍</div>
+      <div>暂无审计记录</div>
+      <div class="text-sm mt-2">审计 API 将在 M3 接入</div>
+    </div>
+
+    <div x-show="entries.length > 0" class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-gray-50 text-gray-700">
+          <tr>
+            <th class="px-4 py-3 text-left">时间</th>
+            <th class="px-4 py-3 text-left">操作者</th>
+            <th class="px-4 py-3 text-left">动作</th>
+            <th class="px-4 py-3 text-left">资源</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100">
+          <template x-for="e in entries" :key="e.id">
+            <tr>
+              <td class="px-4 py-3 font-mono text-xs" x-text="formatTime(e.ts)"></td>
+              <td class="px-4 py-3" x-text="e.actor"></td>
+              <td class="px-4 py-3"><span class="px-2 py-1 rounded text-xs bg-gray-100" x-text="e.action"></span></td>
+              <td class="px-4 py-3 text-gray-600 font-mono text-xs" x-text="e.resource"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </main>
+
+  <script>
+    function auditPage() {
+      return {
+        loading: true,
+        error: null,
+        entries: [],
+
+        async init() {
+          try {
+            const r = await fetch('/api/v0/audit');
+            if (r.status === 404) {
+              this.entries = [];
+              this.loading = false;
+              return;
+            }
+            if (!r.ok) throw new Error('Queen 返回 ' + r.status);
+            this.entries = await r.json();
+          } catch (e) {
+            this.error = e.message;
+          } finally {
+            this.loading = false;
+          }
+        },
+
+        formatTime(t) {
+          if (!t) return '-';
+          return new Date(t).toLocaleString('zh-CN');
+        }
+      }
+    }
+  </script>
+</body>
+</html>

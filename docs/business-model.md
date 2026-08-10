@@ -110,7 +110,7 @@ beeOS 定位为 **"AI 数字员工私有化部署平台，专为 50-500 人专�
 - **核心代码**：BeeOS Core（开源）+ 行业 Box（闭源）
 - **行业 Know-how**：必须找 1 个会计所合伙人做长期顾问（股权 or 顾问费）
 - **大模型 API**：DeepSeek / 通义 / 智谱（**至少 2 家做 AB 切换防锁定**）
-- **部署工具链**：Helm chart、Docker compose、Terraform（让 1 个客户实施 < 1 人天）
+- **部署工具链**：bash + systemd + uv + Terraform（让 1 个客户实施 < 1 人天）
 
 ---
 

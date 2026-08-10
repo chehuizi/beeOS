@@ -108,7 +108,7 @@ M10-M12 30 付费 / ¥150 万 ARR / 启动种子融资
 我们正在找一个全栈 + LLM 工程师共创：
 
 - **股权**：5-15% + 4 年 vesting（待谈）
-- **要求**：能独立从 0 到 1 搭起 Python + FastAPI + PostgreSQL + Docker 的后端 + Next.js 前端
+- **要求**：能独立从 0 到 1 搭起 Python + FastAPI + PostgreSQL 的后端 + 纯静态 HTML 前端（无 Node.js / 无 Docker）
 - **加分项**：LangChain / ReAct / MCP 实战经验
 - **工作模式**：远程优先，每周 1 次同步，3 个月试用期 → 长期共事
 

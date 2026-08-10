@@ -93,13 +93,13 @@ graph TB
 |---|---|---|---|
 | Queen | 调度层 | Queen Core + Scheduler + Dispatcher | **详** |
 | Bee | 执行层 | Bee Runtime | **详** |
-| BeeBox | 环境层 | BeeBox Container（Docker） | **详**（MonthCloseBox） |
+| BeeBox | 环境层 | BeeBox（Python 包，venv 安装） | **详**（MonthCloseBox） |
 | Hive | 状态层 | PostgreSQL + Redis Streams | **详** |
 | Guardian | 横切 | Guardian Middleware（FastAPI 中间件） | **详** |
 | Granary | 横切 | pgvector + 本地 FS | **简** |
 | Bridge | 横切 | Bridge Adapter SDK | **简** |
-| Portal | 交互层 | Next.js Web | **详** |
-| Beekeeper Console | 交互层 | Next.js 治理子模块 | **详** |
+| Portal | 交互层 | 静态 HTML + Alpine.js（nginx 服务）| **详** |
+| Beekeeper Console | 交互层 | V1+ 计划（M1 暂无） | **点** |
 | Workshop | 交互层 | 仅占位（MVP 不实现） | **点** |
 
 ### 2.3 数据流概览
@@ -137,7 +137,7 @@ sequenceDiagram
 
 ### 3.1 物理形态
 
-**MVP（推荐）**：单台 Linux 服务器（客户内网机房），Docker Compose 编排，**全部容器跑在一台主机**。
+**MVP（推荐）**：单台 Linux 服务器（客户内网机房），**4 个 native systemd unit**（nginx / postgresql / redis / beeos-queen），**全部跑在一台主机**，零 Docker。
 
 **V1+**：单台升级到 k3s（轻量 K8s），开始允许双机热备。
 
@@ -156,12 +156,12 @@ sequenceDiagram
 ```
 T+0:00  收客户合同 + 服务器登录信息
 T+0:30  SSH 登录，执行 beeos-init（一次性脚本）
-        - 自动检测：CPU/RAM/磁盘/Docker/Docker Compose
-        - 安装缺失依赖
+        - 自动检测：CPU/RAM/磁盘/PostgreSQL/Redis
+        - 安装缺失依赖（系统包）
         - 生成客户专属配置（域名、证书、初始管理员 Token）
 T+1:00  上传 License 文件（.beeos-license）
-T+1:30  执行 docker compose up -d（自动拉镜像 + 初始化 DB）
-T+2:00  访问 https://<server>:8443，初始化 Guardian 管理员
+T+1:30  执行 systemctl start postgresql redis beeos-queen（自动启服务 + 初始化 DB）
+T+2:00  访问 http://<server>/（demo 阶段 IP-only，nginx 80），初始化 Guardian 管理员
 T+3:00  控制台激活 MonthCloseBox（向导式）
         - 上传金蝶 / 用友凭证
         - 配置模型 API Key（DeepSeek + 通义）
@@ -174,17 +174,17 @@ T+8:00  交付
 
 **关键工程要求**：
 - `beeos-init` 必须是**单一脚本**，零交互
-- `docker-compose.yml` 必须在 200 行内
-- 镜像必须**国内可拉**（阿里云容器镜像服务 ACR）
-- 数据库 schema 必须**自动 migrate**
+- 部署 = 源码 tarball + `uv pip install` + `systemctl restart beeos-queen`（见 `scripts/deploy-to-ecs.sh`）
+- PyPI 必须**国内可拉**（阿里云镜像 `--index-url https://mirrors.aliyun.com/pypi/simple/`）
+- 数据库 schema 必须**自动 migrate**（M1 阶段 `Base.metadata.create_all()`，V1 接入 Alembic）
 
 ### 3.4 离线安装包（V1+）
 
 针对完全无公网的客户（部分银行 / 国企）：
 
 ```
-beeos-offline-v0.1.tar.gz (~2 GB)
-├── docker-images/*.tar        # 全部 Docker 镜像
+beeos-offline-v0.1.tar.gz (~500 MB，无 Docker 镜像故体积小)
+├── python-wheels/*.whl        # 全部 Python 依赖 wheel（uv 离线安装）
 ├── installers/beeos-init.sh   # 离线版初始化脚本
 ├── models/                    # 备用本地小模型（Qwen2.5-7B）
 ├── licenses/                  # License 文件
@@ -446,32 +446,32 @@ def detect_injection(text: str) -> float:
 - 主密钥从环境变量 `BEEOOS_MASTER_KEY` 读取（部署时通过 `beeos-init` 注入）
 - 永不在日志 / 审计 / 错误堆栈中明文出现
 
-### 4.8 Portal + Beekeeper Console（前）
+### 4.8 Portal（前端）
 
 **技术栈**：
-- Next.js 14（App Router）
-- TypeScript 严格模式
-- Tailwind CSS + shadcn/ui（避免重设计）
-- React Query（数据获取）
-- Zustand（轻量状态）
+- 纯静态 HTML（`apps/portal/*.html`）
+- Alpine.js（CDN 引入，零构建）
+- Tailwind CSS（CDN 引入）
+- nginx 直服务，**零 Node.js / 零 npm**
 
 **关键页面**（MVP）：
 
-| 页面 | 路径 | 角色 |
+| 页面 | 文件 | 角色 |
 |---|---|---|
-| 登录 | `/login` | 全员 |
-| 仪表盘 | `/dashboard` | 全员 |
-| 任务列表 | `/jobs` | 全员 |
-| 任务详情 | `/jobs/:id` | 全员 |
-| 发起月结 | `/jobs/new/month-close` | 业务专家 |
-| 审计日志 | `/audit` | IT 治理员 |
-| 凭证管理 | `/credentials` | IT 治理员 |
-| 用户管理 | `/users` | 管理员 |
-| 模型配置 | `/settings/models` | 管理员 |
-| Box 管理 | `/admin/boxes` | 管理员 |
+| 仪表盘 | `index.html` | 全员 |
+| 任务列表 | `jobs.html` | 全员 |
+| 发起月结 | `jobs/new.html` | 业务专家 |
+| 审计日志 | `audit.html` | IT 治理员 |
+
+**M1 简化**：
+- 无登录页（M1 阶段假设网络隔离 + IP 白名单）
+- 无详情页（列表跳转外部链接）
+- 无移动端优化
+- 无实时协作
+- 无 Beekeeper Console 子模块（V1+ 再做）
 
 **不在 MVP**：
-- 移动端（响应式但不专门优化）
+- Beekeeper Console 子模块（治理 / 凭证 / 用户 / 模型配置 / Box 管理）→ V1+ 单独 Next.js 模块
 - 模板市场 Workshop UI
 - 实时协作（多人同时编辑）
 
@@ -487,8 +487,8 @@ def detect_injection(text: str) -> float:
 | 数据库 | **PostgreSQL 16 + pgvector** | MySQL + Milvus | 一站式（关系 + 向量）；运维简单 | pgvector 性能 |
 | 队列 | **Redis Streams** | Kafka / RabbitMQ / Celery | 轻量 / 单机够用 / 复用 Redis | 分布式需重写 |
 | 缓存 | **Redis 7** | Memcached | 复用队列 / Token 缓存 | 单点故障 |
-| 前端 | **Next.js 14** | Vite + React / Remix | 集成度最高 / 文档全 | 体积大 |
-| 容器 | **Docker Compose** | k8s / k3s | 单机 1 人天部署；V1 再升 k3s | 不支持多机 |
+| 前端 | **静态 HTML + Alpine.js** | Next.js / Vite | 零 Node.js 依赖 / nginx 直服务 / 1 人天部署 | V1+ 升级路径 |
+| 容器 | **4 native systemd unit** | Docker / k8s | 单机 1 人天部署 / 零 Docker daemon | V1+ 升 k3s |
 | 监控 | **OpenTelemetry** | Prometheus 单独 | 标准化 / 兼容多家后端 | 集成复杂 |
 | 包管理 | **uv** | pip / poetry | 速度 10x / 锁文件严谨 | 新工具 |
 | 配置 | **Pydantic Settings** | python-dotenv | 类型安全 / 校验 | 无 |
@@ -581,10 +581,10 @@ flowchart LR
 ```
 客户内网
   ├── beeos-server (本机)
-  │     ├── postgres :5432 (本地)
-  │     ├── redis :6379 (本地)
-  │     ├── portal :8443 (HTTPS)
-  │     └── beekeeper :8443 (HTTPS)
+  │     ├── nginx :80 (公网，nginx 反代 + 静态 Portal)
+  │     ├── postgresql :5432 (仅 127.0.0.1)
+  │     ├── redis :6379 (仅 127.0.0.1)
+  │     └── beeos-queen :8080 (仅 127.0.0.1)
   ├── 客户业务系统 (金蝶 / 用友) : 客户内网
   └── 公网出口（白名单）
         ├── api.deepseek.com
@@ -674,7 +674,7 @@ flowchart LR
 
 ```mermaid
 graph LR
-    MVP[MVP:<br/>单机 Compose<br/>1 Bee<br/>写死工作流] --> V1[V1:<br/>k3s 双机<br/>3 Bee<br/>LLM Planner<br/>SSO]
+    MVP[MVP:<br/>单机 systemd<br/>1 Bee<br/>写死工作流] --> V1[V1:<br/>k3s 双机<br/>3 Bee<br/>LLM Planner<br/>SSO]
     V1 --> V2[V2:<br/>集群<br/>多 Bee 编排<br/>Workshop 市场]
 ```
 

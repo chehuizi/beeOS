@@ -126,11 +126,11 @@ graph TB
 
 ```mermaid
 graph TB
-    L1[L1 交互层<br/>Portal / Beekeeper Console<br/>Next.js]
+    L1[L1 交互层<br/>Portal<br/>静态 HTML + Alpine.js<br/>nginx 服务]
     L2[L2 调度层<br/>Queen<br/>Python + FastAPI]
     L3[L3 状态层<br/>Hive<br/>PostgreSQL + Redis + pgvector]
     L4[L4 执行层<br/>Bee<br/>Python + litellm]
-    L5[L5 环境层<br/>BeeBox<br/>Docker 容器]
+    L5[L5 环境层<br/>BeeBox<br/>Python 包（venv）]
 
     L1 --> L2
     L2 --> L3
@@ -147,7 +147,7 @@ graph TB
 
 - 5 层 + 3 横切，对应十巧板
 - 月结 Bee 端到端：5 步固定流程，不调 LLM 拆解
-- 1 人天部署：单机 Docker Compose
+- 1 人天部署：4 个 native systemd unit（nginx / postgresql / redis / beeos-queen）
 
 详见 [技术架构 §2](tech-architecture.md#2-逻辑架构与分层)
 
@@ -218,7 +218,7 @@ gantt
     3 个 Box (月结 + 报税 + 审计) :p2, 2026-11, 6M
     多 Bee 编排 + 跨 Box 协作 :p3, 2027-02, 6M
     section 技术
-    单机 Compose MVP          :t1, 2026-08, 3M
+    单机 systemd MVP          :t1, 2026-08, 3M
     k3s 双机 / 3 Bee / LLM Planner :t2, 2026-11, 6M
     集群 / Workshop 市场      :t3, 2027-05, 3M
 ```
@@ -231,7 +231,7 @@ gantt
 | **业务）** | ¥50 万 ARR | ¥150 万 ARR | ¥500 万+ ARR |
 | **产品）** | MonthCloseBox | +报税 +审计 | +Workshop 市场 |
 | **产品）** | 单 Bee | 3 Bee | 多 Bee 编排 |
-| **技术）** | 单机 Compose | k3s 双机 | 集群 |
+| **技术）** | 单机 systemd | k3s 双机 | 集群 |
 | **技术）** | 写死工作流 | LLM Planner | 自适应 |
 | **技术）** | 无 SSO | +SSO | +LDAP/AD |
 | **部署）** | 1 人天 | 1 人天 | 半自动 |
@@ -296,7 +296,7 @@ graph LR
 | 客户 | 50-500 人小会计所 | 商业模型 |
 | 部署 | 单机私有化 | 商业模型 |
 | 团队 | 独立开发者 / 几人小团队 | 商业模型 |
-| 技术栈 | Python + FastAPI + PostgreSQL + pgvector + Redis + Next.js + Docker Compose | 技术架构 §5 |
+| 技术栈 | Python + FastAPI + PostgreSQL + pgvector + Redis + 静态 HTML + Alpine.js + 4 systemd unit | 技术架构 §5 |
 | 模型 | DeepSeek + 通义（AB） | 技术架构 §1.1 |
 | 部署 SLA | 1 人天 | 技术架构 §1.1 |
 | 首个 Box | MonthCloseBox | 商业模型 |

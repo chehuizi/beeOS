@@ -21,7 +21,7 @@
 
 | 维度 | MVP 范围内 |
 |---|---|
-| 部署形态 | 单机私有化（Docker Compose） |
+| 部署形态 | 单机私有化（4 native systemd unit） |
 | 行业 | 小会计师事务所（一级 ICP） |
 | 业务 Box | MonthCloseBox（月结自动化） |
 | Bee 类型 | MonthCloseBee（1 只） |

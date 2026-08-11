@@ -134,35 +134,34 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant B as Bee Runtime
     participant Box as MonthCloseBox
-    participant R as Redis
 
     U->>P: 填表 (period=2026-07)
     P->>Q: POST /api/v0/jobs
-    Q->>Q: Guardian.is_high_risk(notes)
-    Q->>DB: INSERT Job(Queued) + Pollen
-    Q->>DB: write_audit('job.create')
-    Q-->>P: 201 {job_id, status: Queued}
-    Q->>B: asyncio.create_task(dispatch_job)
+    Q->>Q: Guardian.is_high_risk (notes)
+    Q->>DB: INSERT Job status=Queued and Pollen
+    Q->>DB: write_audit job.create
+    Q-->>P: 201 with job_id
+    Q->>B: dispatch_job (async fire-and-forget)
 
     Note over Q,B: 后台异步开始
-    Q->>DB: SELECT job → status=Running
-    Q->>DB: write_audit('job.start')
-    B->>Box: MonthCloseWorkflow(period).run()
-    Box->>Box: Step 1: pull_balances
-    Box->>Box: Step 2: bank_reconcile
-    Box->>Box: Step 3: expense_classify
-    Box->>Box: Step 4: report_generate
-    Box->>Box: Step 5: evidence_collect
-    Box->>Box: Step 6: signoff_request
-    Box-->>B: {status: done, steps: [...], result: {...}}
+    Q->>DB: load job, status Queued to Running
+    Q->>DB: write_audit job.start
+    B->>Box: MonthCloseWorkflow (period) .run()
+    Box->>Box: Step 1 pull_balances
+    Box->>Box: Step 2 bank_reconcile
+    Box->>Box: Step 3 expense_classify
+    Box->>Box: Step 4 report_generate
+    Box->>Box: Step 5 evidence_collect
+    Box->>Box: Step 6 signoff_request
+    Box-->>B: status done, 6 steps, result
 
     B-->>Q: result dict
-    Q->>DB: UPDATE Job(Done, result, finished_at)
-    Q->>DB: write_audit('job.complete')
+    Q->>DB: UPDATE Job status=Done and finished_at
+    Q->>DB: write_audit job.complete
 
-    Note over P,DB: Portal 每 10s 轮询 /api/v0/jobs 看状态变化
+    Note over P,DB: Portal 每 10s 轮询 GET /api/v0/jobs
     P->>Q: GET /api/v0/jobs
-    Q-->>P: [{status: Done, progress: 1.0, result: ...}]
+    Q-->>P: list of JobResponse, status=Done
       </pre>
     </section>
 

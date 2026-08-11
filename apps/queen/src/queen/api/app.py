@@ -22,6 +22,7 @@ from beeos_core.db import close_db, get_engine, session_scope
 from beeos_core.guardian import is_high_risk
 from beeos_core.logging import configure_logging, get_logger
 from beeos_core.models import AuditLog, Base, Job, Pollen
+from sqlalchemy import func
 
 from queen.api.schemas import AuditEntry, JobResponse, JobSubmitRequest
 from queen.core.audit import write_audit
@@ -188,3 +189,78 @@ async def list_audit(limit: int = 100) -> list[AuditEntry]:
             )
             for r in rows
         ]
+
+
+@app.get("/api/v0/runtime")
+async def runtime_status() -> dict:
+    """架构页用：4 unit 状态 + 最近 10 job 统计。
+
+    返回：
+      units: 4 个 systemd unit 状态（Queen 自己活 = active，PG/Redis 查连通，
+            nginx 假设活——Queen 没在跑说明 nginx 也访问不到）
+      recent_jobs: last 10 jobs 的 done / failed 计数 + 平均耗时
+      version: Queen 版本
+    """
+    settings = get_settings()
+    units: dict[str, str] = {}
+
+    # nginx: Queen 能响应说明 nginx 反代通；标记 active
+    units["nginx"] = "active"
+
+    # postgresql: 真实 SELECT
+    try:
+        async with session_scope() as session:
+            await session.execute(select(1))
+        units["postgresql"] = "active"
+    except Exception as e:
+        units["postgresql"] = f"fail: {e}"
+
+    # redis: 真实 PING
+    try:
+        import redis.asyncio as aioredis
+
+        r = aioredis.from_url(settings.redis_url)
+        await r.ping()
+        await r.aclose()
+        units["redis"] = "active"
+    except Exception as e:
+        units["redis"] = f"fail: {e}"
+
+    # beeos-queen: 我们自己就是它，能响应就是 active
+    units["beeos-queen"] = "active"
+
+    # 最近 10 job 统计
+    async with session_scope() as session:
+        # 按 created_at 倒序取 10 条
+        stmt = (
+            select(Job.status, Job.started_at, Job.finished_at)
+            .order_by(Job.created_at.desc())
+            .limit(10)
+        )
+        rows = (await session.execute(stmt)).all()
+
+        # 全局计数（所有时间）
+        count_stmt = select(Job.status, func.count(Job.job_id)).group_by(Job.status)
+        counts = dict((await session.execute(count_stmt)).all())
+
+    done_count = sum(1 for r in rows if r.status == "Done")
+    failed_count = sum(1 for r in rows if r.status == "Failed")
+    durations_ms: list[float] = []
+    for r in rows:
+        if r.status == "Done" and r.started_at and r.finished_at:
+            delta = (r.finished_at - r.started_at).total_seconds() * 1000
+            durations_ms.append(delta)
+    avg_duration_ms = round(sum(durations_ms) / len(durations_ms), 1) if durations_ms else None
+
+    return {
+        "version": app.version,
+        "units": units,
+        "recent_jobs": {
+            "window": len(rows),
+            "done": done_count,
+            "failed": failed_count,
+            "in_flight": len(rows) - done_count - failed_count,
+            "avg_duration_ms": avg_duration_ms,
+        },
+        "lifetime_counts": counts,
+    }

@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>架构 - beeOS</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .mermaid { background: #f9fafb; padding: 1.5rem; border-radius: 0.5rem; border: 1px solid #e5e7eb; }
+    .unit-card { transition: all 0.2s; }
+    .unit-card.active { border-color: #10b981; background: #f0fdf4; }
+    .unit-card.fail { border-color: #ef4444; background: #fef2f2; }
+    pre.mermaid-code { display: none; }
+  </style>
+</head>
+<body class="bg-gray-50" x-data="archPage()" x-init="init()">
+
+  <nav class="bg-white border-b border-gray-200 px-6 py-3 flex items-center gap-6">
+    <h1 class="text-xl font-bold text-gray-900">🐝 beeOS</h1>
+    <a href="/" class="text-gray-700 hover:text-gray-900">仪表盘</a>
+    <a href="/jobs.html" class="text-gray-700 hover:text-gray-900">任务</a>
+    <a href="/audit.html" class="text-gray-700 hover:text-gray-900">审计</a>
+    <a href="/architecture.html" class="text-blue-600 font-semibold">架构</a>
+  </nav>
+
+  <main class="max-w-6xl mx-auto px-6 py-8 space-y-8">
+
+    <!-- 标题 -->
+    <div>
+      <h2 class="text-3xl font-bold text-gray-900">架构</h2>
+      <p class="text-gray-600 mt-2">
+        beeOS 的 4 层架构 + 3 横切 + 一个任务的端到端执行流。
+        <span x-text="version ? '当前版本: v' + version : ''"></span>
+      </p>
+    </div>
+
+    <!-- 1. 4 层架构 -->
+    <section class="bg-white rounded-lg border border-gray-200 p-6">
+      <h3 class="text-xl font-bold mb-2">📐 4 层架构 + 3 横切</h3>
+      <p class="text-sm text-gray-600 mb-4">L1 交互 → L2 调度 → L3 状态 → L4 执行 → L5 环境。横切关注点贯穿所有层。</p>
+      <pre class="mermaid">
+graph TB
+  subgraph L1["L1 交互层 (Portal)"]
+    P[Portal Web<br/>静态 HTML + Alpine.js<br/>nginx 直服务]
+  end
+  subgraph L2["L2 调度层 (Queen)"]
+    Q[Queen Core<br/>FastAPI + uvicorn<br/>BeeOSSettings]
+  end
+  subgraph L3["L3 状态层 (Hive)"]
+    H[PostgreSQL 11+<br/>+ pgvector<br/>Redis 7<br/>Streams]
+  end
+  subgraph L4["L4 执行层 (Bee)"]
+    B[Bee Runtime<br/>litellm + 多模型 AB<br/>ReAct 循环 V1+]
+  end
+  subgraph L5["L5 环境层 (BeeBox)"]
+    BB[MonthCloseBox<br/>Python 包 venv 安装<br/>7 模块 + 6 步]
+  end
+
+  P -->|"POST /api/v0/jobs"| Q
+  Q -->|"SQLAlchemy async"| H
+  Q -->|"asyncio.create_task"| B
+  B -->|"run(period,...)"| BB
+  B -->|"audit_log + state"| H
+
+  GU[Guardian<br/>AES-256 + JWT + 注入检测]
+  GR[Granary<br/>pgvector 知识库]
+  BR[Bridge<br/>金蝶/用友 Adapter]
+
+  Q -.uses.-> GU
+  B -.uses.-> GR
+  B -.uses.-> BR
+      </pre>
+    </section>
+
+    <!-- 2. 运行时状态 (活) -->
+    <section class="bg-white rounded-lg border border-gray-200 p-6">
+      <h3 class="text-xl font-bold mb-2">📊 运行时状态
+        <span class="text-xs text-gray-500 font-normal ml-2">每 5 秒刷新</span>
+      </h3>
+
+      <div class="grid grid-cols-4 gap-3 mb-6">
+        <template x-for="(status, name) in units" :key="name">
+          <div class="unit-card border-2 rounded-lg p-3"
+               :class="status === 'active' ? 'active' : 'fail'">
+            <div class="text-xs text-gray-600 font-mono" x-text="name"></div>
+            <div class="text-sm font-semibold mt-1"
+                 :class="status === 'active' ? 'text-green-700' : 'text-red-700'">
+              <span x-text="status === 'active' ? '✅ active' : '❌ ' + status"></span>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <div class="grid grid-cols-3 gap-4">
+        <div class="bg-gray-50 rounded p-4">
+          <div class="text-xs text-gray-600">最近 <span x-text="recentJobs.window"></span> 个 Job</div>
+          <div class="mt-2 space-y-1 text-sm">
+            <div><span class="text-green-700">✅ Done:</span> <span x-text="recentJobs.done"></span></div>
+            <div><span class="text-red-700">❌ Failed:</span> <span x-text="recentJobs.failed"></span></div>
+            <div><span class="text-blue-700">⚙ In-flight:</span> <span x-text="recentJobs.in_flight"></span></div>
+          </div>
+        </div>
+        <div class="bg-gray-50 rounded p-4">
+          <div class="text-xs text-gray-600">平均派发耗时</div>
+          <div class="text-2xl font-bold mt-2">
+            <span x-text="recentJobs.avg_duration_ms !== null ? recentJobs.avg_duration_ms + ' ms' : '-'"></span>
+          </div>
+          <div class="text-xs text-gray-500 mt-1">started_at → finished_at</div>
+        </div>
+        <div class="bg-gray-50 rounded p-4">
+          <div class="text-xs text-gray-600 mb-2">全生命周期计数</div>
+          <template x-for="(count, status) in lifetimeCounts" :key="status">
+            <div class="text-sm flex justify-between">
+              <span class="text-gray-700" x-text="status"></span>
+              <span class="font-mono" x-text="count"></span>
+            </div>
+          </template>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. 执行流 -->
+    <section class="bg-white rounded-lg border border-gray-200 p-6">
+      <h3 class="text-xl font-bold mb-2">🔄 执行流：一次月结任务</h3>
+      <p class="text-sm text-gray-600 mb-4">从 Portal 提交到 Queen 派发、Bee 调用 Box 走完 6 步、状态机推进、审计入链。</p>
+      <pre class="mermaid">
+sequenceDiagram
+    participant U as 业务专家
+    participant P as Portal (Alpine.js)
+    participant Q as Queen (FastAPI)
+    participant DB as PostgreSQL
+    participant B as Bee Runtime
+    participant Box as MonthCloseBox
+    participant R as Redis
+
+    U->>P: 填表 (period=2026-07)
+    P->>Q: POST /api/v0/jobs
+    Q->>Q: Guardian.is_high_risk(notes)
+    Q->>DB: INSERT Job(Queued) + Pollen
+    Q->>DB: write_audit('job.create')
+    Q-->>P: 201 {job_id, status: Queued}
+    Q->>B: asyncio.create_task(dispatch_job)
+
+    Note over Q,B: 后台异步开始
+    Q->>DB: SELECT job → status=Running
+    Q->>DB: write_audit('job.start')
+    B->>Box: MonthCloseWorkflow(period).run()
+    Box->>Box: Step 1: pull_balances
+    Box->>Box: Step 2: bank_reconcile
+    Box->>Box: Step 3: expense_classify
+    Box->>Box: Step 4: report_generate
+    Box->>Box: Step 5: evidence_collect
+    Box->>Box: Step 6: signoff_request
+    Box-->>B: {status: done, steps: [...], result: {...}}
+
+    B-->>Q: result dict
+    Q->>DB: UPDATE Job(Done, result, finished_at)
+    Q->>DB: write_audit('job.complete')
+
+    Note over P,DB: Portal 每 10s 轮询 /api/v0/jobs 看状态变化
+    P->>Q: GET /api/v0/jobs
+    Q-->>P: [{status: Done, progress: 1.0, result: ...}]
+      </pre>
+    </section>
+
+    <!-- 4. 设计原则 -->
+    <section class="bg-white rounded-lg border border-gray-200 p-6">
+      <h3 class="text-xl font-bold mb-4">🎯 3 大设计原则（铁律）</h3>
+      <div class="grid grid-cols-3 gap-4">
+        <div class="border-l-4 border-blue-500 pl-4">
+          <h4 class="font-bold text-blue-900">1. 私有化优先</h4>
+          <p class="text-sm text-gray-700 mt-1">
+            所有组件默认不出门。唯一外发流量是模型 API 调用（可走客户内网代理）。
+          </p>
+        </div>
+        <div class="border-l-4 border-green-500 pl-4">
+          <h4 class="font-bold text-green-900">2. 1 人天部署</h4>
+          <p class="text-sm text-gray-700 mt-1">
+            4 个 native systemd unit + 源码 tarball + uv pip install。零 Docker，零 K8s。
+            <code class="text-xs bg-gray-100 px-1 rounded">bash scripts/deploy-to-ecs.sh</code>
+          </p>
+        </div>
+        <div class="border-l-4 border-purple-500 pl-4">
+          <h4 class="font-bold text-purple-900">3. 模型中立 AB</h4>
+          <p class="text-sm text-gray-700 mt-1">
+            litellm 抽象层 + DeepSeek + 通义 双供应商在线 AB。单一故障 30 分钟切走。
+          </p>
+        </div>
+      </div>
+
+      <div class="mt-6 pt-6 border-t border-gray-200">
+        <h4 class="font-bold text-gray-900 mb-2">🔑 关键约束（M1）</h4>
+        <ul class="text-sm text-gray-700 space-y-1 list-disc list-inside">
+          <li>状态机：5 状态（Queued / Running / AwaitingHuman / Done / Failed）</li>
+          <li>审计：哈希链 SHA-256(prev_hash + JSON(payload))，5 年保留</li>
+          <li>凭证：AES-256-GCM 加密，主密钥从 BEEOOS_MASTER_KEY 读取</li>
+          <li>DB schema：lifespan 启动时 Base.metadata.create_all（V1+ 改 Alembic）</li>
+          <li>注入检测：Guardian 8 条正则匹配，score > 0.7 拒绝</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 链接到源码 -->
+    <div class="text-center text-sm text-gray-500">
+      <a href="https://github.com/chehuizi/beeOS" class="hover:text-blue-600">📦 GitHub: chehuizi/beeOS</a>
+      <span class="mx-2">·</span>
+      <a href="https://github.com/chehuizi/beeOS/blob/main/docs/architecture/tech-architecture.md" class="hover:text-blue-600">📖 完整技术架构文档</a>
+    </div>
+
+  </main>
+
+  <script>
+    function archPage() {
+      return {
+        version: '',
+        units: { nginx: '?', postgresql: '?', redis: '?', 'beeos-queen': '?' },
+        recentJobs: { window: 0, done: 0, failed: 0, in_flight: 0, avg_duration_ms: null },
+        lifetimeCounts: {},
+
+        async init() {
+          // 初始化 Mermaid
+          if (window.mermaid) {
+            mermaid.initialize({ startOnLoad: true, theme: 'default', securityLevel: 'loose' });
+          }
+          await this.refresh();
+          setInterval(() => this.refresh(), 5000);
+        },
+
+        async refresh() {
+          try {
+            const r = await fetch('/api/v0/runtime');
+            if (!r.ok) throw new Error('Queen 返回 ' + r.status);
+            const data = await r.json();
+            this.version = data.version;
+            this.units = data.units || {};
+            this.recentJobs = data.recent_jobs || this.recentJobs;
+            this.lifetimeCounts = data.lifetime_counts || {};
+          } catch (e) {
+            console.error('runtime fetch failed:', e);
+          }
+        },
+      }
+    }
+  </script>
+</body>
+</html>

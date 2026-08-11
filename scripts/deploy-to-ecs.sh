@@ -37,16 +37,16 @@ LOCAL="${LOCAL:-$PWD}"
 
 DRY_RUN=false
 SKIP_PIP=false
-for arg in "$*"; do
-  case "$arg" in
+while [ $# -gt 0 ]; do
+  case "$1" in
     --dry-run) DRY_RUN=true ;;
     --skip-pip) SKIP_PIP=true ;;
-    --host) shift; REMOTE="$1"; shift ;;
+    --host) REMOTE="$2"; shift 2 ;;
     -h|--help)
       echo "Usage: $0 [--dry-run] [--skip-pip] [--host user@host]"
       exit 0
       ;;
-    *) echo "unknown arg: $arg" >&2; exit 1 ;;
+    *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
 done
 

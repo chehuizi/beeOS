@@ -25,6 +25,8 @@ class Job(Base):
     job_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
     bee_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    progress: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    current_step: Mapped[str | None] = mapped_column(String(64), nullable=True)
     params: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     context_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(nullable=True)

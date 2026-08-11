@@ -43,35 +43,32 @@
       <p class="text-sm text-gray-600 mb-4">L1 交互 → L2 调度 → L3 状态 → L4 执行 → L5 环境。横切关注点贯穿所有层。</p>
       <pre class="mermaid">
 graph TB
-  subgraph L1["L1 交互层 (Portal)"]
-    P[Portal Web<br/>静态 HTML + Alpine.js<br/>nginx 直服务]
-  end
-  subgraph L2["L2 调度层 (Queen)"]
-    Q[Queen Core<br/>FastAPI + uvicorn<br/>BeeOSSettings]
-  end
-  subgraph L3["L3 状态层 (Hive)"]
-    H[PostgreSQL 11+<br/>+ pgvector<br/>Redis 7<br/>Streams]
-  end
-  subgraph L4["L4 执行层 (Bee)"]
-    B[Bee Runtime<br/>litellm + 多模型 AB<br/>ReAct 循环 V1+]
-  end
-  subgraph L5["L5 环境层 (BeeBox)"]
-    BB[MonthCloseBox<br/>Python 包 venv 安装<br/>7 模块 + 6 步]
-  end
-
-  P -->|"POST /api/v0/jobs"| Q
-  Q -->|"SQLAlchemy async"| H
-  Q -->|"asyncio.create_task"| B
-  B -->|"run(period,...)"| BB
-  B -->|"audit_log + state"| H
-
-  GU[Guardian<br/>AES-256 + JWT + 注入检测]
-  GR[Granary<br/>pgvector 知识库]
-  BR[Bridge<br/>金蝶/用友 Adapter]
-
-  Q -.uses.-> GU
-  B -.uses.-> GR
-  B -.uses.-> BR
+subgraph L1
+P1[Portal Web 静态 HTML nginx]
+end
+subgraph L2
+Q1[Queen Core FastAPI]
+end
+subgraph L3
+H1[Postgres and Redis]
+end
+subgraph L4
+B1[Bee Runtime litellm]
+end
+subgraph L5
+BB1[MonthCloseBox 7 modules]
+end
+GU1[Guardian AES JWT]
+GR1[Granary pgvector]
+BR1[Bridge adapters]
+P1 -- POST jobs --> Q1
+Q1 -- SQLAlchemy --> H1
+Q1 -- dispatch --> B1
+B1 -- run workflow --> BB1
+B1 -- audit --> H1
+Q1 -. uses .-> GU1
+B1 -. uses .-> GR1
+B1 -. uses .-> BR1
       </pre>
     </section>
 
@@ -220,9 +217,14 @@ Q-->>P: return list with status Done
         lifetimeCounts: {},
 
         async init() {
-          // 初始化 Mermaid
+          // 显式初始化 Mermaid 并手动 run（避开 startOnLoad 时序问题）
           if (window.mermaid) {
-            mermaid.initialize({ startOnLoad: true, theme: 'default', securityLevel: 'loose' });
+            mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose' });
+            try {
+              await mermaid.run();
+            } catch (e) {
+              console.error('mermaid.run failed:', e);
+            }
           }
           await this.refresh();
           setInterval(() => this.refresh(), 5000);

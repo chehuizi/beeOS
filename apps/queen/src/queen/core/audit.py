@@ -8,7 +8,7 @@
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 
@@ -40,7 +40,7 @@ async def write_audit(actor: str, action: str, resource: str | None, payload: di
         last = (await session.execute(stmt)).scalar_one_or_none()
         prev_hash = last.curr_hash if last else GENESIS_HASH
 
-        ts = datetime.utcnow()
+        ts = datetime.now(timezone.utc)
         full_payload = {
             "ts": ts.isoformat(),
             "actor": actor,

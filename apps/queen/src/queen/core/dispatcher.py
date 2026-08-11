@@ -3,7 +3,7 @@
 由 FastAPI 路由在 POST /api/v0/jobs 后用 asyncio.create_task 调起。
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 
@@ -40,7 +40,7 @@ async def dispatch_job(job_id: str) -> None:
                 return
 
             job.status = JobStatus.RUNNING.value
-            job.started_at = datetime.utcnow()
+            job.started_at = datetime.now(timezone.utc)
             job.progress = 0.1
             params = dict(job.params)  # 复制出来，避免 session 关闭后失效
 
@@ -77,7 +77,7 @@ async def dispatch_job(job_id: str) -> None:
                     "message": result.get("error", "unknown") if isinstance(result, dict) else "unknown"
                 }
 
-            job.finished_at = datetime.utcnow()
+            job.finished_at = datetime.now(timezone.utc)
 
         await write_audit(
             actor="queen",
@@ -97,7 +97,7 @@ async def dispatch_job(job_id: str) -> None:
                 if job is not None:
                     job.status = JobStatus.FAILED.value
                     job.error = {"message": f"{type(e).__name__}: {e}"}
-                    job.finished_at = datetime.utcnow()
+                    job.finished_at = datetime.now(timezone.utc)
             await write_audit(
                 actor="queen",
                 action="job.exception",

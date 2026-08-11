@@ -1,14 +1,23 @@
 """beeOS 核心数据模型（SQLAlchemy ORM）。
 
 对应 [技术架构 §4.2 Hive 存储拆分]。
+
+时区约定：所有 datetime 列用 `DateTime(timezone=True)`（PG TIMESTAMPTZ），
+Python 端用 `datetime.now(timezone.utc)` 写入。JSON 序列化为 `+00:00` 后缀，
+客户端再按需转本地时区显示。
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import BigInteger, ForeignKey, String
+from sqlalchemy import BigInteger, DateTime, ForeignKey, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+def _utcnow() -> datetime:
+    """timezone-aware UTC now（替代 deprecated datetime.utcnow）。"""
+    return datetime.now(timezone.utc)
 
 
 class Base(DeclarativeBase):
@@ -29,11 +38,13 @@ class Job(Base):
     current_step: Mapped[str | None] = mapped_column(String(64), nullable=True)
     params: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     context_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-    started_at: Mapped[datetime | None] = mapped_column(nullable=True)
-    finished_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     error: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
 
 
 class Pollen(Base):
@@ -46,8 +57,10 @@ class Pollen(Base):
         PG_UUID(as_uuid=True), ForeignKey("jobs.job_id", ondelete="SET NULL")
     )
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    expires_at: Mapped[datetime | None] = mapped_column(nullable=True)
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
 
 
 class AuditLog(Base):
@@ -56,7 +69,9 @@ class AuditLog(Base):
     __tablename__ = "audit_log"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    ts: Mapped[datetime] = mapped_column(default=datetime.utcnow, nullable=False, index=True)
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False, index=True
+    )
     actor: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     action: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     resource: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
@@ -77,8 +92,10 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(256), nullable=False)
     role: Mapped[str] = mapped_column(String(32), nullable=False)  # partner / pm / operator / it_admin
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, nullable=False)
-    last_login_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Credential(Base):
@@ -91,11 +108,13 @@ class Credential(Base):
     kind: Mapped[str] = mapped_column(String(32), nullable=False)  # kingdee / yonyou / llm_deepseek / llm_qwen
     ciphertext: Mapped[bytes] = mapped_column(nullable=False)
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
     )
-    rotated_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
+    )
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class BoxManifest(Base):
@@ -108,4 +127,4 @@ class BoxManifest(Base):
     version: Mapped[str] = mapped_column(String(32), nullable=False)
     modules: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     activated: Mapped[bool] = mapped_column(default=False, nullable=False)
-    activated_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

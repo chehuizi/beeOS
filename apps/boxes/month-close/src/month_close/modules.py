@@ -5,7 +5,7 @@ M1 不调外部 API（不连金蝶/用友），纯 hardcoded。
 V1+ 替换为真实 adapter。
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def accounts_payable_query(period: str, client_id: str | None = None) -> list[dict]:
@@ -76,7 +76,7 @@ def evidence_collect(period: str) -> dict:
 def signoff_request(report_url: str, approver: str) -> dict:
     """发起审批（M1 hardcoded：返回 signoff_id + pending 状态）。"""
     return {
-        "signoff_id": f"signoff-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}",
+        "signoff_id": f"signoff-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
         "approver": approver,
         "report_url": report_url,
         "status": "pending",

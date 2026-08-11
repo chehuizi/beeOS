@@ -128,40 +128,40 @@ graph TB
       <p class="text-sm text-gray-600 mb-4">从 Portal 提交到 Queen 派发、Bee 调用 Box 走完 6 步、状态机推进、审计入链。</p>
       <pre class="mermaid">
 sequenceDiagram
-    participant U as 业务专家
-    participant P as Portal (Alpine.js)
-    participant Q as Queen (FastAPI)
-    participant DB as PostgreSQL
-    participant B as Bee Runtime
-    participant Box as MonthCloseBox
+participant U as User
+participant P as Portal
+participant Q as Queen
+participant DB as Postgres
+participant B as Bee
+participant Box as MonthCloseBox
 
-    U->>P: 填表 (period=2026-07)
-    P->>Q: POST /api/v0/jobs
-    Q->>Q: Guardian.is_high_risk (notes)
-    Q->>DB: INSERT Job status=Queued and Pollen
-    Q->>DB: write_audit job.create
-    Q-->>P: 201 with job_id
-    Q->>B: dispatch_job (async fire-and-forget)
+U->>P: fill form with period
+P->>Q: POST jobs endpoint
+Q->>Q: Guardian injection check
+Q->>DB: INSERT Job and Pollen
+Q->>DB: write audit job create
+Q-->>P: return 201 with job id
+Q->>B: dispatch job async
 
-    Note over Q,B: 后台异步开始
-    Q->>DB: load job, status Queued to Running
-    Q->>DB: write_audit job.start
-    B->>Box: MonthCloseWorkflow (period) .run()
-    Box->>Box: Step 1 pull_balances
-    Box->>Box: Step 2 bank_reconcile
-    Box->>Box: Step 3 expense_classify
-    Box->>Box: Step 4 report_generate
-    Box->>Box: Step 5 evidence_collect
-    Box->>Box: Step 6 signoff_request
-    Box-->>B: status done, 6 steps, result
+Note over Q,B: background dispatch
+Q->>DB: load Job status Running
+Q->>DB: write audit job start
+B->>Box: run MonthCloseWorkflow
+Box->>Box: Step 1 pull balances
+Box->>Box: Step 2 bank reconcile
+Box->>Box: Step 3 expense classify
+Box->>Box: Step 4 generate reports
+Box->>Box: Step 5 collect evidence
+Box->>Box: Step 6 request signoff
+Box-->>B: return done and result
 
-    B-->>Q: result dict
-    Q->>DB: UPDATE Job status=Done and finished_at
-    Q->>DB: write_audit job.complete
+B-->>Q: result dict
+Q->>DB: UPDATE Job status Done
+Q->>DB: write audit job complete
 
-    Note over P,DB: Portal 每 10s 轮询 GET /api/v0/jobs
-    P->>Q: GET /api/v0/jobs
-    Q-->>P: list of JobResponse, status=Done
+Note over P,DB: Portal polls every 10 seconds
+P->>Q: GET jobs endpoint
+Q-->>P: return list with status Done
       </pre>
     </section>
 

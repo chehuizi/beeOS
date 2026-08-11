@@ -6,7 +6,7 @@
 
 .PHONY: help install dev test lint format type-check up-services down-services \
         ps logs-queen clean dev-queen dev-portal \
-        db-migrate db-shell redis-shell \
+        db-migrate db-init db-reset db-shell redis-shell \
         bee box-month-close seed-license deploy-check
 
 # === 帮助 ===
@@ -61,8 +61,17 @@ test-cov:  ## pytest + coverage
 db-migrate:  ## 应用数据库迁移（待实现）
 	@echo "TODO: alembic 迁移（V1 接入）"
 
-db-shell:  ## PostgreSQL 交互 shell（走本机 PG，不走 Docker）
-	psql -h localhost -U beeos -d beeos
+db-init:  ## 初始化本机 PG：创建 beeos 用户和 beeos 库
+	sudo -u postgres psql -f deploy/scripts/init-db.sql
+	@echo "✅ PG 已就绪：localhost:5432 / beeos / beeos-dev-password"
+	@echo "   下一步: uv run queen (启动时自动 create_all 建 6 张表)"
+
+db-reset:  ## 删 beeos 库并重建（危险！会丢数据）
+	sudo -u postgres psql -c "DROP DATABASE IF EXISTS beeos;" -c "DROP ROLE IF EXISTS beeos;"
+	$(MAKE) db-init
+
+db-shell:  ## PostgreSQL 交互 shell（走本机 PG）
+	PGPASSWORD=beeos-dev-password psql -h localhost -U beeos -d beeos
 
 redis-shell:  ## Redis 交互 shell（走本机 Redis，不走 Docker）
 	redis-cli -h localhost

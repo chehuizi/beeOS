@@ -1,23 +1,26 @@
 <!DOCTYPE html>
-<!-- beeOS Portal - 静态 HTML，靠 nginx 直接服务，零 Node.js -->
+<!-- beeOS Portal - 仪表盘：公司全景（管理者 / 员工 / 工位 / 仓库） -->
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>beeOS Portal</title>
+  <title>仪表盘 - beeOS</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .role-card { transition: all 0.2s; }
+    .role-card:hover { transform: translateY(-2px); box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+    .role-card .role-icon { font-size: 2.5rem; }
   </style>
 </head>
-<body class="bg-gray-50" x-data="beeOS()" x-init="init()">
+<body class="bg-gray-50" x-data="dash()" x-init="init()">
 
   <!-- 顶部导航 -->
   <nav class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
     <div class="flex items-center gap-6">
       <h1 class="text-xl font-bold text-gray-900">🐝 beeOS</h1>
-      <a href="/" class="text-gray-700 hover:text-gray-900">仪表盘</a>
+      <a href="/" class="text-blue-600 font-semibold">仪表盘</a>
       <a href="/jobs.html" class="text-gray-700 hover:text-gray-900">任务</a>
       <a href="/audit.html" class="text-gray-700 hover:text-gray-900">审计</a>
       <a href="/architecture.html" class="text-gray-700 hover:text-gray-900">架构</a>
@@ -26,114 +29,275 @@
   </nav>
 
   <!-- 主容器 -->
-  <main class="max-w-6xl mx-auto px-6 py-8">
+  <main class="max-w-6xl mx-auto px-6 py-8 space-y-8">
 
-    <!-- 加载中 -->
-    <div x-show="loading" class="text-center py-12">
-      <div class="text-gray-500">加载中...</div>
+    <!-- 公司标识 -->
+    <div class="flex items-baseline justify-between">
+      <div>
+        <h2 class="text-3xl font-bold text-gray-900">公司全景</h2>
+        <p class="text-gray-600 mt-1">
+          beeOS 数字车间 · 一个公司 = 一套私有化部署
+          <span x-show="version" class="ml-2 text-sm text-gray-500">v<span x-text="version"></span></span>
+        </p>
+      </div>
+      <div class="text-sm text-gray-500">
+        <span x-text="'当前时间: ' + now"></span>
+      </div>
     </div>
 
-    <!-- 错误 -->
+    <!-- 加载 / 错误 -->
+    <div x-show="loading" class="text-center py-12 text-gray-500">加载公司全景...</div>
     <div x-show="error" class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
       <strong>错误：</strong> <span x-text="error"></span>
     </div>
 
-    <!-- KPI 卡片 -->
-    <div x-show="!loading && !error" class="grid grid-cols-4 gap-4 mb-8">
-      <div class="bg-white p-6 rounded-lg border border-gray-200">
-        <div class="text-sm text-gray-500">Queen 状态</div>
-        <div class="text-2xl font-bold mt-1" :class="health.status === 'ok' ? 'text-green-600' : 'text-red-600'" x-text="health.status || 'unknown'"></div>
+    <!-- 4 大角色 KPI -->
+    <section x-show="!loading && !error" class="grid grid-cols-4 gap-4">
+      <!-- 管理者 Queen -->
+      <div class="role-card bg-white rounded-lg border-2 border-blue-200 p-5">
+        <div class="flex items-center justify-between">
+          <div class="role-icon">🏛️</div>
+          <div class="text-right">
+            <div class="text-xs text-gray-500">管理者</div>
+            <div class="text-xs text-gray-400">Queen</div>
+          </div>
+        </div>
+        <div class="mt-3 text-xl font-bold text-blue-700" x-text="company.queen || '?'"></div>
+        <div class="text-xs text-gray-500 mt-1">调度大脑，统筹派工</div>
       </div>
-      <div class="bg-white p-6 rounded-lg border border-gray-200">
-        <div class="text-sm text-gray-500">本周任务</div>
-        <div class="text-2xl font-bold mt-1 text-gray-900" x-text="stats.weeklyJobs">-</div>
-      </div>
-      <div class="bg-white p-6 rounded-lg border border-gray-200">
-        <div class="text-sm text-gray-500">北极星指标</div>
-        <div class="text-2xl font-bold mt-1 text-gray-900">周活 Box</div>
-      </div>
-      <div class="bg-white p-6 rounded-lg border border-gray-200">
-        <div class="text-sm text-gray-500">beeOS 版本</div>
-        <div class="text-2xl font-bold mt-1 text-gray-900" x-text="health.version || '0.1.0'">0.1.0</div>
-      </div>
-    </div>
 
-    <!-- 快速操作 -->
-    <div x-show="!loading && !error" class="bg-white p-6 rounded-lg border border-gray-200 mb-8">
-      <h2 class="text-lg font-semibold mb-4">快速操作</h2>
-      <div class="grid grid-cols-3 gap-4">
-        <a href="/jobs/new.html" class="block p-4 border border-gray-200 rounded hover:border-blue-500 hover:bg-blue-50">
-          <div class="text-2xl mb-2">📊</div>
-          <div class="font-semibold">发起月结</div>
-          <div class="text-sm text-gray-500 mt-1">提交月结任务，自动跑完 5 步流程</div>
-        </a>
-        <a href="/jobs.html" class="block p-4 border border-gray-200 rounded hover:border-blue-500 hover:bg-blue-50">
-          <div class="text-2xl mb-2">📋</div>
-          <div class="font-semibold">查看任务</div>
-          <div class="text-sm text-gray-500 mt-1">所有月结 / 报税 / 审计任务</div>
-        </a>
-        <a href="/audit.html" class="block p-4 border border-gray-200 rounded hover:border-blue-500 hover:bg-blue-50">
-          <div class="text-2xl mb-2">🔍</div>
-          <div class="font-semibold">审计日志</div>
-          <div class="text-sm text-gray-500 mt-1">谁什么时候调了什么（哈希链防篡改）</div>
-        </a>
+      <!-- 员工 Bee -->
+      <div class="role-card bg-white rounded-lg border-2 border-green-200 p-5">
+        <div class="flex items-center justify-between">
+          <div class="role-icon">👷</div>
+          <div class="text-right">
+            <div class="text-xs text-gray-500">员工</div>
+            <div class="text-xs text-gray-400">Bee</div>
+          </div>
+        </div>
+        <div class="mt-3 text-xl font-bold text-green-700">
+          <span x-text="company.bee_count"></span> <span class="text-sm font-normal text-gray-500">在岗</span>
+        </div>
+        <div class="text-xs text-gray-500 mt-1">执行工单的执行者</div>
       </div>
-    </div>
 
-    <!-- 系统状态 -->
-    <div x-show="!loading && !error" class="bg-white p-6 rounded-lg border border-gray-200">
-      <h2 class="text-lg font-semibold mb-4">系统状态</h2>
-      <div class="space-y-2 text-sm">
-        <div class="flex justify-between">
-          <span class="text-gray-600">Queen API</span>
-          <span class="text-green-600">● <span x-text="'/health: ' + (health.status || 'unknown')"></span></span>
+      <!-- 工位 Box -->
+      <div class="role-card bg-white rounded-lg border-2 border-purple-200 p-5">
+        <div class="flex items-center justify-between">
+          <div class="role-icon">🏢</div>
+          <div class="text-right">
+            <div class="text-xs text-gray-500">工位</div>
+            <div class="text-xs text-gray-400">Box</div>
+          </div>
         </div>
-        <div class="flex justify-between">
-          <span class="text-gray-600">PostgreSQL</span>
-          <span class="text-green-600">● 127.0.0.1:5432</span>
+        <div class="mt-3 text-xl font-bold text-purple-700">
+          <span x-text="company.box_count"></span> <span class="text-sm font-normal text-gray-500">注册</span>
         </div>
-        <div class="flex justify-between">
-          <span class="text-gray-600">Redis</span>
-          <span class="text-green-600">● 127.0.0.1:6379</span>
+        <div class="text-xs text-gray-500 mt-1">行业专属工作台</div>
+      </div>
+
+      <!-- 仓库 Hive -->
+      <div class="role-card bg-white rounded-lg border-2 border-amber-200 p-5">
+        <div class="flex items-center justify-between">
+          <div class="role-icon">🗄️</div>
+          <div class="text-right">
+            <div class="text-xs text-gray-500">仓库</div>
+            <div class="text-xs text-gray-400">Hive</div>
+          </div>
         </div>
-        <div class="flex justify-between">
-          <span class="text-gray-600">Nginx</span>
-          <span class="text-green-600">● 0.0.0.0:80</span>
+        <div class="mt-3 text-xl font-bold text-amber-700">
+          <span x-text="hive.jobs"></span> <span class="text-sm font-normal text-gray-500">工单</span>
+        </div>
+        <div class="text-xs text-gray-500 mt-1">
+          <span x-text="hive.audit_log"></span> 条审计 · <span x-text="hive.users"></span> 员工档案
         </div>
       </div>
-    </div>
+    </section>
+
+    <!-- 工位区 -->
+    <section x-show="!loading && !error" class="bg-white rounded-lg border border-gray-200 p-6">
+      <h3 class="text-lg font-semibold mb-4">🏢 工位 (Box)</h3>
+      <div class="grid grid-cols-2 gap-4">
+        <!-- MonthCloseBox 卡片 -->
+        <div class="border-2 border-purple-300 rounded-lg p-4 bg-purple-50">
+          <div class="flex items-start justify-between">
+            <div>
+              <div class="font-bold text-purple-900">MonthCloseBox</div>
+              <div class="text-xs text-purple-700 mt-1">v0.1.0 · 会计月结自动化</div>
+            </div>
+            <span class="px-2 py-1 text-xs rounded-full bg-green-100 text-green-700">
+              ● 在岗
+            </span>
+          </div>
+          <div class="mt-3 pt-3 border-t border-purple-200 grid grid-cols-3 gap-2 text-center text-sm">
+            <div>
+              <div class="font-bold text-purple-900" x-text="hive.jobs"></div>
+              <div class="text-xs text-purple-600">累计</div>
+            </div>
+            <div>
+              <div class="font-bold text-purple-900">7</div>
+              <div class="text-xs text-purple-600">模块</div>
+            </div>
+            <div>
+              <div class="font-bold text-purple-900">6</div>
+              <div class="text-xs text-purple-600">步骤</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- V1+ 占位 -->
+        <div class="border-2 border-dashed border-gray-300 rounded-lg p-4 bg-gray-50 text-center text-gray-400">
+          <div class="text-3xl mb-2">➕</div>
+          <div class="text-sm">V1+ 添加新 Box</div>
+          <div class="text-xs mt-1">TaxBox / AuditBox / ReconciliationBox</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 今日工单 -->
+    <section x-show="!loading && !error" class="bg-white rounded-lg border border-gray-200 p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-lg font-semibold">📋 今日工单</h3>
+        <a href="/jobs/new.html" class="text-sm bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700">
+          + 发起新工单
+        </a>
+      </div>
+
+      <!-- 工单状态计数 -->
+      <div class="grid grid-cols-4 gap-3 mb-4">
+        <div class="bg-gray-50 rounded p-3 text-center">
+          <div class="text-xs text-gray-500">⏳ Queued</div>
+          <div class="text-2xl font-bold text-gray-700" x-text="todayJobs.Queued"></div>
+        </div>
+        <div class="bg-blue-50 rounded p-3 text-center">
+          <div class="text-xs text-blue-500">⚙ Running</div>
+          <div class="text-2xl font-bold text-blue-700" x-text="todayJobs.Running"></div>
+        </div>
+        <div class="bg-green-50 rounded p-3 text-center">
+          <div class="text-xs text-green-500">✅ Done</div>
+          <div class="text-2xl font-bold text-green-700" x-text="todayJobs.Done"></div>
+        </div>
+        <div class="bg-red-50 rounded p-3 text-center">
+          <div class="text-xs text-red-500">❌ Failed</div>
+          <div class="text-2xl font-bold text-red-700" x-text="todayJobs.Failed"></div>
+        </div>
+      </div>
+
+      <!-- 最近工单列表 -->
+      <table class="w-full text-sm">
+        <thead class="text-xs text-gray-500 uppercase border-b">
+          <tr>
+            <th class="text-left py-2">工单 ID</th>
+            <th class="text-left">员工</th>
+            <th class="text-left">状态</th>
+            <th class="text-left">时间</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100">
+          <template x-for="j in recentJobs" :key="j.job_id">
+            <tr>
+              <td class="py-2 font-mono text-xs" x-text="j.short_id"></td>
+              <td x-text="j.bee_type"></td>
+              <td>
+                <span class="px-2 py-0.5 text-xs rounded"
+                      :class="{
+                        'bg-gray-100 text-gray-700': j.status === 'Queued',
+                        'bg-blue-100 text-blue-700': j.status === 'Running',
+                        'bg-green-100 text-green-700': j.status === 'Done',
+                        'bg-red-100 text-red-700': j.status === 'Failed'
+                      }"
+                      x-text="j.status"></span>
+              </td>
+              <td class="text-xs text-gray-600" x-text="formatTime(j.created_at)"></td>
+            </tr>
+          </template>
+          <tr x-show="recentJobs.length === 0">
+            <td colspan="4" class="py-6 text-center text-gray-400">今日暂无工单</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 最近活动 -->
+    <section x-show="!loading && !error" class="grid grid-cols-2 gap-6">
+      <div class="bg-white rounded-lg border border-gray-200 p-6">
+        <h3 class="text-lg font-semibold mb-4">📜 最近审计</h3>
+        <div class="space-y-2">
+          <template x-for="a in recentAudit" :key="a.id">
+            <div class="text-sm flex justify-between border-b border-gray-50 pb-1">
+              <div>
+                <span class="font-mono text-xs px-2 py-0.5 rounded bg-gray-100" x-text="a.action"></span>
+                <span class="text-xs text-gray-500 ml-1" x-text="a.actor"></span>
+              </div>
+              <div class="text-xs text-gray-400" x-text="formatTime(a.ts)"></div>
+            </div>
+          </template>
+          <div x-show="recentAudit.length === 0" class="text-center text-gray-400 text-sm py-4">暂无审计</div>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-lg border border-gray-200 p-6">
+        <h3 class="text-lg font-semibold mb-4">⚙️ 4 单位状态</h3>
+        <div class="space-y-2 text-sm">
+          <template x-for="(status, name) in company.units" :key="name">
+            <div class="flex justify-between">
+              <span class="text-gray-600 font-mono text-xs" x-text="name"></span>
+              <span :class="status === 'active' ? 'text-green-600' : 'text-red-600'">
+                ● <span x-text="status"></span>
+              </span>
+            </div>
+          </template>
+        </div>
+      </div>
+    </section>
 
   </main>
 
   <script>
-    function beeOS() {
+    function dash() {
       return {
         loading: true,
         error: null,
-        health: {},
-        stats: { weeklyJobs: 0 },
         now: new Date().toLocaleString('zh-CN'),
+        version: '',
+        company: { queen: '?', units: {}, bee_count: 0, box_count: 0 },
+        todayJobs: { Queued: 0, Running: 0, Done: 0, Failed: 0 },
+        hive: { jobs: 0, audit_log: 0, users: 0, credentials: 0, box_manifests: 0 },
+        recentJobs: [],
+        recentAudit: [],
 
         async init() {
-          // 每秒更新时间
           setInterval(() => {
             this.now = new Date().toLocaleString('zh-CN');
           }, 1000);
+          await this.refresh();
+          setInterval(() => this.refresh(), 5000);
+        },
 
+        async refresh() {
           try {
-            // 调 Queen /health
-            const r = await fetch('/health');
+            const r = await fetch('/api/v0/overview');
             if (!r.ok) throw new Error('Queen 返回 ' + r.status);
-            this.health = await r.json();
+            const d = await r.json();
+            this.version = d.version;
+            this.company = d.company;
+            this.todayJobs = d.today_jobs;
+            this.hive = d.hive_stats;
+            this.recentJobs = d.recent_activity.jobs;
+            this.recentAudit = d.recent_activity.audit;
           } catch (e) {
             this.error = e.message;
           } finally {
             this.loading = false;
           }
-        }
+        },
+
+        formatTime(t) {
+          if (!t) return '-';
+          return new Date(t).toLocaleString('zh-CN');
+        },
       }
     }
   </script>
-
 </body>
 </html>

@@ -6,23 +6,25 @@
   POST /api/v0/jobs              Portal 提交任务（创建 + 异步 dispatch）
   GET  /api/v0/jobs              Portal 任务列表
   GET  /api/v0/audit             Portal 审计日志
+  GET  /api/v0/runtime           架构页用：4 unit 状态 + 最近 10 job
+  GET  /api/v0/overview          仪表盘用：公司全景（管理者/员工/工位/仓库 + 最近活动）
 
 Portal fetch 路径无 /queen 前缀，与 job-system.md §4.1 不一致，以 Portal HTML 为准。
 """
 
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from beeos_core.config import get_settings
 from beeos_core.db import close_db, get_engine, session_scope
 from beeos_core.guardian import is_high_risk
 from beeos_core.logging import configure_logging, get_logger
-from beeos_core.models import AuditLog, Base, Job, Pollen
-from sqlalchemy import func
+from beeos_core.models import AuditLog, Base, BoxManifest, Credential, Job, Pollen, User
 
 from queen.api.schemas import AuditEntry, JobResponse, JobSubmitRequest
 from queen.core.audit import write_audit
@@ -263,4 +265,134 @@ async def runtime_status() -> dict:
             "avg_duration_ms": avg_duration_ms,
         },
         "lifetime_counts": counts,
+    }
+
+
+@app.get("/api/v0/overview")
+async def overview() -> dict:
+    """仪表盘公司全景：4 单位状态 + 今日工单 + Hive 容量 + 最近活动。
+
+    公司比喻：
+      queen       管理者
+      bee_count   员工数
+      box_count   工位数
+      hive_stats  仓库
+    """
+    units: dict[str, str] = {"nginx": "active"}
+
+    # PG
+    try:
+        async with session_scope() as session:
+            await session.execute(select(1))
+        units["postgresql"] = "active"
+    except Exception as e:
+        units["postgresql"] = f"fail: {e}"
+
+    # Redis
+    try:
+        import redis.asyncio as aioredis
+
+        r = aioredis.from_url(get_settings().redis_url)
+        await r.ping()
+        await r.aclose()
+        units["redis"] = "active"
+    except Exception as e:
+        units["redis"] = f"fail: {e}"
+
+    units["beeos-queen"] = "active"
+
+    # Hive 统计 + 今日工单 + 最近活动
+    # "今日" 用 ECS 本地时间（CST = UTC+8，server timezone），
+    # 不用 UTC 否则亚州用户在 UTC 凌晨看到的"今天"会少 8 小时。
+    today_start = datetime.now().replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+    async with session_scope() as session:
+        # Hive 行数
+        jobs_total = await session.scalar(select(func.count(Job.job_id))) or 0
+        audit_total = await session.scalar(select(func.count(AuditLog.id))) or 0
+        users_total = await session.scalar(select(func.count(User.user_id))) or 0
+        credentials_total = (
+            await session.scalar(select(func.count(Credential.credential_id))) or 0
+        )
+        box_manifests_total = (
+            await session.scalar(select(func.count(BoxManifest.box_id))) or 0
+        )
+
+        # 今日工单按状态分组
+        today_stmt = (
+            select(Job.status, func.count(Job.job_id))
+            .where(Job.created_at >= today_start)
+            .group_by(Job.status)
+        )
+        today_counts = dict((await session.execute(today_stmt)).all())
+
+        # 最近 5 条工单
+        recent_jobs_rows = (
+            (
+                await session.execute(
+                    select(Job)
+                    .order_by(Job.created_at.desc())
+                    .limit(5)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        # 最近 5 条审计
+        recent_audit_rows = (
+            (
+                await session.execute(
+                    select(AuditLog).order_by(AuditLog.id.desc()).limit(5)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    return {
+        "version": app.version,
+        "company": {
+            "queen": units["beeos-queen"],
+            "units": units,
+            "bee_count": 1,  # M1: 1 bee, 跟 queen 同进程
+            "box_count": 1,  # M1: month_close
+        },
+        "today_jobs": {
+            "Queued": today_counts.get("Queued", 0),
+            "Running": today_counts.get("Running", 0),
+            "Done": today_counts.get("Done", 0),
+            "Failed": today_counts.get("Failed", 0),
+        },
+        "hive_stats": {
+            "jobs": jobs_total,
+            "audit_log": audit_total,
+            "users": users_total,
+            "credentials": credentials_total,
+            "box_manifests": box_manifests_total,
+        },
+        "recent_activity": {
+            "jobs": [
+                {
+                    "job_id": str(j.job_id),
+                    "short_id": f"job-{j.job_id.hex[:8]}",
+                    "bee_type": j.bee_type,
+                    "status": j.status,
+                    "created_at": j.created_at.isoformat(),
+                }
+                for j in recent_jobs_rows
+            ],
+            "audit": [
+                {
+                    "id": a.id,
+                    "ts": a.ts.isoformat(),
+                    "actor": a.actor,
+                    "action": a.action,
+                    "resource": a.resource,
+                }
+                for a in recent_audit_rows
+            ],
+        },
     }

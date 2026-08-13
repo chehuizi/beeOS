@@ -123,6 +123,12 @@ run ssh "$REMOTE" "
   systemctl restart beeos-queen
   sleep 3
 
+  # 4.6 部署 nginx 配置（覆盖 /etc/nginx/conf.d/beeos.conf）
+  echo '--- deploying nginx config ---'
+  cp $REMOTE_DIR/deploy/nginx/beeos.conf /etc/nginx/conf.d/beeos.conf
+  nginx -t && systemctl reload nginx
+  echo '--- nginx config reloaded ---'
+
   # 4.5 清理
   rm -f /tmp/beeos-$HEAD_SHORT.tgz
 "

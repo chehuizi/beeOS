@@ -5,7 +5,7 @@
   GET  /api/v0/boxes         列出已注册 Box
   GET  /api/v0/boxes/{type}  取 Box manifest
   POST /api/v0/run           跑一个 Box 任务（同步返回）
-  GET  /api/v0/audit         读最近 N 条审计
+  GET  /api/v0/audit         读最近 N 条审计（开发者调试用，不暴露在 demo 页）
   GET  /health               健康检查
 
 启动：
@@ -132,10 +132,6 @@ _INDEX_HTML = """<!DOCTYPE html>
     button:hover { background: #1d4ed8; }
     button:disabled { background: #9ca3af; cursor: not-allowed; }
     pre { background: #1f2937; color: #e5e7eb; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 12px; max-height: 400px; }
-    .audit { background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px; margin-top: 16px; }
-    .audit h3 { margin: 0 0 12px 0; }
-    .audit-entry { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #f3f4f6; font-size: 13px; }
-    .badge { background: #e0e7ff; color: #3730a3; padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 11px; }
     .status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
     .status.done { background: #d1fae5; color: #065f46; }
     .status.failed { background: #fee2e2; color: #991b1b; }
@@ -269,12 +265,6 @@ _INDEX_HTML = """<!DOCTYPE html>
     <pre id="result-json"></pre>
   </div>
 
-  <!-- 审计 -->
-  <div class="audit">
-    <h3>📜 最近审计 (本地 JSONL)</h3>
-    <div id="audit-list">加载中…</div>
-  </div>
-
 <script>
 async function loadBox() {
   const r = await fetch('/api/v0/boxes/month_close');
@@ -282,21 +272,6 @@ async function loadBox() {
   document.getElementById('box-name').textContent = m.name;
   document.getElementById('box-stats').innerHTML =
     `<span>${m.tools.length} 工具</span><span>${m.workflow_count} 步骤</span><span>${m.schemas.length} schema</span>`;
-}
-
-async function loadAudit() {
-  const r = await fetch('/api/v0/audit?limit=10');
-  const d = await r.json();
-  const html = d.entries.map(e => `
-    <div class="audit-entry">
-      <div>
-        <span class="badge">${e.action}</span>
-        <span style="color: #6b7280; margin-left: 8px;">${e.actor} · ${e.resource || '-'}</span>
-      </div>
-      <div style="color: #9ca3af; font-size: 11px;">${new Date(e.ts).toLocaleTimeString('zh-CN')}</div>
-    </div>
-  `).join('');
-  document.getElementById('audit-list').innerHTML = html || '<div style="color: #9ca3af; text-align: center; padding: 16px;">暂无审计</div>';
 }
 
 document.getElementById('run-form').addEventListener('submit', async (e) => {
@@ -326,8 +301,6 @@ document.getElementById('run-form').addEventListener('submit', async (e) => {
     document.getElementById('result-summary').textContent =
       `${data.steps.length} 步完成 · 耗时 ${data.elapsed_ms}ms · 账期 ${data.period}`;
     document.getElementById('result-json').textContent = JSON.stringify(data, null, 2);
-
-    await loadAudit();
   } catch (err) {
     alert('执行失败: ' + err.message);
   } finally {
@@ -338,8 +311,6 @@ document.getElementById('run-form').addEventListener('submit', async (e) => {
 });
 
 loadBox();
-loadAudit();
-setInterval(loadAudit, 5000);
 </script>
 </body>
 </html>"""

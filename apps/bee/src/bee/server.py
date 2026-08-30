@@ -28,7 +28,7 @@ from bee.registry import get_manifest
 
 app = FastAPI(
     title="beeOS M0 demo",
-    description="beeBox (workload) + bee (runtime) — 无 Queen / 无 Hive",
+    description="beeBox (workload) + bee (runtime) — M0 数字员工运行时",
     version="0.1.0",
 )
 
@@ -63,7 +63,11 @@ async def api_list_boxes() -> dict:
 @app.get("/api/v0/boxes/{box_type}")
 async def api_get_box(box_type: str) -> dict:
     try:
-        return get_manifest(box_type)
+        manifest = dict(get_manifest(box_type))  # 复制
+        # 补 workflow 字段长度（manifest 本身没存，但前端的 stats 展示需要）
+        from bee.registry import get_workflow
+        manifest["workflow_count"] = len(get_workflow(box_type))
+        return manifest
     except ValueError:
         raise HTTPException(404, f"Unknown box: {box_type}. Supported: {list_supported()}")
 
@@ -140,7 +144,7 @@ _INDEX_HTML = """<!DOCTYPE html>
 </head>
 <body>
   <h1>🐝 beeOS M0</h1>
-  <div class="sub">beeBox (workload) × bee (runtime) · 无 Queen / 无 Hive · v0.1.0</div>
+  <div class="sub">beeBox (workload) × bee (runtime) · M0 数字员工运行时 · v0.1.0</div>
 
   <!-- BeeBox × Bee 主舞台 -->
   <div class="row">
@@ -154,7 +158,7 @@ _INDEX_HTML = """<!DOCTYPE html>
       <div class="label">👷 引擎 · runtime</div>
       <div class="title bee">1 bee 在岗</div>
       <div class="stat">
-        <span>驱动：ReAct(M0: 静态)</span>
+        <span>状态机 · 5 态</span>
         <span>状态：<span id="bee-status">就绪</span></span>
       </div>
     </div>
@@ -202,7 +206,7 @@ async function loadBox() {
   const m = await r.json();
   document.getElementById('box-name').textContent = m.name;
   document.getElementById('box-stats').innerHTML =
-    `<span>${m.tools.length} 工具</span><span>${m.workflow.length} 步骤</span><span>${m.schemas.length} schema</span>`;
+    `<span>${m.tools.length} 工具</span><span>${m.workflow_count} 步骤</span><span>${m.schemas.length} schema</span>`;
 }
 
 async function loadAudit() {

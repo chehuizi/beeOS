@@ -5,6 +5,7 @@
   GET  /api/v0/boxes         列出已注册 Box
   GET  /api/v0/boxes/{type}  取 Box manifest
   POST /api/v0/run           跑一个 Box 任务（同步返回）
+  GET  /api/v0/stats         bee runtime 累计统计（运行次数 / 成功率 / 平均耗时）
   GET  /api/v0/audit         读最近 N 条审计（开发者调试用，不暴露在 demo 页）
   GET  /health               健康检查
 
@@ -36,6 +37,9 @@ app = FastAPI(
 AUDIT_PATH = "./logs/audit.jsonl"
 _bee = Bee()
 _audit = LocalAuditLog(AUDIT_PATH)
+
+# 累计运行统计（M0 内存版）
+_run_stats = {"total": 0, "success": 0, "total_ms": 0.0}
 
 
 # === Schema ===
@@ -77,8 +81,24 @@ async def api_run(req: RunRequest) -> dict:
     """同步跑一个 Box 任务（M0 单 Bee 串行，立即返回结果）。"""
     if req.box_type not in list_supported():
         raise HTTPException(400, f"Unknown box: {req.box_type}. Supported: {list_supported()}")
+    _run_stats["total"] += 1
     result = await _bee.run(req.box_type, {"period": req.period, "approver": req.approver})
+    _run_stats["total_ms"] += result.elapsed_ms
+    if result.status.value == "Done":
+        _run_stats["success"] += 1
     return result.model_dump()
+
+
+@app.get("/api/v0/stats")
+async def api_stats() -> dict:
+    """bee runtime 累计统计。"""
+    total = _run_stats["total"]
+    success = _run_stats["success"]
+    return {
+        "total_runs": total,
+        "success_rate": round(success / total, 3) if total > 0 else None,
+        "avg_ms": round(_run_stats["total_ms"] / total, 2) if total > 0 else None,
+    }
 
 
 @app.get("/api/v0/audit")
@@ -120,11 +140,46 @@ _INDEX_HTML = """<!DOCTYPE html>
     .arrow { display: flex; align-items: center; justify-content: center; color: #6b7280; font-size: 24px; }
     .arrow::before { content: "⇄"; }
     .label { font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; }
-    .title { font-size: 18px; font-weight: bold; margin: 4px 0 12px 0; }
+    .title { font-size: 18px; font-weight: bold; margin: 4px 0 2px 0; }
     .title.bebox { color: #6d28d9; }
     .title.bee { color: #16a34a; }
+    .subtitle { font-size: 13px; color: #6b7280; margin-bottom: 14px; }
     .stat { display: flex; gap: 16px; font-size: 14px; color: #4b5563; margin-top: 8px; }
     .stat span { background: #f3f4f6; padding: 2px 8px; border-radius: 4px; }
+
+    .section {
+      font-size: 11px; color: #6b7280; text-transform: uppercase;
+      letter-spacing: 0.5px; margin: 16px 0 6px 0; font-weight: 600;
+    }
+    .step-list { list-style: none; padding: 0; margin: 0 0 4px 0; font-size: 13px; }
+    .step-list li { display: flex; align-items: center; gap: 8px; padding: 3px 0; color: #374151; }
+    .step-num {
+      display: inline-block; width: 18px; height: 18px;
+      background: #ede9fe; color: #6d28d9; border-radius: 4px;
+      font-size: 11px; font-weight: 600; text-align: center; line-height: 18px;
+    }
+    .tag-list { display: flex; flex-wrap: wrap; gap: 4px; }
+    .tag {
+      background: #f3f4f6; color: #4b5563; font-size: 11px;
+      padding: 2px 6px; border-radius: 3px; font-family: monospace;
+    }
+    .cap-list { list-style: none; padding: 0; margin: 0 0 4px 0; font-size: 13px; color: #374151; }
+    .cap-list li { padding: 2px 0; }
+    .cap-list li::before { content: "· "; color: #9ca3af; }
+    .dim { color: #9ca3af; font-size: 12px; }
+    .status-dot {
+      display: inline-block; width: 8px; height: 8px;
+      background: #16a34a; border-radius: 50%; margin-right: 4px;
+      box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.15);
+    }
+    .status-dot.busy { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.15); }
+    .stat-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .stat-cell {
+      background: #f9fafb; border: 1px solid #e5e7eb;
+      border-radius: 6px; padding: 8px 4px; text-align: center;
+    }
+    .stat-cell .num { font-size: 20px; font-weight: bold; color: #1f2937; line-height: 1.2; }
+    .stat-cell .cap-label { font-size: 10px; color: #6b7280; margin-top: 2px; }
     form { background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
     label { display: block; font-size: 12px; color: #6b7280; margin-bottom: 4px; }
     input, select { width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; box-sizing: border-box; }
@@ -222,15 +277,59 @@ _INDEX_HTML = """<!DOCTYPE html>
     <div class="card bebox">
       <div class="label">🏢 工作空间 · workload</div>
       <div class="title bebox" id="box-name">MonthCloseBox</div>
-      <div class="stat" id="box-stats">加载中…</div>
+      <div class="subtitle" id="box-subtitle">v0.1.0 · 会计月结自动化</div>
+
+      <div class="section">📋 6 步 workflow</div>
+      <ol class="step-list" id="box-steps">
+        <li><span class="step-num">1</span> 拉余额（应付+应收）</li>
+        <li><span class="step-num">2</span> 银行对账</li>
+        <li><span class="step-num">3</span> 费用分类</li>
+        <li><span class="step-num">4</span> 生成三大报表</li>
+        <li><span class="step-num">5</span> 凭证归集</li>
+        <li><span class="step-num">6</span> 发起审批</li>
+      </ol>
+
+      <div class="section">🔧 7 个工具 · 7 个 schema</div>
+      <div class="tag-list" id="box-tags">
+        <span class="tag">accounts_payable</span>
+        <span class="tag">accounts_receivable</span>
+        <span class="tag">bank_reconcile</span>
+        <span class="tag">expense_classify</span>
+        <span class="tag">report_generate</span>
+        <span class="tag">evidence_collect</span>
+        <span class="tag">signoff_request</span>
+      </div>
     </div>
     <div class="arrow"></div>
     <div class="card bee">
       <div class="label">👷 引擎 · runtime</div>
-      <div class="title bee">1 bee 在岗</div>
-      <div class="stat">
-        <span>状态机 · 5 态</span>
-        <span>状态：<span id="bee-status">就绪</span></span>
+      <div class="title bee">1 bee</div>
+      <div class="subtitle">
+        <span class="status-dot"></span> <span id="bee-status">就绪 · 待命</span>
+      </div>
+
+      <div class="section">⚙️ 能力</div>
+      <ul class="cap-list">
+        <li>状态机 · 5 态</li>
+        <li>异常捕获 + 重试</li>
+        <li>本地 JSONL 审计</li>
+        <li>ReAct 循环 <span class="dim">（V1+）</span></li>
+      </ul>
+
+      <div class="section">📊 累计</div>
+      <div class="stat-row">
+        <div class="stat-cell">
+          <div class="num" id="total-runs">0</div>
+          <div class="cap-label">运行次数</div>
+        </div>
+        <div class="stat-cell">
+          <div class="num" id="success-rate">—</div>
+          <div class="cap-label">成功率</div>
+        </div>
+        <div class="stat-cell">
+          <div class="num" id="avg-ms">—</div>
+          <div class="cap-label">平均耗时</div>
+        </div>
       </div>
     </div>
   </div>
@@ -266,12 +365,14 @@ _INDEX_HTML = """<!DOCTYPE html>
   </div>
 
 <script>
-async function loadBox() {
-  const r = await fetch('/api/v0/boxes/month_close');
-  const m = await r.json();
-  document.getElementById('box-name').textContent = m.name;
-  document.getElementById('box-stats').innerHTML =
-    `<span>${m.tools.length} 工具</span><span>${m.workflow_count} 步骤</span><span>${m.schemas.length} schema</span>`;
+async function loadStats() {
+  const r = await fetch('/api/v0/stats');
+  const s = await r.json();
+  document.getElementById('total-runs').textContent = s.total_runs;
+  document.getElementById('success-rate').textContent =
+    s.success_rate === null ? '—' : (s.success_rate * 100).toFixed(0) + '%';
+  document.getElementById('avg-ms').textContent =
+    s.avg_ms === null ? '—' : s.avg_ms.toFixed(1) + 'ms';
 }
 
 document.getElementById('run-form').addEventListener('submit', async (e) => {
@@ -279,7 +380,10 @@ document.getElementById('run-form').addEventListener('submit', async (e) => {
   const btn = document.getElementById('run-btn');
   btn.disabled = true;
   btn.textContent = '⏳ 执行中…';
-  document.getElementById('bee-status').textContent = '忙';
+  const statusEl = document.getElementById('bee-status');
+  const dotEl = document.querySelector('.status-dot');
+  statusEl.textContent = '执行中…';
+  if (dotEl) dotEl.classList.add('busy');
 
   const body = {
     box_type: document.getElementById('box_type').value,
@@ -294,6 +398,7 @@ document.getElementById('run-form').addEventListener('submit', async (e) => {
       body: JSON.stringify(body),
     });
     const data = await r.json();
+    await loadStats();
 
     document.getElementById('result-container').style.display = 'block';
     document.getElementById('result-status').textContent = data.status;
@@ -306,11 +411,12 @@ document.getElementById('run-form').addEventListener('submit', async (e) => {
   } finally {
     btn.disabled = false;
     btn.textContent = '▶ 发起工单';
-    document.getElementById('bee-status').textContent = '就绪';
+    statusEl.textContent = '就绪 · 待命';
+    if (dotEl) dotEl.classList.remove('busy');
   }
 });
 
-loadBox();
+loadStats();
 </script>
 </body>
 </html>"""

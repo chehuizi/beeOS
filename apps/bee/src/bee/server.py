@@ -140,39 +140,76 @@ _INDEX_HTML = """<!DOCTYPE html>
     .status.done { background: #d1fae5; color: #065f46; }
     .status.failed { background: #fee2e2; color: #991b1b; }
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+    /* === 蜜蜂动画 === */
+    @keyframes bee-bob {
+      0%, 100% { transform: translateY(0); }
+      50%      { transform: translateY(-2px); }
+    }
+    @keyframes wing-flap {
+      0%, 100% { transform: scaleY(1); }
+      50%      { transform: scaleY(0.4); }
+    }
+    @keyframes bee-blink {
+      0%, 88%, 100% { transform: scaleY(1); }
+      92%, 96%      { transform: scaleY(0.1); }
+    }
+    .bee-bob {
+      animation: bee-bob 3s ease-in-out infinite;
+      transform-origin: 18px 22px;
+    }
+    .bee-wing {
+      transform-box: fill-box;
+      animation: wing-flap 0.5s ease-in-out infinite;
+    }
+    .bee-wing-left  { transform-origin: 100% 50%; }
+    .bee-wing-right { transform-origin: 0% 50%; }
+    .bee-eyes {
+      transform-box: fill-box;
+      transform-origin: 50% 50%;
+      animation: bee-blink 4.5s ease-in-out infinite;
+    }
   </style>
 </head>
 <body>
   <h1 style="display:flex;align-items:center;gap:12px;">
     <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="bee">
-      <!-- 翅膀（半透明，叠在身后） -->
-      <ellipse cx="11" cy="16" rx="6" ry="5" fill="#fff" opacity="0.7"/>
-      <ellipse cx="25" cy="16" rx="6" ry="5" fill="#fff" opacity="0.7"/>
-      <ellipse cx="11" cy="16" rx="6" ry="5" fill="none" stroke="#cbd5e1" stroke-width="0.6"/>
-      <ellipse cx="25" cy="16" rx="6" ry="5" fill="none" stroke="#cbd5e1" stroke-width="0.6"/>
-      <!-- 身体（圆胖的椭圆） -->
-      <ellipse cx="18" cy="22" rx="9" ry="7.5" fill="#fbbf24"/>
-      <!-- 条纹（圆角矩形） -->
-      <rect x="9.5" y="20" width="17" height="2" rx="1" fill="#374151"/>
-      <rect x="9.5" y="24" width="17" height="2" rx="1" fill="#374151"/>
-      <!-- 头（圆形，更大更萌） -->
-      <circle cx="18" cy="13" r="6" fill="#fbbf24"/>
-      <!-- 腮红（粉色圆点） -->
-      <circle cx="13" cy="14.5" r="1.3" fill="#fb7185" opacity="0.5"/>
-      <circle cx="23" cy="14.5" r="1.3" fill="#fb7185" opacity="0.5"/>
-      <!-- 眼睛（圆点） -->
-      <circle cx="15.5" cy="12.5" r="1.1" fill="#1f2937"/>
-      <circle cx="20.5" cy="12.5" r="1.1" fill="#1f2937"/>
-      <!-- 眼高光（让眼睛更亮） -->
-      <circle cx="16" cy="12" r="0.4" fill="#fff"/>
-      <circle cx="21" cy="12" r="0.4" fill="#fff"/>
-      <!-- 微笑（弧线） -->
-      <path d="M16 15 Q18 16.3 20 15" stroke="#1f2937" stroke-width="0.9" fill="none" stroke-linecap="round"/>
-      <!-- 触角（线条 + 圆点） -->
-      <line x1="15.5" y1="8" x2="14" y2="5" stroke="#1f2937" stroke-width="0.9" stroke-linecap="round"/>
-      <line x1="20.5" y1="8" x2="22" y2="5" stroke="#1f2937" stroke-width="0.9" stroke-linecap="round"/>
-      <circle cx="14" cy="4.5" r="1" fill="#1f2937"/>
-      <circle cx="22" cy="4.5" r="1" fill="#1f2937"/>
+      <g class="bee-bob">
+        <!-- 左翅（拍动） -->
+        <g class="bee-wing bee-wing-left">
+          <ellipse cx="11" cy="16" rx="6" ry="5" fill="#fff" opacity="0.7"/>
+          <ellipse cx="11" cy="16" rx="6" ry="5" fill="none" stroke="#cbd5e1" stroke-width="0.6"/>
+        </g>
+        <!-- 右翅（拍动） -->
+        <g class="bee-wing bee-wing-right">
+          <ellipse cx="25" cy="16" rx="6" ry="5" fill="#fff" opacity="0.7"/>
+          <ellipse cx="25" cy="16" rx="6" ry="5" fill="none" stroke="#cbd5e1" stroke-width="0.6"/>
+        </g>
+        <!-- 身体（圆胖椭圆） -->
+        <ellipse cx="18" cy="22" rx="9" ry="7.5" fill="#fbbf24"/>
+        <!-- 条纹（圆角矩形） -->
+        <rect x="9.5" y="20" width="17" height="2" rx="1" fill="#374151"/>
+        <rect x="9.5" y="24" width="17" height="2" rx="1" fill="#374151"/>
+        <!-- 头（圆） -->
+        <circle cx="18" cy="13" r="6" fill="#fbbf24"/>
+        <!-- 腮红（粉圆） -->
+        <circle cx="13" cy="14.5" r="1.3" fill="#fb7185" opacity="0.5"/>
+        <circle cx="23" cy="14.5" r="1.3" fill="#fb7185" opacity="0.5"/>
+        <!-- 眼睛（眨） -->
+        <g class="bee-eyes">
+          <circle cx="15.5" cy="12.5" r="1.1" fill="#1f2937"/>
+          <circle cx="20.5" cy="12.5" r="1.1" fill="#1f2937"/>
+          <circle cx="16" cy="12" r="0.4" fill="#fff"/>
+          <circle cx="21" cy="12" r="0.4" fill="#fff"/>
+        </g>
+        <!-- 微笑 -->
+        <path d="M16 15 Q18 16.3 20 15" stroke="#1f2937" stroke-width="0.9" fill="none" stroke-linecap="round"/>
+        <!-- 触角 -->
+        <line x1="15.5" y1="8" x2="14" y2="5" stroke="#1f2937" stroke-width="0.9" stroke-linecap="round"/>
+        <line x1="20.5" y1="8" x2="22" y2="5" stroke="#1f2937" stroke-width="0.9" stroke-linecap="round"/>
+        <circle cx="14" cy="4.5" r="1" fill="#1f2937"/>
+        <circle cx="22" cy="4.5" r="1" fill="#1f2937"/>
+      </g>
     </svg>
     <span>beeOS M0</span>
   </h1>

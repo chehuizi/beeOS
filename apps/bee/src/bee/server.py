@@ -133,7 +133,7 @@ _INDEX_HTML = """<!DOCTYPE html>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f9fafb; margin: 0; padding: 24px; color: #1f2937; }
     h1 { margin: 0 0 4px 0; }
     .sub { color: #6b7280; font-size: 14px; margin-bottom: 24px; }
-    .row { display: grid; grid-template-columns: 1fr 60px 1fr; gap: 16px; margin-bottom: 24px; }
+    .row { display: grid; grid-template-columns: 1fr 150px 1fr; gap: 16px; margin-bottom: 24px; }
     .card { background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px; }
     .card.bebox { border-color: #c4b5fd; }
     .card.bee { border-color: #86efac; }
@@ -313,10 +313,10 @@ _INDEX_HTML = """<!DOCTYPE html>
       </div>
     </div>
     <div class="arrow" id="flow-arrow">
-      <svg width="64" height="14" viewBox="0 0 64 14">
-        <line x1="2" y1="7" x2="56" y2="7" stroke="url(#g)" stroke-width="2"
+      <svg width="120" height="14" viewBox="0 0 120 14">
+        <line x1="2" y1="7" x2="110" y2="7" stroke="url(#g)" stroke-width="2.2"
               stroke-linecap="round" class="flow-dash"/>
-        <polygon points="52,3 60,7 52,11" fill="#16a34a"/>
+        <polygon points="106,3 116,7 106,11" fill="#16a34a"/>
         <defs>
           <linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
             <stop offset="0%" stop-color="#a78bfa"/>
@@ -394,10 +394,11 @@ async function loadStats() {
   const r = await fetch('/api/v0/stats');
   const s = await r.json();
   document.getElementById('total-runs').textContent = s.total_runs;
-  document.getElementById('success-rate').textContent =
-    s.success_rate === null ? '—' : (s.success_rate * 100).toFixed(0) + '%';
-  document.getElementById('avg-ms').textContent =
-    s.avg_ms === null ? '—' : s.avg_ms.toFixed(1) + 'ms';
+  // Number.isFinite 防御：null / undefined / NaN / Infinity 全部归零状态
+  const rate = Number.isFinite(s.success_rate) ? (s.success_rate * 100).toFixed(0) + '%' : '—';
+  document.getElementById('success-rate').textContent = rate;
+  const avg = Number.isFinite(s.avg_ms) ? s.avg_ms.toFixed(1) + 'ms' : '—';
+  document.getElementById('avg-ms').textContent = avg;
 }
 
 document.getElementById('run-form').addEventListener('submit', async (e) => {

@@ -1,22 +1,21 @@
 [project]
 name = "beeos-core"
 version = "0.1.0"
-description = "beeOS Core - 跨服务共享代码（配置 / DB / 鉴权 / Guardian / 日志）"
+description = "beeOS Core - 跨服务共享代码（M0 精简版：只保留 config + logging）"
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.8.0",
     "pydantic-settings>=2.4.0",
-    "sqlalchemy[asyncio]>=2.0.30",
-    "asyncpg>=0.29.0",
-    "redis[hiredis]>=5.0.0",
     "structlog>=24.4.0",
-    "opentelemetry-api>=1.27.0",
-    "opentelemetry-sdk>=1.27.0",
-    "opentelemetry-instrumentation-fastapi>=0.48b0",
-    "opentelemetry-exporter-otlp>=1.27.0",
-    "cryptography>=43.0.0",
-    "httpx>=0.27.0",
 ]
+
+# M0 暂时不用的依赖（V1+ 恢复时取消注释）：
+# - sqlalchemy[asyncio]>=2.0.30      # ORM (Hive 恢复)
+# - asyncpg>=0.29.0                  # PG async driver
+# - redis[hiredis]>=5.0.0            # 缓存 / 任务队列
+# - opentelemetry-*                  # 遥测
+# - cryptography>=43.0.0             # Guardian AES-GCM
+# - httpx>=0.27.0                    # LLM HTTP client
 
 [build-system]
 requires = ["hatchling"]

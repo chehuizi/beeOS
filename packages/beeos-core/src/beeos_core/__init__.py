@@ -1,12 +1,10 @@
-"""beeOS Core - 跨服务共享代码。
+"""beeOS Core（M0 精简版）。
 
-Queen / Bee / BeeBox 都需要的基础能力：
-- 配置管理 (pydantic-settings)
-- 数据库连接 (sqlalchemy + asyncpg)
-- 鉴权 (Guardian)
-- 结构化日志 (structlog)
-- 可观测性 (OpenTelemetry)
-- 凭证加密 (cryptography)
+M0 只暴露 2 个模块：
+- `beeos_core.config` — pydantic-settings（BEEOOS_ 前缀）
+- `beeos_core.logging` — structlog 包装
+
+DB / 鉴权 / Guardian 已 shelve 到 `_shelved/beeos_core/`，V1 恢复。
 """
 
 __version__ = "0.1.0"

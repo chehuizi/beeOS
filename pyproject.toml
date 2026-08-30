@@ -22,11 +22,11 @@ dev-dependencies = [
     "pre-commit>=3.8.0",
 ]
 
-# uv workspace：所有 Python 包都作为成员
+# uv workspace：M0 只保留 Bee + BeeBox
+# Queen 已 shelve 到 _shelved/queen/，V1 恢复
 [tool.uv.workspace]
 members = [
     "packages/beeos-core",
-    "apps/queen",
     "apps/bee",
     "apps/boxes/month-close",
 ]
@@ -34,7 +34,6 @@ members = [
 # workspace 内的包需要显式声明来源
 [tool.uv.sources]
 beeos-core = { workspace = true }
-queen = { workspace = true }
 bee = { workspace = true }
 month-close-box = { workspace = true }
 

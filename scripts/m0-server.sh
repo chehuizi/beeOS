@@ -34,7 +34,8 @@ cmd_start() {
     echo '   started (pid '\$(cat $PIDFILE)')'
   "
   echo "    日志: ssh $REMOTE 'tail -f $LOGFILE'"
-  echo "    访问: http://$REMOTE_HOST:8085/  (把 REMOTE 拆出 host)"
+  REMOTE_HOST=$(echo "$REMOTE" | cut -d@ -f2)
+  echo "    访问: http://$REMOTE_HOST:$PORT/"
 }
 
 cmd_stop() {

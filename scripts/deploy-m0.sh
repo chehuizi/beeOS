@@ -125,15 +125,15 @@ run ssh "$REMOTE" "
   rm -f /tmp/beeos-m0-$HEAD_SHORT.tgz
 "
 
-# --- 5. smoke checks ---
+# --- 5. smoke checks（直接调 venv 的 python，避免 uv run 下载 dev 依赖）---
 echo "==> smoke checks (M0 CLI 工具验证)"
 run ssh "$REMOTE" "
   set -e
-  echo '--- bee --list ---'
+  echo '--- bee --list (直接调 venv python) ---'
   sudo -u deploy bash -c '
     export PATH=\$HOME/.local/bin:\$PATH
     cd $REMOTE_DIR
-    uv run bee --list
+    ./venv/bin/bee --list
   '
 
   echo ''
@@ -141,7 +141,7 @@ run ssh "$REMOTE" "
   sudo -u deploy bash -c '
     export PATH=\$HOME/.local/bin:\$PATH
     cd $REMOTE_DIR
-    uv run month-close --manifest
+    ./venv/bin/month-close --manifest
   '
 "
 
@@ -149,6 +149,6 @@ echo ""
 echo "==> M0 deploy complete"
 echo "    deployed commit: $HEAD_SHORT"
 echo "    M1 进程未动（Queen/PG/Redis/nginx 继续在跑）"
-echo "    验证 Bee:  ssh $REMOTE 'cd $REMOTE_DIR && uv run bee --box month_close --period 2026-07'"
+echo "    验证 Bee:  ssh $REMOTE 'cd $REMOTE_DIR && ./venv/bin/bee --box month_close --period 2026-07'"
 echo "    切换 M0:  手动 systemctl stop beeos-queen && systemctl disable beeos-queen"
 echo "    回滚 M1:  git checkout <M1-sha> 后跑 bash scripts/deploy-to-ecs.sh"

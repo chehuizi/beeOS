@@ -84,9 +84,8 @@ tar -czf "$STAGE/beeos-m0-$HEAD_SHORT.tgz" \
   --exclude='_shelved' \
   --exclude='logs' \
   --exclude='docs' \
-  --exclude='deploy' \
   --exclude='apps/portal' \
-  apps packages pyproject.toml uv.lock
+  apps packages deploy pyproject.toml uv.lock
 
 test -s "$STAGE/beeos-m0-$HEAD_SHORT.tgz" || { echo "tarball empty"; exit 1; }
 
@@ -121,7 +120,14 @@ run ssh "$REMOTE" "
     '"
   fi)
 
-  # 4.4 清理
+  # 4.4 同步 nginx 配置（如果 M0 用了 /m0/ 反代）
+  if [ -f $REMOTE_DIR/deploy/nginx/beeos.conf ]; then
+    echo '--- reloading nginx with new M0 config ---'
+    cp $REMOTE_DIR/deploy/nginx/beeos.conf /etc/nginx/conf.d/beeos.conf
+    nginx -t && systemctl reload nginx
+  fi
+
+  # 4.5 清理
   rm -f /tmp/beeos-m0-$HEAD_SHORT.tgz
 "
 

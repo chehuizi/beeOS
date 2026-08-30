@@ -1,15 +1,21 @@
 [project]
 name = "bee"
 version = "0.1.0"
-description = "Bee 执行引擎 - ReAct 循环 + 模型 AB + 工具调用"
+description = "Bee 执行引擎 - 算法侧（状态机 + 编排 + 审计）"
 requires-python = ">=3.12"
 dependencies = [
     "beeos-core",
-    "litellm>=1.50.0",
     "pydantic>=2.8.0",
-    "httpx>=0.27.0",
-    "tenacity>=9.0.0",
 ]
+
+# M0 暂时不用的依赖（V1+ 恢复时取消注释）：
+# - litellm>=1.50.0        # 多模型 AB 客户端
+# - httpx>=0.27.0          # LLM HTTP 调用
+# - tenacity>=9.0.0        # 重试
+
+[project.scripts]
+# CLI: uv run bee --box month_close --period 2026-07
+bee = "bee.__main__:main"
 
 [build-system]
 requires = ["hatchling"]

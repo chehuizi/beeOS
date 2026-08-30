@@ -1,141 +1,148 @@
-"""月结工作流 - 6 步固定流程（M1 写死，不调 LLM 拆解）。
+"""MonthCloseBox 工作流 - 6 步声明（数据，非算法）。
 
-对应 [技术架构 §4.4] 和 box.yaml workflow 段。
+设计原则（BeeBox = 数据结构）：
+- WORKFLOW 列表只是 step 顺序声明
+- 实际执行由 bee/orchestrator.py 调度
+- 每个 step 的函数在这里实现（调 adapters），但 step-to-step 的串联由 Bee 决定
+
+M0 写死 6 步；V1+ 可以从 manifest.yaml 加载或 LLM 决定。
 """
 
-from pydantic import BaseModel, Field
+from __future__ import annotations
 
-from beeos_core.logging import get_logger
-
-from month_close import modules
-
-logger = get_logger(__name__)
+from month_close import adapters
 
 
-class StepResult(BaseModel):
-    """单步执行结果。"""
+# === Manifest（供 Bee 加载）===
 
-    step: str
-    module: str
-    input: dict
-    output: dict
+MANIFEST: dict = {
+    "box_type": "month_close",
+    "name": "MonthCloseBox",
+    "version": "0.1.0",
+    "description": "会计月结自动化",
+    "schemas": [
+        "Payable", "Receivable", "Voucher", "ReconcileResult",
+        "Report", "Evidence", "Signoff",
+    ],
+    "tools": [
+        "accounts_payable_query", "accounts_receivable_query",
+        "bank_reconcile", "expense_classify",
+        "report_generate", "evidence_collect", "signoff_request",
+    ],
+}
 
 
-class MonthCloseWorkflow(BaseModel):
-    """月结工作流（6 步写死版）。
+# === 6 步工作流（M0 写死）===
 
-    6 步：
-      1. pull_balances (应付 + 应收)
-      2. reconcile (银行对账)
-      3. classify (费用分类)
-      4. generate_reports (出三大报表)
-      5. collect_evidence (凭证归集)
-      6. request_signoff (发起审批)
+WORKFLOW: list[dict] = [
+    {
+        "name": "pull_balances",
+        "tool": "_step_pull_balances",
+        "description": "拉余额（应付+应收）",
+    },
+    {
+        "name": "reconcile",
+        "tool": "_step_reconcile",
+        "description": "银行对账",
+    },
+    {
+        "name": "classify",
+        "tool": "_step_classify",
+        "description": "费用分类",
+    },
+    {
+        "name": "generate_reports",
+        "tool": "_step_generate_reports",
+        "description": "生成三大报表",
+    },
+    {
+        "name": "collect_evidence",
+        "tool": "_step_collect_evidence",
+        "description": "凭证归集",
+    },
+    {
+        "name": "request_signoff",
+        "tool": "_step_request_signoff",
+        "description": "发起审批",
+    },
+]
+
+
+# === 单步实现（数据组合，不做决策）===
+
+def _step_pull_balances(context: dict, prev: dict) -> dict:
+    """Step 1: 拉余额。"""
+    period = context["period"]
+    return {
+        "payables": adapters.accounts_payable_query(period=period),
+        "receivables": adapters.accounts_receivable_query(period=period),
+    }
+
+
+def _step_reconcile(context: dict, prev: dict) -> dict:
+    """Step 2: 银行对账。"""
+    return adapters.bank_reconcile(period=context["period"])
+
+
+def _step_classify(context: dict, prev: dict) -> dict:
+    """Step 3: 凭证分类（拿 Step 1 的数据做输入）。"""
+    # M0 简化：不管 prev["pull_balances"]，写死 15 条假凭证
+    vouchers = [{"id": f"v{i}"} for i in range(15)]
+    classified = adapters.expense_classify(vouchers=vouchers)
+    return {"classified_count": len(classified)}
+
+
+def _step_generate_reports(context: dict, prev: dict) -> dict:
+    """Step 4: 生成三大报表。"""
+    return adapters.report_generate(period=context["period"])
+
+
+def _step_collect_evidence(context: dict, prev: dict) -> dict:
+    """Step 5: 凭证归集。"""
+    return adapters.evidence_collect(period=context["period"])
+
+
+def _step_request_signoff(context: dict, prev: dict) -> dict:
+    """Step 6: 发起审批（依赖 Step 4 的 report_url）。"""
+    reports = prev.get("generate_reports", {})
+    report_url = reports.get("pdf_url", "")
+    return adapters.signoff_request(
+        report_url=report_url,
+        approver=context.get("approver", "manager@example.com"),
+    )
+
+
+# === Step dispatcher（Bee 调用入口）===
+
+_STEP_FUNCS = {
+    "_step_pull_balances": _step_pull_balances,
+    "_step_reconcile": _step_reconcile,
+    "_step_classify": _step_classify,
+    "_step_generate_reports": _step_generate_reports,
+    "_step_collect_evidence": _step_collect_evidence,
+    "_step_request_signoff": _step_request_signoff,
+}
+
+
+def run_step(step_name: str, context: dict, prev_outputs: dict) -> dict:
+    """执行单步。Bee 通过此入口调 Box。
+
+    Args:
+        step_name: 步骤名（"pull_balances" / "reconcile" / ...）
+        context: 任务上下文（period, client_ids, approver, ...）
+        prev_outputs: 之前步骤的输出，dict[step_name -> output]
+
+    Returns:
+        该步的输出 dict
     """
+    step = next((s for s in WORKFLOW if s["name"] == step_name), None)
+    if step is None:
+        raise ValueError(f"Unknown step: {step_name}. Available: {[s['name'] for s in WORKFLOW]}")
 
-    period: str
-    client_ids: list[str] = Field(default_factory=list)
-    approver: str = "manager@example.com"
+    func = _STEP_FUNCS[step["tool"]]
+    return func(context, prev_outputs)
 
-    async def run(self) -> dict:
-        """执行 6 步月结流程。
 
-        Returns:
-            dict 含 status / period / steps (6 步 trace) / result (最终输出)
-        """
-        steps: list[StepResult] = []
-        logger.info("month_close.start", period=self.period)
-
-        # Step 1: 拉余额（应付 + 应收）
-        payables = modules.accounts_payable_query(period=self.period)
-        receivables = modules.accounts_receivable_query(period=self.period)
-        steps.append(
-            StepResult(
-                step="pull_balances",
-                module="accounts_payable_query+accounts_receivable_query",
-                input={"period": self.period, "client_ids": self.client_ids},
-                output={
-                    "payables_count": len(payables),
-                    "receivables_count": len(receivables),
-                    "payables_total": sum(p["amount"] for p in payables),
-                    "receivables_total": sum(r["amount"] for r in receivables),
-                },
-            )
-        )
-
-        # Step 2: 银行对账
-        reconcile = modules.bank_reconcile(period=self.period)
-        steps.append(
-            StepResult(
-                step="reconcile",
-                module="bank_reconcile",
-                input={"period": self.period},
-                output=reconcile,
-            )
-        )
-
-        # Step 3: 费用分类（拿 Step 1 模拟的 15 条凭证做输入）
-        vouchers = [{"id": f"v{i}"} for i in range(15)]
-        classified = modules.expense_classify(vouchers=vouchers)
-        steps.append(
-            StepResult(
-                step="classify",
-                module="expense_classify",
-                input={"voucher_count": len(vouchers)},
-                output={"classified_count": len(classified)},
-            )
-        )
-
-        # Step 4: 生成报表
-        reports = modules.report_generate(period=self.period)
-        steps.append(
-            StepResult(
-                step="generate_reports",
-                module="report_generate",
-                input={"period": self.period},
-                output=reports,
-            )
-        )
-
-        # Step 5: 凭证归集
-        evidence = modules.evidence_collect(period=self.period)
-        steps.append(
-            StepResult(
-                step="collect_evidence",
-                module="evidence_collect",
-                input={"period": self.period},
-                output=evidence,
-            )
-        )
-
-        # Step 6: 发起审批
-        signoff = modules.signoff_request(
-            report_url=reports["pdf_url"],
-            approver=self.approver,
-        )
-        steps.append(
-            StepResult(
-                step="request_signoff",
-                module="signoff_request",
-                input={"report_url": reports["pdf_url"], "approver": self.approver},
-                output=signoff,
-            )
-        )
-
-        logger.info("month_close.done", period=self.period, steps=len(steps))
-        return {
-            "status": "done",
-            "period": self.period,
-            "steps": [s.model_dump() for s in steps],
-            "result": {
-                "report_urls": reports,
-                "evidence_url": evidence["zip_url"],
-                "signoff_id": signoff["signoff_id"],
-                "summary": {
-                    "payables": len(payables),
-                    "receivables": len(receivables),
-                    "reconcile_matched": reconcile["matched"],
-                    "reconcile_unmatched": len(reconcile["unmatched"]),
-                },
-            },
-        }
+def list_steps() -> list[str]:
+    """返回所有 step 名（按 WORKFLOW 顺序）。"""
+    return [s["name"] for s in WORKFLOW]

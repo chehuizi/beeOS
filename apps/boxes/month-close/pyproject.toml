@@ -1,12 +1,16 @@
 [project]
 name = "month-close-box"
 version = "0.1.0"
-description = "MonthCloseBox - 会计月结自动化 Box（MVP 第一个业务 Box）"
+description = "MonthCloseBox - 会计月结自动化 Box（M0 独立运行版）"
 requires-python = ">=3.12"
 dependencies = [
     "beeos-core",
     "pydantic>=2.8.0",
 ]
+
+[project.scripts]
+# CLI: uv run month-close --period 2026-07
+month-close = "month_close.__main__:main"
 
 [build-system]
 requires = ["hatchling"]

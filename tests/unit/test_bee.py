@@ -1,100 +1,132 @@
-"""Bee registry + runtime 测试。"""
+"""Bee 引擎测试（M0：状态机 + 编排 + 注册表）。"""
 
 import pytest
 
-from bee.registry import get_box_class, list_supported
-from bee.runtime import Bee, BeeConfig
+from bee import Bee, BeeConfig, JobStateMachine, JobStatus, list_supported
+from bee.registry import get_manifest, get_workflow
 
 
 class TestRegistry:
-    """bee_type 字符串 → Box 类的映射。"""
+    """Box 注册表：bee_type → Box 模块。"""
 
     def test_month_close_registered(self):
-        cls = get_box_class("month_close")
-        assert cls is not None
-        assert cls.__name__ == "MonthCloseWorkflow"
+        assert "month_close" in list_supported()
 
-    def test_unknown_returns_none(self):
-        assert get_box_class("nonexistent") is None
-        assert get_box_class("") is None
+    def test_unknown_raises(self):
+        with pytest.raises(ValueError, match="Unknown bee_type"):
+            get_manifest("nonexistent")
 
-    def test_list_supported_contains_month_close(self):
-        supported = list_supported()
-        assert "month_close" in supported
-        assert isinstance(supported, list)
+    def test_get_manifest_returns_dict(self):
+        m = get_manifest("month_close")
+        assert m["box_type"] == "month_close"
+        assert m["name"] == "MonthCloseBox"
+        assert "schemas" in m
+        assert "tools" in m
 
-    def test_all_registered_boxes_have_async_run(self):
-        """每个注册的 Box 必须有 async run() 方法。"""
-        for bee_type, cls in [("month_close", get_box_class("month_close"))]:
-            assert hasattr(cls, "run"), f"{bee_type} missing run()"
-            assert callable(cls.run)
+    def test_get_workflow_returns_6_steps(self):
+        wf = get_workflow("month_close")
+        assert len(wf) == 6
+        step_names = [s["name"] for s in wf]
+        assert step_names == [
+            "pull_balances", "reconcile", "classify",
+            "generate_reports", "collect_evidence", "request_signoff",
+        ]
+
+
+class TestStateMachine:
+    """5 状态机转换合法性。"""
+
+    def test_initial_status(self):
+        sm = JobStateMachine()
+        assert sm.status == JobStatus.QUEUED
+
+    def test_queued_to_running(self):
+        sm = JobStateMachine()
+        sm.transition(JobStatus.RUNNING)
+        assert sm.status == JobStatus.RUNNING
+
+    def test_running_to_done(self):
+        sm = JobStateMachine(JobStatus.RUNNING)
+        sm.transition(JobStatus.DONE)
+        assert sm.status == JobStatus.DONE
+
+    def test_running_to_failed(self):
+        sm = JobStateMachine(JobStatus.RUNNING)
+        sm.transition(JobStatus.FAILED)
+        assert sm.status == JobStatus.FAILED
+
+    def test_failed_can_retry(self):
+        sm = JobStateMachine(JobStatus.FAILED)
+        sm.transition(JobStatus.QUEUED)
+        assert sm.status == JobStatus.QUEUED
+
+    def test_done_is_terminal(self):
+        sm = JobStateMachine(JobStatus.DONE)
+        with pytest.raises(ValueError, match="Illegal transition"):
+            sm.transition(JobStatus.RUNNING)
+
+    def test_illegal_queued_to_done(self):
+        """Queued 不能直接跳到 Done。"""
+        sm = JobStateMachine()
+        with pytest.raises(ValueError, match="Illegal transition"):
+            sm.transition(JobStatus.DONE)
 
 
 class TestBeeConfig:
-    def test_default_values(self):
+    def test_defaults(self):
         cfg = BeeConfig()
-        assert cfg.max_token_budget == 200_000
-        assert cfg.max_tool_calls == 50
+        assert cfg.max_steps == 100
         assert cfg.max_execution_seconds == 1800
-        assert cfg.llm_request_timeout_seconds == 60
+        assert cfg.audit_path == "./logs/audit.jsonl"
 
 
 class TestBeeRuntime:
-    """Bee.run() 的核心 dispatch 逻辑。"""
+    """Bee.run() 端到端。"""
 
     @pytest.mark.asyncio
-    async def test_run_month_close_returns_done(self):
-        bee = Bee()
+    async def test_run_month_close_returns_done(self, tmp_path):
+        bee = Bee(BeeConfig(audit_path=str(tmp_path / "audit.jsonl")))
         result = await bee.run(
-            task="month_close",
-            context={"bee_type": "month_close", "period": "2026-07"},
+            box_type="month_close",
+            context={"period": "2026-07"},
         )
-        assert result["status"] == "done"
-        assert result["period"] == "2026-07"
-        assert len(result["steps"]) == 6
+        assert result.status == JobStatus.DONE
+        assert result.period == "2026-07"
+        assert len(result.steps) == 6
+        assert result.error is None
 
     @pytest.mark.asyncio
-    async def test_run_unknown_bee_type_returns_failed(self):
-        bee = Bee()
-        result = await bee.run(task="nonexistent", context={"bee_type": "nonexistent"})
-        assert result["status"] == "failed"
-        assert "Unknown bee_type" in result["error"]
-        assert "Supported" in result["error"]
+    async def test_run_unknown_box_returns_failed(self, tmp_path):
+        bee = Bee(BeeConfig(audit_path=str(tmp_path / "audit.jsonl")))
+        result = await bee.run(box_type="nonexistent", context={})
+        assert result.status == JobStatus.FAILED
+        assert "Unknown box_type" in (result.error or "")
 
     @pytest.mark.asyncio
-    async def test_run_passes_client_ids_and_approver_to_box(self):
-        bee = Bee()
+    async def test_run_passes_approver_to_signoff(self, tmp_path):
+        bee = Bee(BeeConfig(audit_path=str(tmp_path / "audit.jsonl")))
         result = await bee.run(
-            task="month_close",
-            context={
-                "bee_type": "month_close",
-                "period": "2026-08",
-                "client_ids": ["A001", "A002"],
-                "approver": "carol@x.com",
-            },
+            box_type="month_close",
+            context={"period": "2026-08", "approver": "carol@x.com"},
         )
-        assert result["status"] == "done"
-        # 最后一个 step 是 signoff，approver 应透传
-        signoff_step = result["steps"][-1]
+        assert result.status == JobStatus.DONE
+        signoff_step = result.steps[-1]
+        assert signoff_step["step"] == "request_signoff"
         assert signoff_step["output"]["approver"] == "carol@x.com"
 
     @pytest.mark.asyncio
-    async def test_run_with_task_used_as_bee_type_fallback(self):
-        """context 缺 bee_type 时用 task 字符串作 bee_type（M1 兼容）。"""
-        bee = Bee()
-        result = await bee.run(task="month_close", context={"period": "2026-09"})
-        assert result["status"] == "done"
-        assert result["period"] == "2026-09"
+    async def test_run_writes_audit_log(self, tmp_path):
+        audit_path = tmp_path / "audit.jsonl"
+        bee = Bee(BeeConfig(audit_path=str(audit_path)))
+        await bee.run(box_type="month_close", context={"period": "2026-09"})
 
-    @pytest.mark.asyncio
-    async def test_run_catches_box_exception(self):
-        """Box 抛异常时 Bee 捕获并返回 failed。"""
-        bee = Bee()
-        # 模拟 Box 抛异常：传一个不会让 MonthCloseWorkflow 抛异常的 context
-        # （MonthCloseWorkflow 的 period 是必填，缺它会 ValidationError）
-        result = await bee.run(
-            task="month_close",
-            context={"bee_type": "month_close"},  # 缺 period
-        )
-        assert result["status"] == "failed"
-        assert "ValidationError" in result["error"] or "period" in result["error"].lower()
+        assert audit_path.exists()
+        lines = audit_path.read_text().strip().split("\n")
+        # 至少 1 条 job.start + 6 条 step.done + 1 条 job.complete = 8
+        assert len(lines) >= 8
+        # 每行都是合法 JSON + 含 curr_hash
+        import json
+        for line in lines:
+            entry = json.loads(line)
+            assert "curr_hash" in entry
+            assert "prev_hash" in entry

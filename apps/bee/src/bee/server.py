@@ -27,8 +27,8 @@ from bee.audit import LocalAuditLog
 from bee.registry import get_manifest
 
 app = FastAPI(
-    title="beeOS M0 demo",
-    description="beeBox (workload) + bee (runtime) — M0 数字员工运行时",
+    title="Beeline · M0 demo",
+    description="Beeline — 让 AI 数字员工飞直线的运行时 (agentbeeline.com) · M0 数字员工 demo",
     version="0.1.0",
 )
 
@@ -108,7 +108,7 @@ _INDEX_HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>beeOS M0 demo</title>
+  <title>Beeline · M0 demo · agentbeeline.com</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f9fafb; margin: 0; padding: 24px; color: #1f2937; }
     h1 { margin: 0 0 4px 0; }
@@ -211,7 +211,13 @@ _INDEX_HTML = """<!DOCTYPE html>
         <circle cx="22" cy="4.5" r="1" fill="#1f2937"/>
       </g>
     </svg>
-    <span>beeOS M0</span>
+    <span style="display:flex;align-items:baseline;gap:10px;">
+      Beeline
+      <a href="https://agentbeeline.com" target="_blank" rel="noopener"
+         style="font-size:13px;font-weight:normal;color:#2563eb;text-decoration:none;border:1px solid #bfdbfe;padding:2px 8px;border-radius:999px;background:#eff6ff;">
+        agentbeeline.com ↗
+      </a>
+    </span>
   </h1>
   <div class="sub">beeBox (workload) × bee (runtime) · M0 数字员工运行时 · v0.1.0</div>
 

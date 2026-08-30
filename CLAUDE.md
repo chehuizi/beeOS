@@ -2,16 +2,18 @@
 
 Project guidance for Claude Code (claude.ai/code) when working in this repo.
 
+> **品牌**：[Beeline](https://agentbeeline.com) · **域名**：agentbeeline.com · **GitHub repo**：`chehuizi/beeOS`（M3 前不重命名）
+
 ## Project Overview
 
-**beeOS** — 私有化部署的 AI 数字员工平台。`beeOS` 中的 "OS" 指 **bee 用的操作系统**：bee 是 runtime（引擎/进程），beeBox 是 workload（应用/工作空间）。
+**Beeline** — 私有化部署的 AI 数字员工运行时。`Beeline` 是 AI 数字员工飞行的高效直线；"agent takes the beeline" = 不绕路。bee 是 runtime（引擎/进程），beeBox 是 workload（应用/工作空间）。
 
 ### M0 架构（当前阶段）
 
 M0 聚焦 **runtime (bee) + workload (beeBox)** 的最小配对。Queen/Hive 暂不造。
 
 ```
-beeos (M0)
+Beeline (M0)
   ├─ apps/bee/                         # bee — runtime（状态机 + 编排 + 审计）
   │   └─ src/bee/                      #   - orchestrator.py / state.py / audit.py
   └─ apps/boxes/month-close/           # beeBox — workload（schema + adapters + workflow 声明）
@@ -31,9 +33,9 @@ beeos (M0)
 |---|---|---|
 | bee | 进程 / 引擎（Python 解释器） | 主动、可换、可起多个 |
 | beeBox | 程序包（.py 脚本 + 数据） | 被动、被加载、持久 |
-| beeOS | 操作系统（macOS / Linux） | 提供 bee 运行环境 |
+| Beeline | runtime 品牌（macOS / Linux） | 提供 bee 运行环境 |
 
-类比：macOS 上跑 Pages / Keynote；beeOS 上跑 MonthCloseBox / TaxBox / AuditBox。
+类比：macOS 上跑 Pages / Keynote；Beeline 上跑 MonthCloseBox / TaxBox / AuditBox。
 
 V1+ 触发恢复条件见 [`_shelved/README.md`](_shelved/README.md)。
 

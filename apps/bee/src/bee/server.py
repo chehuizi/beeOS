@@ -143,7 +143,39 @@ _INDEX_HTML = """<!DOCTYPE html>
   </style>
 </head>
 <body>
-  <h1>🐝 beeOS M0</h1>
+  <h1 style="display:flex;align-items:center;gap:12px;">
+    <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="bee">
+      <!-- 翅膀（半透明，叠在身后） -->
+      <ellipse cx="11" cy="16" rx="6" ry="5" fill="#fff" opacity="0.7"/>
+      <ellipse cx="25" cy="16" rx="6" ry="5" fill="#fff" opacity="0.7"/>
+      <ellipse cx="11" cy="16" rx="6" ry="5" fill="none" stroke="#cbd5e1" stroke-width="0.6"/>
+      <ellipse cx="25" cy="16" rx="6" ry="5" fill="none" stroke="#cbd5e1" stroke-width="0.6"/>
+      <!-- 身体（圆胖的椭圆） -->
+      <ellipse cx="18" cy="22" rx="9" ry="7.5" fill="#fbbf24"/>
+      <!-- 条纹（圆角矩形） -->
+      <rect x="9.5" y="20" width="17" height="2" rx="1" fill="#374151"/>
+      <rect x="9.5" y="24" width="17" height="2" rx="1" fill="#374151"/>
+      <!-- 头（圆形，更大更萌） -->
+      <circle cx="18" cy="13" r="6" fill="#fbbf24"/>
+      <!-- 腮红（粉色圆点） -->
+      <circle cx="13" cy="14.5" r="1.3" fill="#fb7185" opacity="0.5"/>
+      <circle cx="23" cy="14.5" r="1.3" fill="#fb7185" opacity="0.5"/>
+      <!-- 眼睛（圆点） -->
+      <circle cx="15.5" cy="12.5" r="1.1" fill="#1f2937"/>
+      <circle cx="20.5" cy="12.5" r="1.1" fill="#1f2937"/>
+      <!-- 眼高光（让眼睛更亮） -->
+      <circle cx="16" cy="12" r="0.4" fill="#fff"/>
+      <circle cx="21" cy="12" r="0.4" fill="#fff"/>
+      <!-- 微笑（弧线） -->
+      <path d="M16 15 Q18 16.3 20 15" stroke="#1f2937" stroke-width="0.9" fill="none" stroke-linecap="round"/>
+      <!-- 触角（线条 + 圆点） -->
+      <line x1="15.5" y1="8" x2="14" y2="5" stroke="#1f2937" stroke-width="0.9" stroke-linecap="round"/>
+      <line x1="20.5" y1="8" x2="22" y2="5" stroke="#1f2937" stroke-width="0.9" stroke-linecap="round"/>
+      <circle cx="14" cy="4.5" r="1" fill="#1f2937"/>
+      <circle cx="22" cy="4.5" r="1" fill="#1f2937"/>
+    </svg>
+    <span>beeOS M0</span>
+  </h1>
   <div class="sub">beeBox (workload) × bee (runtime) · M0 数字员工运行时 · v0.1.0</div>
 
   <!-- BeeBox × Bee 主舞台 -->

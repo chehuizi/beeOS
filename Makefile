@@ -1,45 +1,47 @@
-# beeOS Makefile - 便捷命令
-# 见 [技术架构 §3 部署架构]
+# beeOS Makefile - M0 阶段（Bee + BeeBox，无 Queen / 无 Hive）
 #
-# Linux only：macOS 开发者用 brew services 自行起 PG/Redis
-# 无 Docker / 无 Node.js：本地开发 = systemctl 起 PG/Redis + uv run queen + nginx 服务静态 Portal
+# 旧 M1 命令（dev-queen / up-services / db-init 等）已废弃，
+# V1 恢复 Queen 时从 _shelved/queen/ 重新接回。
+#
+# 跑通 M0 只需：
+#   make install      # uv sync
+#   make dev-box      # 单跑 Box（不依赖 Bee）
+#   make dev-bee      # Bee 加载 Box 跑全流程 + 写审计
+#   make test         # 跑全部测试
+#   make smoke        # 一行命令验证端到端
 
-.PHONY: help install dev test lint format type-check up-services down-services \
-        ps logs-queen clean dev-queen dev-portal \
-        db-migrate db-init db-reset db-shell redis-shell \
-        bee box-month-close seed-license deploy-check
+.PHONY: help install dev test lint format type-check \
+        dev-box dev-bee smoke clean \
+        bee-list box-manifest
 
 # === 帮助 ===
 help:  ## 显示所有命令
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
-	    awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+		awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-# === 安装依赖 ===
+# === 安装 ===
 install:  ## 安装所有 Python 依赖 (uv sync)
 	uv sync --all-extras --dev
 
-# === 开发环境（Linux/systemctl） ===
-up-services:  ## 启动本机 PG + Redis（Queen 单独跑 dev-queen）
-	systemctl start postgresql redis
-	@echo "✅ PG + Redis 已就绪"
-	@echo "   PG:    localhost:5432 (beeos/beeos-dev-password)"
-	@echo "   Redis: localhost:6379"
-	@echo "   下一步: make dev-queen"
+# === M0 本地开发 ===
+dev-box:  ## 跑 MonthCloseBox（不依赖 Bee，最小调试）
+	uv run month-close --period 2026-07
 
-down-services:  ## 停止本机 PG + Redis
-	systemctl stop postgresql redis
-	@echo "✅ PG + Redis 已停止"
+dev-bee:  ## 跑 Bee + MonthCloseBox 端到端（写本地审计）
+	uv run bee --box month_close --period 2026-07
 
-ps:  ## 查看 4 个 systemd unit 状态
-	systemctl status postgresql redis beeos-queen nginx --no-pager || true
+bee-list:  ## 列出所有已注册 Box
+	uv run bee --list
 
-# === 本地开发（不走 Docker） ===
-dev-queen:  ## 本地启动 Queen（需要 PG / Redis 已起）
-	uv run queen
+box-manifest:  ## 打印 MonthCloseBox 的 manifest
+	uv run month-close --manifest
 
-dev-portal:  ## 打开 Portal（nginx 直服务静态文件，80 端口）
-	@echo "Portal 是 nginx 服务的静态文件，无 dev 进程。"
-	@echo "开发时直接编辑 apps/portal/*.html，浏览器打开 http://localhost/ 即可。"
+smoke:  ## 一行端到端：装包 + 跑 Box + 跑 Bee + 测
+	@echo "=== 1. Box 独立跑 ===" && uv run month-close --period 2026-07
+	@echo ""
+	@echo "=== 2. Bee 加载 Box 跑 ===" && uv run bee --box month_close --period 2026-07
+	@echo ""
+	@echo "=== 3. pytest ===" && uv run pytest -q
 
 # === 代码质量 ===
 lint:  ## Ruff lint
@@ -51,41 +53,14 @@ format:  ## Ruff auto-format
 type-check:  ## mypy
 	uv run mypy packages apps
 
-test:  ## pytest
+# === 测试 ===
+test:  ## 跑全部测试
 	uv run pytest
 
-test-cov:  ## pytest + coverage
+test-cov:  ## 跑测试 + coverage
 	uv run pytest --cov=packages --cov=apps --cov-report=html
 
-# === 数据库 ===
-db-migrate:  ## 应用数据库迁移（待实现）
-	@echo "TODO: alembic 迁移（V1 接入）"
-
-db-init:  ## 初始化本机 PG：创建 beeos 用户和 beeos 库
-	sudo -u postgres psql -f deploy/scripts/init-db.sql
-	@echo "✅ PG 已就绪：localhost:5432 / beeos / beeos-dev-password"
-	@echo "   下一步: uv run queen (启动时自动 create_all 建 6 张表)"
-
-db-reset:  ## 删 beeos 库并重建（危险！会丢数据）
-	sudo -u postgres psql -c "DROP DATABASE IF EXISTS beeos;" -c "DROP ROLE IF EXISTS beeos;"
-	$(MAKE) db-init
-
-db-shell:  ## PostgreSQL 交互 shell（走本机 PG）
-	PGPASSWORD=beeos-dev-password psql -h localhost -U beeos -d beeos
-
-redis-shell:  ## Redis 交互 shell（走本机 Redis，不走 Docker）
-	redis-cli -h localhost
-
-# === 服务（开发期随 Queen 跑） ===
-bee:  ## Bee（M1 stub：随 Queen 进程启动）
-	@echo "M1: Bee 随 Queen 启动，V1 拆为独立容器（暂无）"
-
-box-month-close:  ## MonthCloseBox（M1 stub：随 Queen 进程启动）
-	@echo "M1: MonthCloseBox 随 Queen 启动，V1 拆为独立容器（暂无）"
-
-# === 部署辅助 ===
-seed-license:  ## 生成测试 License（V1 实现）
-	@echo "V1: License 生成器接入"
-
-deploy-check:  ## 检查服务器是否满足部署要求
-	bash deploy/scripts/check-server.sh
+# === 清理 ===
+clean:  ## 清理缓存和审计日志
+	rm -rf .ruff_cache .pytest_cache .mypy_cache logs/
+	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

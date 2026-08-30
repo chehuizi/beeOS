@@ -4,114 +4,115 @@ Project guidance for Claude Code (claude.ai/code) when working in this repo.
 
 ## Project Overview
 
-**beeOS** — 私有化部署的 AI 数字员工平台。私自照搬 [domain-box](../domain-box) 的部署模型，但内部架构不是单进程 Next.js，而是 **4 个 native systemd unit**：
+**beeOS** — 私有化部署的 AI 数字员工平台。
+
+### M0 架构（当前阶段）
+
+M0 聚焦核心抽象：**BeeBox = 数据结构，Bee = 算法**。Queen/Hive 暂不造。
 
 ```
-beeos
-  ├─ postgres (pgvector) + redis       ── 数据层（系统包）
-  ├─ beeos-queen (FastAPI)             ── 调度层 + ReAct 执行 + Boxes
-  └─ portal (静态 HTML + Alpine.js)    ── 交互层（nginx 服务）
+beeos (M0)
+  ├─ apps/bee/                         # 算法侧（状态机 + 编排 + 审计）
+  │   └─ src/bee/                      #   - orchestrator.py / state.py / audit.py
+  └─ apps/boxes/month-close/           # 数据侧（schema + adapters + workflow 声明）
+      └─ src/month_close/              #   - schema.py / adapters.py / workflow.py
 ```
 
-**部署在阿里云 ECS**（与 domain-box 同台 `101.37.146.194`），用 `scripts/deploy-to-ecs.sh` 一键发版。
+**核心设计原则**：
+
+1. **BeeBox 聚集数据结构** —— 只暴露 schema + 数据工具 + workflow 声明
+2. **Bee 聚集算法** —— 状态机 + 编排 + ReAct 循环（V1+）
+3. **无 Queen / 无 Hive / 无 PG** —— M0 阶段纯内存 + 本地 JSONL 审计
+4. **零基础设施依赖** —— `make dev-m0` 一行命令跑通
+
+V1+ 触发恢复条件见 [`_shelved/README.md`](_shelved/README.md)。
 
 ## Local dev
 
 ```bash
-make install         # uv sync（无 npm）
-make up-services     # 启动本机 PG + Redis（systemctl）
-make dev-queen       # 裸跑 Queen
+make install      # uv sync
+make dev-box      # 单跑 Box（不依赖 Bee）
+make dev-bee      # Bee 加载 Box 跑全流程 + 写本地审计
+make test         # 跑全部测试
+make smoke        # 端到端：装包 + 跑 Box + 跑 Bee + 测试
 ```
 
-**前置**：Linux（systemctl）；macOS 开发者用 `brew services start postgresql@15 redis` 自行起 PG/Redis。
+**前置**：Python 3.12+、uv 工具链。**不再依赖 PG/Redis/systemctl**。
 
-URL（本机）：
+CLI：
 
-- Portal: http://localhost/ (nginx 80 服务静态 HTML)
-- Queen:  http://localhost:8080/health
-- Postgres: `localhost:5432` (beeos/beeos-dev-password)
-- Redis:  `localhost:6379`
+- `uv run month-close --period 2026-07` —— 跑 Box
+- `uv run month-close --manifest` —— 打印 manifest
+- `uv run bee --box month_close --period 2026-07` —— 跑 Bee
+- `uv run bee --list` —— 列出已注册 Box
 
 ## Deploy
 
-```bash
-bash scripts/deploy-to-ecs.sh    # 完整部署
-```
+M0 阶段**不部署**。代码仅本地运行 + 测试。
 
-**4 个 native systemd unit** 在 ECS 上各管一摊（nginx / postgresql / redis / beeos-queen），零 Docker。详见 [`docs/DEPLOY.md`](docs/DEPLOY.md) 生产 runbook。
+V1 恢复 Queen 后恢复 ECS 部署流程（`scripts/deploy-to-ecs.sh`）。
 
-## Architecture decisions（不要轻易改）
+## Architecture decisions
 
-详见 [`docs/architecture/`](docs/architecture/)：
+**M0 核心原则**：
 
-- [技术架构 §5](docs/architecture/tech-architecture.md#5-关键技术选型与理由) — 选型表
-- [技术架构 §3](docs/architecture/tech-architecture.md#3-部署架构) — 部署架构
-- [全景图 §6](docs/architecture/overview.md#6-从全景图到代码) — 模块优先级
+- **BeeBox = 数据，Bee = 算法** —— 不要把决策逻辑写进 Box
+- **Box 暴露三件套**：`MANIFEST` dict + `WORKFLOW` 列表 + `run_step(name, ctx, prev)` 函数
+- **Bee 跑流程但不调 LLM** —— M0 写死按 WORKFLOW 顺序跑；V1+ 加 ReAct 循环
+- **审计本地化** —— `./logs/audit.jsonl` JSONL + SHA-256 哈希链
 
-**铁律**：
-
-1. 私有化优先（数据不出门）
-2. 1 人天可部署（4 native systemd unit + 源码 tarball）
-3. 模型中立 AB（DeepSeek + 通义）
+详见 [`docs/architecture/`](docs/architecture/)（M0 不变更）。
 
 ## Key files
 
 ```
 apps/
-  queen/                           # 调度服务 FastAPI
-    src/queen/api/app.py           # /health + 后续任务 API
-    src/queen/core/state_machine.py # 5 状态机
-  bee/                             # ReAct 引擎（M1 随 Queen 跑）
-    src/bee/runtime.py             # MVP 占位
-  boxes/month-close/
-    box.yaml                       # 7 模块清单
-    src/month_close/workflow.py    # 月结工作流
-  portal/                          # 纯静态 HTML（nginx 直服务，无 Node.js）
-    index.html / jobs.html / jobs/new.html / audit.html
+  bee/                                  # 算法侧
+    src/bee/
+      __main__.py                       # CLI 入口
+      orchestrator.py                   # Bee 主类（状态机驱动）
+      state.py                          # 5 状态机（内存版）
+      audit.py                          # 本地 JSONL + 哈希链
+      registry.py                       # Box 模块发现
 
-packages/beeos-core/               # 跨服务共享
-  config.py                        # pydantic-settings (BEEOOS_ 前缀)
-  db.py                            # SQLAlchemy 2.0 async
-  guardian.py                      # AES-256-GCM + JWT + 注入检测
-  models.py                        # 6 张 ORM 表
+  boxes/month-close/                    # 数据侧
+    src/month_close/
+      __main__.py                       # Box CLI 入口（独立调试用）
+      __init__.py                       # 导出 MANIFEST / WORKFLOW / run_step
+      schema.py                         # Pydantic 数据契约
+      adapters.py                       # 7 个数据工具（hardcoded）
+      workflow.py                       # 6 步声明 + 单步实现
 
-deploy/
-  systemd/beeos-queen.service     # Queen 唯一 systemd unit
-  nginx/beeos.conf                 # 80 → 8080 + 静态 Portal
-  scripts/check-server.sh          # 部署前自检
+packages/beeos-core/                    # 跨服务共享（M0 精简版）
+  config.py                             # pydantic-settings (BEEOOS_ 前缀)
+  logging.py                            # structlog 包装
 
-pyproject.toml                     # uv workspace 4 包
+_shelved/                               # V1+ 恢复用（M0 不用）
+  README.md                             # 恢复触发条件
+  queen/                                # FastAPI 调度服务
+  beeos_core/{db,models,guardian}.py    # PG / ORM / 安全
+  tests/test_queen_api.py               # Queen API 集成测试
+
+tests/
+  conftest.py                           # M0 极简（无 DB fixture）
+  unit/test_bee.py                      # Bee 引擎 + 状态机
+  unit/test_month_close.py              # Box schema + adapters + workflow
+
+pyproject.toml                          # uv workspace 3 包
 ```
 
 ## Conventions
 
-- **不要改 `BEEOOS_` 环境变量前缀** — 部署脚本依赖它
-- **不要把 `.env` 加入 git** — 已写进 `.gitignore`
-- **命名一致性**：Bee / BeeBox / Queen / Hive / Guardian / Granary / Bridge，见 [术语表](docs/architecture/glossary.md)
-- **DB schema 变更**：M1 阶段直接改 `models.py` + 手动 `Base.metadata.create_all()`，V1 接入 Alembic
-- **新增 Box** 必须包含 `box.yaml` 清单 + `src/<box>/workflow.py` 骨架
-- **新增 API** 必须先在 [技术架构 §4](docs/architecture/tech-architecture.md#4-核心模块设计) 里写接口契约
-- **无 Docker / 无 Node.js**：本地开发 = `systemctl start postgresql redis` + `uv run queen`；生产部署 = 源码 tarball + `uv pip install` + `systemctl restart beeos-queen`
+- **BeeBox 不写决策** —— 决策归属 Bee（状态转换 / 重试 / 异常处理 / ReAct 提示工程）
+- **Bee 不写数据** —— Bee 调 `box.run_step()` 拿数据，不直接调 adapter
+- **schema 严格 Pydantic** —— V1+ 真实 adapter 替换 hardcoded 时签名不变
+- **workflow 是数据不是代码** —— `WORKFLOW` 列表是声明，Bee 读它来跑
+- **新增 Box** = 复制 month-close 模板，导出 `MANIFEST`/`WORKFLOW`/`run_step` 即可
 
-## 部署相关
+## V1+ 触发恢复（不在本阶段实现）
 
-- ECS：`101.37.146.194`（与 domain-box 同台）
-- 部署目录：`/opt/beeos`
-- 4 个 systemd unit：`nginx.service` / `postgresql.service` / `redis.service` / `beeos-queen.service`
-- 反向代理：nginx 已存在，新加 `conf.d/beeos.conf`（80 端口反代 + 静态 Portal）
-- 域名：**demo 阶段 IP-only**（V1+ 接入域名 + HTTPS）
-
-## 共享记忆
-
-复用 domain-box 的几条记忆：
-
-- `project_prod_better_sqlite3_node20` — 我们用 PostgreSQL，不用管这条
-- `feedback_zodtype_variance_gotcha` — Portal 端用 zod，Python 端用 pydantic，保持严格
-- `ecs_deploy_tarball_pattern` — tarball 部署源模式
-
-beeOS 独有：
-
-- `beeos_env_prefix_must_be_BEEOOS_` — 部署脚本靠前前缀识别
-- `beeos_native_systemd_no_docker` — 全部用系统包 + systemd，零 Docker、零 docker-compose
-- `beeos_secrets_live_on_host_only` — `.env` 永远不进 tarball
-- `beeos_portal_is_static_html` — Portal 是 nginx 服务的静态 HTML + Alpine.js，零 Node.js
+- 第一个真客户要 demo Dashboard → 恢复 `_shelved/queen/`
+- 跨进程 Job 追踪 / 并发需求 → 恢复 `_shelved/beeos_core/db.py` + `models.py`
+- 多 Bee 并行 + 持久化 → 同时恢复 queen + hive
+- 商业化合规审计 → 恢复 `_shelved/beeos_core/guardian.py`（先修固定 nonce bug）
+- 跑老 Queen API 测试 → 恢复 `_shelved/tests/test_queen_api.py`

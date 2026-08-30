@@ -96,6 +96,10 @@ data/local/
 backups/
 secrets/
 
+# === M0 审计日志（本地 JSONL） ===
+logs/audit.jsonl
+logs/
+
 # === 测试产物 ===
 tests/e2e/screenshots/
 tests/e2e/videos/

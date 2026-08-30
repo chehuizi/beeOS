@@ -137,8 +137,20 @@ _INDEX_HTML = """<!DOCTYPE html>
     .card { background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px; }
     .card.bebox { border-color: #c4b5fd; }
     .card.bee { border-color: #86efac; }
-    .arrow { display: flex; align-items: center; justify-content: center; color: #6b7280; font-size: 24px; }
-    .arrow::before { content: "⇄"; }
+    .arrow { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
+    .arrow svg { display: block; }
+    .flow-dash {
+      stroke-dasharray: 5 4;
+      animation: flow-anim 1.2s linear infinite;
+    }
+    .arrow.busy .flow-dash { animation-duration: 0.4s; }
+    @keyframes flow-anim {
+      to { stroke-dashoffset: -18; }
+    }
+    .flow-label {
+      font-size: 10px; color: #6b7280; font-family: monospace;
+      letter-spacing: 0.3px; text-align: center; white-space: nowrap;
+    }
     .label { font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; }
     .title { font-size: 18px; font-weight: bold; margin: 4px 0 2px 0; }
     .title.bebox { color: #6d28d9; }
@@ -300,7 +312,20 @@ _INDEX_HTML = """<!DOCTYPE html>
         <span class="tag">signoff_request</span>
       </div>
     </div>
-    <div class="arrow"></div>
+    <div class="arrow" id="flow-arrow">
+      <svg width="64" height="14" viewBox="0 0 64 14">
+        <line x1="2" y1="7" x2="56" y2="7" stroke="url(#g)" stroke-width="2"
+              stroke-linecap="round" class="flow-dash"/>
+        <polygon points="52,3 60,7 52,11" fill="#16a34a"/>
+        <defs>
+          <linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="#a78bfa"/>
+            <stop offset="100%" stop-color="#86efac"/>
+          </linearGradient>
+        </defs>
+      </svg>
+      <div class="flow-label">workflow → execution</div>
+    </div>
     <div class="card bee">
       <div class="label">👷 引擎 · runtime</div>
       <div class="title bee">1 bee</div>
@@ -382,8 +407,10 @@ document.getElementById('run-form').addEventListener('submit', async (e) => {
   btn.textContent = '⏳ 执行中…';
   const statusEl = document.getElementById('bee-status');
   const dotEl = document.querySelector('.status-dot');
+  const arrowEl = document.getElementById('flow-arrow');
   statusEl.textContent = '执行中…';
   if (dotEl) dotEl.classList.add('busy');
+  if (arrowEl) arrowEl.classList.add('busy');
 
   const body = {
     box_type: document.getElementById('box_type').value,
@@ -413,6 +440,7 @@ document.getElementById('run-form').addEventListener('submit', async (e) => {
     btn.textContent = '▶ 发起工单';
     statusEl.textContent = '就绪 · 待命';
     if (dotEl) dotEl.classList.remove('busy');
+    if (arrowEl) arrowEl.classList.remove('busy');
   }
 });
 

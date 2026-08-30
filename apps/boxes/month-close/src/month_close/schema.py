@@ -1,6 +1,6 @@
 """MonthCloseBox 数据 schema（M0：纯 Pydantic 类型，无算法）。
 
-按 BeeBox 原则：BeeBox = 数据结构，Box 只声明类型，不做决策。
+按 beeBox = workload 原则：Box 只声明类型，不做决策。
 V1+ 真实 adapter 替换 hardcoded 数据时，schema 保持不变。
 """
 

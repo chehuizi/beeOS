@@ -1,12 +1,12 @@
-"""Bee Orchestrator - 算法侧核心。
+"""Bee Orchestrator - runtime 引擎核心（M0 状态机版）。
 
-设计原则（Bee = 算法）：
-- 加载 Box 的 manifest + workflow 声明
+设计原则（bee = runtime）：
+- 加载 beeBox 的 manifest + workflow 声明
 - 跑状态机：Queued → Running → {Done | Failed}
 - 每步调 box.run_step()，收集 trace，写本地审计
 - 任何异常 → Failed + 审计
 
-V1+ 在 Box.run_step() 之上包 LLM ReAct 循环（M0 写死按 WORKFLOW 顺序跑）。
+V1+ 在 box.run_step() 之上包 LLM ReAct 循环（M0 写死按 WORKFLOW 顺序跑）。
 """
 
 from __future__ import annotations

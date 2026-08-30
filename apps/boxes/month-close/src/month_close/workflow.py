@@ -1,8 +1,8 @@
 """MonthCloseBox 工作流 - 6 步声明（数据，非算法）。
 
-设计原则（BeeBox = 数据结构）：
+设计原则（beeBox = workload）：
 - WORKFLOW 列表只是 step 顺序声明
-- 实际执行由 bee/orchestrator.py 调度
+- 实际执行由 bee runtime 调度
 - 每个 step 的函数在这里实现（调 adapters），但 step-to-step 的串联由 Bee 决定
 
 M0 写死 6 步；V1+ 可以从 manifest.yaml 加载或 LLM 决定。

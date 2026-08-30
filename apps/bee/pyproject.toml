@@ -1,7 +1,7 @@
 [project]
 name = "bee"
 version = "0.1.0"
-description = "Bee 执行引擎 - 算法侧（状态机 + 编排 + 审计 + M0 demo server）"
+description = "Bee runtime 引擎 - 状态机 + 编排 + 审计 + M0 demo server"
 requires-python = ">=3.12"
 dependencies = [
     "beeos-core",

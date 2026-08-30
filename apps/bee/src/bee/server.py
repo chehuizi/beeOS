@@ -28,7 +28,7 @@ from bee.registry import get_manifest
 
 app = FastAPI(
     title="beeOS M0 demo",
-    description="BeeBox(data) + Bee(algorithm) — 无 Queen / 无 Hive",
+    description="beeBox (workload) + bee (runtime) — 无 Queen / 无 Hive",
     version="0.1.0",
 )
 
@@ -140,21 +140,21 @@ _INDEX_HTML = """<!DOCTYPE html>
 </head>
 <body>
   <h1>🐝 beeOS M0</h1>
-  <div class="sub">BeeBox(数据) × Bee(算法) · 无 Queen / 无 Hive · v0.1.0</div>
+  <div class="sub">beeBox (workload) × bee (runtime) · 无 Queen / 无 Hive · v0.1.0</div>
 
   <!-- BeeBox × Bee 主舞台 -->
   <div class="row">
     <div class="card bebox">
-      <div class="label">🏢 数据结构 · 数据结构</div>
+      <div class="label">🏢 工作空间 · workload</div>
       <div class="title bebox" id="box-name">MonthCloseBox</div>
       <div class="stat" id="box-stats">加载中…</div>
     </div>
     <div class="arrow"></div>
     <div class="card bee">
-      <div class="label">👷 算法 · 执行</div>
-      <div class="title bee">1 Bee 在岗</div>
+      <div class="label">👷 引擎 · runtime</div>
+      <div class="title bee">1 bee 在岗</div>
       <div class="stat">
-        <span>算法：ReAct(M0: 静态)</span>
+        <span>驱动：ReAct(M0: 静态)</span>
         <span>状态：<span id="bee-status">就绪</span></span>
       </div>
     </div>

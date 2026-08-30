@@ -1,7 +1,7 @@
-"""Bee 执行引擎（M0 独立运行版）。
+"""Bee — runtime 引擎（M0 独立运行版）。
 
-按 Bee = 算法原则：
-- orchestrator.py 跑 Box 的 workflow（算法侧）
+按 bee = runtime 原则：
+- orchestrator.py 加载 beeBox 跑 workflow（runtime 核心）
 - state.py 5 状态机
 - audit.py 本地 JSONL 审计
 - registry.py 加载 Box 模块

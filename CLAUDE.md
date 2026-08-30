@@ -4,26 +4,36 @@ Project guidance for Claude Code (claude.ai/code) when working in this repo.
 
 ## Project Overview
 
-**beeOS** — 私有化部署的 AI 数字员工平台。
+**beeOS** — 私有化部署的 AI 数字员工平台。`beeOS` 中的 "OS" 指 **bee 用的操作系统**：bee 是 runtime（引擎/进程），beeBox 是 workload（应用/工作空间）。
 
 ### M0 架构（当前阶段）
 
-M0 聚焦核心抽象：**BeeBox = 数据结构，Bee = 算法**。Queen/Hive 暂不造。
+M0 聚焦 **runtime (bee) + workload (beeBox)** 的最小配对。Queen/Hive 暂不造。
 
 ```
 beeos (M0)
-  ├─ apps/bee/                         # 算法侧（状态机 + 编排 + 审计）
+  ├─ apps/bee/                         # bee — runtime（状态机 + 编排 + 审计）
   │   └─ src/bee/                      #   - orchestrator.py / state.py / audit.py
-  └─ apps/boxes/month-close/           # 数据侧（schema + adapters + workflow 声明）
+  └─ apps/boxes/month-close/           # beeBox — workload（schema + adapters + workflow 声明）
       └─ src/month_close/              #   - schema.py / adapters.py / workflow.py
 ```
 
 **核心设计原则**：
 
-1. **BeeBox 聚集数据结构** —— 只暴露 schema + 数据工具 + workflow 声明
-2. **Bee 聚集算法** —— 状态机 + 编排 + ReAct 循环（V1+）
+1. **beeBox = workload** —— 静态工作空间：schema（数据契约）+ adapters（数据工具）+ workflow（步骤声明）。beeBox 不做决策，不跑算法。
+2. **bee = runtime** —— 活的进程：状态机 + 编排 + ReAct 循环（V1+）。bee 加载 box，按 workflow 调工具，写审计。
 3. **无 Queen / 无 Hive / 无 PG** —— M0 阶段纯内存 + 本地 JSONL 审计
 4. **零基础设施依赖** —— `make dev-m0` 一行命令跑通
+
+**关键类比**：
+
+| | 类比 | 性质 |
+|---|---|---|
+| bee | 进程 / 引擎（Python 解释器） | 主动、可换、可起多个 |
+| beeBox | 程序包（.py 脚本 + 数据） | 被动、被加载、持久 |
+| beeOS | 操作系统（macOS / Linux） | 提供 bee 运行环境 |
+
+类比：macOS 上跑 Pages / Keynote；beeOS 上跑 MonthCloseBox / TaxBox / AuditBox。
 
 V1+ 触发恢复条件见 [`_shelved/README.md`](_shelved/README.md)。
 
@@ -56,9 +66,9 @@ V1 恢复 Queen 后恢复 ECS 部署流程（`scripts/deploy-to-ecs.sh`）。
 
 **M0 核心原则**：
 
-- **BeeBox = 数据，Bee = 算法** —— 不要把决策逻辑写进 Box
+- **beeBox = workload, bee = runtime** —— beeBox 不做决策，不跑算法
 - **Box 暴露三件套**：`MANIFEST` dict + `WORKFLOW` 列表 + `run_step(name, ctx, prev)` 函数
-- **Bee 跑流程但不调 LLM** —— M0 写死按 WORKFLOW 顺序跑；V1+ 加 ReAct 循环
+- **bee 跑流程但不调 LLM** —— M0 写死按 WORKFLOW 顺序跑；V1+ 加 ReAct 循环
 - **审计本地化** —— `./logs/audit.jsonl` JSONL + SHA-256 哈希链
 
 详见 [`docs/architecture/`](docs/architecture/)（M0 不变更）。
@@ -67,7 +77,7 @@ V1 恢复 Queen 后恢复 ECS 部署流程（`scripts/deploy-to-ecs.sh`）。
 
 ```
 apps/
-  bee/                                  # 算法侧
+  bee/                                  # runtime 引擎
     src/bee/
       __main__.py                       # CLI 入口
       orchestrator.py                   # Bee 主类（状态机驱动）
@@ -75,7 +85,7 @@ apps/
       audit.py                          # 本地 JSONL + 哈希链
       registry.py                       # Box 模块发现
 
-  boxes/month-close/                    # 数据侧
+  boxes/month-close/                    # workload
     src/month_close/
       __main__.py                       # Box CLI 入口（独立调试用）
       __init__.py                       # 导出 MANIFEST / WORKFLOW / run_step
@@ -103,10 +113,10 @@ pyproject.toml                          # uv workspace 3 包
 
 ## Conventions
 
-- **BeeBox 不写决策** —— 决策归属 Bee（状态转换 / 重试 / 异常处理 / ReAct 提示工程）
-- **Bee 不写数据** —— Bee 调 `box.run_step()` 拿数据，不直接调 adapter
+- **beeBox 不写决策** —— 决策归属 bee runtime（状态转换 / 重试 / 异常处理 / ReAct 提示工程）
+- **bee 不写数据** —— bee 调 `box.run_step()` 拿数据，不直接调 adapter
 - **schema 严格 Pydantic** —— V1+ 真实 adapter 替换 hardcoded 时签名不变
-- **workflow 是数据不是代码** —— `WORKFLOW` 列表是声明，Bee 读它来跑
+- **workflow 是声明不是代码** —— `WORKFLOW` 列表是声明，bee 读它来跑
 - **新增 Box** = 复制 month-close 模板，导出 `MANIFEST`/`WORKFLOW`/`run_step` 即可
 
 ## V1+ 触发恢复（不在本阶段实现）

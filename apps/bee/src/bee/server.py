@@ -137,15 +137,21 @@ _INDEX_HTML = """<!DOCTYPE html>
     .card { background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px; }
     .card.bebox { border-color: #c4b5fd; }
     .card.bee { border-color: #86efac; }
-    .arrow { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
+    .arrow { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
     .arrow svg { display: block; }
-    .flow-dash {
-      stroke-dasharray: 5 4;
-      animation: flow-anim 1.2s linear infinite;
+    .flow-line {
+      stroke-dasharray: 4 3;
+      animation: flow-anim 1s linear infinite;
     }
-    .arrow.busy .flow-dash { animation-duration: 0.4s; }
+    .arrow.busy .flow-line { animation-duration: 0.35s; }
     @keyframes flow-anim {
-      to { stroke-dashoffset: -18; }
+      to { stroke-dashoffset: -14; }
+    }
+    .flow-arrow-head { transform-origin: 109px 7px; transform-box: fill-box; }
+    .arrow.busy .flow-arrow-head { animation: pulse 0.7s ease-in-out infinite; }
+    @keyframes pulse {
+      0%, 100% { transform: translateX(0); }
+      50%      { transform: translateX(3px); }
     }
     .flow-label {
       font-size: 10px; color: #6b7280; font-family: monospace;
@@ -314,15 +320,19 @@ _INDEX_HTML = """<!DOCTYPE html>
     </div>
     <div class="arrow" id="flow-arrow">
       <svg width="120" height="14" viewBox="0 0 120 14">
-        <line x1="2" y1="7" x2="110" y2="7" stroke="url(#g)" stroke-width="2.2"
-              stroke-linecap="round" class="flow-dash"/>
-        <polygon points="106,3 116,7 106,11" fill="#16a34a"/>
         <defs>
-          <linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+          <linearGradient id="flowGrad" x1="0" y1="0" x2="1" y2="0">
             <stop offset="0%" stop-color="#a78bfa"/>
-            <stop offset="100%" stop-color="#86efac"/>
+            <stop offset="100%" stop-color="#22c55e"/>
           </linearGradient>
         </defs>
+        <!-- 主线（粗 + 渐变 + 流动虚线） -->
+        <line x1="2" y1="7" x2="104" y2="7"
+              stroke="url(#flowGrad)" stroke-width="3.5"
+              stroke-linecap="round" class="flow-line"/>
+        <!-- 箭头头（叠加在主线右端） -->
+        <polygon points="100,2 116,7 100,12"
+                 fill="#16a34a" class="flow-arrow-head"/>
       </svg>
       <div class="flow-label">workflow → execution</div>
     </div>

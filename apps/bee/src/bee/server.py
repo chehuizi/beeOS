@@ -137,21 +137,28 @@ _INDEX_HTML = """<!DOCTYPE html>
     .card { background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px; }
     .card.bebox { border-color: #c4b5fd; }
     .card.bee { border-color: #86efac; }
-    .arrow { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
-    .arrow svg { display: block; }
-    .flow-line {
-      stroke-dasharray: 4 3;
-      animation: flow-anim 1s linear infinite;
+    .arrow { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+    .flow-bar {
+      position: relative; width: 124px; height: 5px;
+      background: #f3f4f6; border-radius: 3px; overflow: hidden;
     }
-    .arrow.busy .flow-line { animation-duration: 0.35s; }
-    @keyframes flow-anim {
-      to { stroke-dashoffset: -14; }
+    .flow-fill {
+      position: absolute; left: 0; top: 0; bottom: 0;
+      width: 100%;
+      background: linear-gradient(90deg, #a78bfa 0%, #c4b5fd 35%, #86efac 70%, #22c55e 100%);
+      border-radius: 3px;
     }
-    .flow-arrow-head { transform-origin: 109px 7px; transform-box: fill-box; }
-    .arrow.busy .flow-arrow-head { animation: pulse 0.7s ease-in-out infinite; }
-    @keyframes pulse {
-      0%, 100% { transform: translateX(0); }
-      50%      { transform: translateX(3px); }
+    .arrow.busy .flow-fill { animation: flow-pulse 0.8s ease-in-out infinite; }
+    @keyframes flow-pulse {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.55; }
+    }
+    .flow-head {
+      position: absolute; right: -10px; top: 50%; transform: translateY(-50%);
+      width: 0; height: 0;
+      border-top: 8px solid transparent;
+      border-bottom: 8px solid transparent;
+      border-left: 12px solid #16a34a;
     }
     .flow-label {
       font-size: 10px; color: #6b7280; font-family: monospace;
@@ -319,21 +326,10 @@ _INDEX_HTML = """<!DOCTYPE html>
       </div>
     </div>
     <div class="arrow" id="flow-arrow">
-      <svg width="120" height="14" viewBox="0 0 120 14">
-        <defs>
-          <linearGradient id="flowGrad" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stop-color="#a78bfa"/>
-            <stop offset="100%" stop-color="#22c55e"/>
-          </linearGradient>
-        </defs>
-        <!-- 主线（粗 + 渐变 + 流动虚线） -->
-        <line x1="2" y1="7" x2="104" y2="7"
-              stroke="url(#flowGrad)" stroke-width="3.5"
-              stroke-linecap="round" class="flow-line"/>
-        <!-- 箭头头（叠加在主线右端） -->
-        <polygon points="100,2 116,7 100,12"
-                 fill="#16a34a" class="flow-arrow-head"/>
-      </svg>
+      <div class="flow-bar">
+        <div class="flow-fill"></div>
+        <div class="flow-head"></div>
+      </div>
       <div class="flow-label">workflow → execution</div>
     </div>
     <div class="card bee">

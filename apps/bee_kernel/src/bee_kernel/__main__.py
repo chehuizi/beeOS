@@ -39,7 +39,8 @@ def cmd_submit(args) -> int:
     except KeyError as e:
         print(f"[ERROR] {e}", file=sys.stderr)
         return 2
-    print(json.dumps(result.model_dump(), ensure_ascii=False, indent=2))
+    # mode='json' 让 datetime 序列化为 ISO 字符串
+    print(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2))
     return 0 if result.status == "Done" else 1
 
 

@@ -85,7 +85,7 @@ tar -czf "$STAGE/beeos-m0-$HEAD_SHORT.tgz" \
   --exclude='logs' \
   --exclude='docs' \
   --exclude='apps/portal' \
-  apps packages deploy pyproject.toml uv.lock
+  apps packages deploy boms workspaces.yaml pyproject.toml uv.lock
 
 test -s "$STAGE/beeos-m0-$HEAD_SHORT.tgz" || { echo "tarball empty"; exit 1; }
 
@@ -106,7 +106,7 @@ run ssh "$REMOTE" "
   # 4.2 修复 owner（如果 deploy 用户存在）
   chown -R deploy:deploy $REMOTE_DIR/apps $REMOTE_DIR/packages 2>/dev/null || true
 
-  # 4.3 同步 Python venv（增量）—— 不装 Queen
+  # 4.3 同步 Python venv（增量）—— M0 重构后只装 bee_kernel
   $(if $SKIP_PIP; then
     echo "  echo '--- skipping venv sync (--skip-pip) ---'"
   else
@@ -114,8 +114,7 @@ run ssh "$REMOTE" "
       export PATH=\$HOME/.local/bin:\$PATH
       uv pip install --python ./venv/bin/python \\
         -e packages/beeos-core \\
-        -e apps/bee \\
-        -e apps/boxes/month-close \\
+        -e apps/bee_kernel \\
         --index-url https://mirrors.aliyun.com/pypi/simple/ 2>&1 | tail -5
     '"
   fi)
@@ -155,6 +154,6 @@ echo ""
 echo "==> M0 deploy complete"
 echo "    deployed commit: $HEAD_SHORT"
 echo "    M1 进程未动（Queen/PG/Redis/nginx 继续在跑）"
-echo "    验证 Bee:  ssh $REMOTE 'cd $REMOTE_DIR && ./venv/bin/bee --box month_close --period 2026-07'"
+echo "    验证 Kernel: ssh $REMOTE 'cd $REMOTE_DIR && ./venv/bin/bee-kernel info && ./venv/bin/bee-kernel submit --workspace WH-001 --objective 会计月结 --period 2026-07'"
 echo "    切换 M0:  手动 systemctl stop beeos-queen && systemctl disable beeos-queen"
 echo "    回滚 M1:  git checkout <M1-sha> 后跑 bash scripts/deploy-to-ecs.sh"

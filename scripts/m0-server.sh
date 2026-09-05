@@ -10,8 +10,8 @@ set -euo pipefail
 REMOTE="${REMOTE:-root@101.37.146.194}"
 REMOTE_DIR="${REMOTE_DIR:-/opt/beeos}"
 PORT="${PORT:-8085}"
-PIDFILE="/tmp/beeos-m0-server.pid"
-LOGFILE="/var/log/beeos-m0.log"
+PIDFILE="/tmp/beeos-kernel.pid"
+LOGFILE="/var/log/beeos-kernel.log"
 
 run_ssh() {
   ssh "$REMOTE" "$@"
@@ -26,7 +26,7 @@ cmd_start() {
       exit 0
     fi
     cd $REMOTE_DIR
-    nohup ./venv/bin/uvicorn bee.server:app \\
+    nohup ./venv/bin/uvicorn bee_kernel.api:app \\
       --host 0.0.0.0 --port $PORT \\
       > $LOGFILE 2>&1 &
     echo \$! > $PIDFILE

@@ -1,0 +1,12 @@
+# beeOS Workspace 注册表
+# 字段说明：
+#   workspace_id: 唯一标识
+#   domain: 业务/研发/产品/质量（WMS 双层架构第一层）
+#   name: 显示名
+#   bee_box_ref: 关联的 BeeBox runtime，格式 "module.path:ClassName"
+
+workspaces:
+  - workspace_id: WH-001
+    domain: 业务
+    name: 财务车间
+    bee_box_ref: bee_kernel.demo_box:WMSDemoBox

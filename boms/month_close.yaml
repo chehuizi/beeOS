@@ -1,0 +1,31 @@
+bom_id: BOM-MONTH-CLOSE-v1
+workspace_id: WH-001
+name: 会计月结
+version: "v1"
+created_by: system-default
+steps:
+  - seq: 1
+    tool: query_balances
+    params:
+      period: "$period"
+  - seq: 2
+    tool: reconcile_bank
+    depends_on: [1]
+  - seq: 3
+    tool: classify_expenses
+    depends_on: [1, 2]
+  - seq: 4
+    tool: generate_reports
+    params:
+      period: "$period"
+    depends_on: [1, 2, 3]
+  - seq: 5
+    tool: collect_evidence
+    params:
+      period: "$period"
+    depends_on: [4]
+  - seq: 6
+    tool: request_signoff
+    params:
+      approver: "$approver"
+    depends_on: [4, 5]

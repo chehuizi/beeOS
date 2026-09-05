@@ -22,20 +22,18 @@ dev-dependencies = [
     "pre-commit>=3.8.0",
 ]
 
-# uv workspace：M0 只保留 Bee + BeeBox
-# Queen 已 shelve 到 _shelved/queen/，V1 恢复
+# uv workspace：M0 重构后只剩 bee-kernel
+# apps/bee/ 和 apps/boxes/ 已删；boms/ 和 workspaces.yaml 在仓库根目录
 [tool.uv.workspace]
 members = [
     "packages/beeos-core",
-    "apps/bee",
-    "apps/boxes/month-close",
+    "apps/bee_kernel",
 ]
 
 # workspace 内的包需要显式声明来源
 [tool.uv.sources]
 beeos-core = { workspace = true }
-bee = { workspace = true }
-month-close-box = { workspace = true }
+bee-kernel = { workspace = true }
 
 # 统一工具配置
 [tool.ruff]

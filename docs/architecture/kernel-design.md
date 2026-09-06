@@ -112,13 +112,13 @@ graph LR
 - **面向**：管理员 / 业务分析师 / 工艺工程师
 - **核心问题**：这个 beeBox 需要什么 beeline / operation / 数字物料 / bee？
 - **输入**（基于什么改）：
-  - 现有 beeOS 资产：已注册的 beeBox / beeline / bee / BOM
+  - 现有 beeOS 资产：已注册的 beeBox / beeline / bee / 物料清单
   - 业务需求：新增场景、调整工艺、注册新 bee
 - **输出**（产出什么）：
   - 设计好的 beeBox（含 5 库区 / 库位 / 数字物料 schema）
   - 编辑好的 beeline（含 operation 序列）
   - 注册的 bee（智能体）
-  - 更新的 BOM
+  - 更新的物料清单
 - **视觉**：IDE / 表单 / 拖拽
 - **精益对位**：Standard Work Design（标准作业设计）—— 标准化、模板化、复用
 
@@ -130,14 +130,14 @@ graph LR
 | beeline 编辑器 | 拖拽 / 编排 operation 序列 |
 | operation 库 | 各类 operation 模板（data_io / transform / agent / qc / signoff）|
 | bee 注册表 | 管理 bee 智能体（能力 / 输入输出 / 适用 operation）|
-| BOM 管理中心 | 跨 beeBox 共享 beeline + 物料清单 |
+| 物料清单中心 | 跨 beeBox 共享数字物料 schema |
 
 ### 3.3 读写关系
 
 | 控制台 | 输入（看 / 基于什么） | 操作（做 / 产出什么） |
 |---|---|---|
 | **kanban** | beeBox 实时状态（task / operation / 库区 / 异常 / 节拍） | 触发 task / 认领异常 / 签核 |
-| **workshop** | 现有 beeOS 资产（beeBox / beeline / bee / BOM） | 设计 / 编辑 / 注册 / 上传 |
+| **workshop** | 现有 beeOS 资产（beeBox / beeline / bee / 物料清单） | 设计 / 编辑 / 注册 / 上传 |
 
 > **workshop 写 → beeOS 资产；beeOS 状态 → kanban 读。设计在 workshop，运行在 kanban。**
 
@@ -251,7 +251,7 @@ flowchart TD
 |---|---|---|---|
 | ① | Task Receiver | 接收任务 | beeBox 入口 |
 | ② | beeBox Router | 路由到目标 beeBox | Kernel 顶层 |
-| ③ | Beeline Cache | 缓存 beeline 蓝图（BOM 中心）| beeBox 内部 |
+| ③ | Beeline Cache | 缓存 beeline 蓝图 | beeBox 内部 |
 | ④ | Bee Planner | beeline miss 时规划 | beeBox 内部 |
 | ⑤ | Beeline Executor | 在 beeBox 内部执行 beeline operation | beeBox 内部 |
 
@@ -289,6 +289,6 @@ flowchart TD
 - kanban 移动端 / 大屏
 - workshop 多租户协作
 - 跨 beeBox 协作（1 个 task 能不能跨车间）
-- BOM 中心部署形态（远端 / 内嵌 / 本地）
+- 物料清单中心部署形态（远端 / 内嵌 / 本地）
 - operation 编排是否支持并行 / 条件分支
 - 数字物料粒度（字段 / 记录 / 文件）

@@ -110,7 +110,7 @@ graph LR
 ### 3.2 beeOS **workshop**（管理侧 / 设计视角）
 
 - **面向**：管理员 / 业务分析师 / 工艺工程师
-- **核心问题**：这个 beeBox 需要什么 beeline / operation / 物料 / 智能体？
+- **核心问题**：这个 beeBox 需要什么 beeline / operation / 数字物料 / bee？
 - **输入**（基于什么改）：
   - 现有 beeOS 资产：已注册的 beeBox / beeline / bee / BOM
   - 业务需求：新增场景、调整工艺、注册新 bee

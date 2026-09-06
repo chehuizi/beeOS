@@ -112,13 +112,12 @@ graph LR
 - **面向**：管理员 / 业务分析师 / 工艺工程师
 - **核心问题**：这个 beeBox 需要什么 beeline / operation / 物料 / 智能体？
 - **输入**（基于什么改）：
-  - 现有 beeOS 资产：已注册的 beeBox / beeline / bee / SOP / BOM
-  - 业务需求：新增场景、调整工艺、注册新 bee、上传 SOP
+  - 现有 beeOS 资产：已注册的 beeBox / beeline / bee / BOM
+  - 业务需求：新增场景、调整工艺、注册新 bee
 - **输出**（产出什么）：
   - 设计好的 beeBox（含 5 库区 / 库位 / 数字物料 schema）
   - 编辑好的 beeline（含 operation 序列）
   - 注册的 bee（智能体）
-  - 上传/版本化的 SOP 文档
   - 更新的 BOM
 - **视觉**：IDE / 表单 / 拖拽
 - **精益对位**：Standard Work Design（标准作业设计）—— 标准化、模板化、复用
@@ -131,7 +130,6 @@ graph LR
 | beeline 编辑器 | 拖拽 / 编排 operation 序列 |
 | operation 库 | 各类 operation 模板（data_io / transform / agent / qc / signoff）|
 | bee 注册表 | 管理 bee 智能体（能力 / 输入输出 / 适用 operation）|
-| SOP 文档库 | 上传/编辑/版本化 SOP 文档，关联到 operation |
 | BOM 管理中心 | 跨 beeBox 共享 beeline + 物料清单 |
 
 ### 3.3 读写关系
@@ -139,7 +137,7 @@ graph LR
 | 控制台 | 输入（看 / 基于什么） | 操作（做 / 产出什么） |
 |---|---|---|
 | **kanban** | beeBox 实时状态（task / operation / 库区 / 异常 / 节拍） | 触发 task / 认领异常 / 签核 |
-| **workshop** | 现有 beeOS 资产（beeBox / beeline / bee / SOP / BOM） | 设计 / 编辑 / 注册 / 上传 |
+| **workshop** | 现有 beeOS 资产（beeBox / beeline / bee / BOM） | 设计 / 编辑 / 注册 / 上传 |
 
 > **workshop 写 → beeOS 资产；beeOS 状态 → kanban 读。设计在 workshop，运行在 kanban。**
 
@@ -211,7 +209,6 @@ graph TB
 | type | ✅ | 加工类型 |
 | input_location | ✅ | 从哪里读数字物料 |
 | output_location | ✅ | 把数字物料落到哪里 |
-| sop_ref | 🟡 | 配套 SOP 文档引用（如 `sop/finance/reconcile-v3.md`）|
 | bee_ref | 🟡 agent 才有 | 被调的 bee（如 `beex.finance.bank_reconciler`）|
 | task | 🟡 | 工人 / 工具干的具体活（如 `reconcile_bank`）|
 | qc_rules | 🟡 qc 才有 | 校验规则 |
@@ -270,7 +267,7 @@ flowchart TD
 | 单件流（One-piece Flow）| operation 一次执行一份物料 |
 | 改善（Kaizen） | 度量（§4 待澄清 H）+ 审计 |
 | 节拍时间（Takt Time）| operation.elapsed_ms + 库位在制聚合 |
-| 标准作业（SOP）| operation.sop_ref 引用 |
+| 标准化作业 | operation 序列本身就是标准作业（输入/输出/类型已声明清楚）|
 
 ## 8. 已确定 vs 待澄清
 
@@ -280,7 +277,7 @@ flowchart TD
 - beeline 在 beeBox 内执行
 - operation 驱动数字物料在 5 库区间流转
 - 5 库区固定 5 类（原料 / 线边 / 成品 / 质检 / 退货）
-- 节点命名为 `operation`，附 `sop_ref`
+- 节点命名为 `operation`（operation 即标准作业，不另设 SOP 层）
 - operation 必含：seq / type / input_location / output_location
 - 4 种基础 operation 类型：data_io / transform / agent / qc / signoff
 - agent operation 才调 bee

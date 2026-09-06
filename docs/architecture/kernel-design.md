@@ -175,7 +175,7 @@ graph TB
     qc["质检区 · QC<br/>验证 / 审核 / 签核"]
     return["退货区 · Return<br/>异常 / 返工"]
     bins["库位 · Bin<br/>每个库区下细分"]
-    materials["数字物料 · Digital Material<br/>数据 + 类型"]
+    materials["数字物料 · Digital Material<br/>数据 / 工具 / 文档等"]
 
     beeBox --> zones
     zones --> raw

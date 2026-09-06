@@ -61,7 +61,7 @@ graph TB
 
 | 模块 | 类比 | 定位 | 关系 |
 |---|---|---|---|
-| **beeBox** | 车间 | 容器 / 父 | beeline 在它内部执行；bee 被它调度 |
+| **beeBox** | 车间 | 容器 | beeline 在它内部执行；bee 被它调度 |
 | **beeline** | 流水线 / 工艺路线 | beeBox 内的工作流 | 由 operation 序列组成；agent operation 调 bee |
 | **bee** | 工人 | 智能体执行者 | 被 agent operation 调用 |
 

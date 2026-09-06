@@ -76,25 +76,29 @@ graph TB
 ### 3.1 beeOS **kanban**（用户侧 / 现场视角）
 
 - **面向**：终端用户 / 操作员 / 业务人员
-- **核心问题**：现在 task 在哪跑？跑得怎样？哪里堵？哪里出问题？
+- **核心问题**：现在 task 在 beeBox 里怎么跑？跑到哪了？哪里堵？哪里出问题？
 - **输入**（看什么）：
-  - beeBox 内部状态：task 状态、operation 进度、库区在制、异常告警、节拍时间
+  - task 列表：每个 task 的状态（Queued / Running / Done / Failed / AwaitingHuman）
+  - task 当前 operation：跑到第几步
+  - task 当前位置：在 5 库区/库位的哪个（task 内数字物料的位置）
+  - 异常 task：哪些 task 异常、待人工处理
+  - 节拍时间：每个 task / operation 的耗时
 - **操作**（能做什么）：
   - 触发新 task
-  - 认领异常（退货区）
-  - 签核（质检区 / 成品区）
-- **视觉**：Kanban 看板 —— 物料在 5 库区/库位间流转的可视化视图
+  - 认领异常 task（退货区）
+  - 签核 task（质检区 / 成品区）
+- **视觉**：Kanban 看板 —— task 在 beeBox 5 库区间流转的可视化视图
 - **精益对位**：Kanban（看板管理）—— 可视化、拉动、暴露问题
 
 **看板视图示意**：
 
 ```mermaid
 graph LR
-    raw["原料区<br/>入库位 A<br/>5 在制"]
-    line["线边区<br/>加工 B/C<br/>3 在制"]
-    qc["质检区<br/>待验 D<br/>1 待签"]
-    finished["成品区<br/>完成 E<br/>12 交付"]
-    return["退货区<br/>异常 F<br/>2 待处理"]
+    raw["原料区<br/>入库位 A<br/>5 task 待开始"]
+    line["线边区<br/>加工 B/C<br/>3 task 加工中"]
+    qc["质检区<br/>待验 D<br/>1 task 待签"]
+    finished["成品区<br/>完成 E<br/>12 task 已交付"]
+    return["退货区<br/>异常 F<br/>2 task 待处理"]
 
     raw --> line --> qc --> finished
     qc -.拒.-> return
@@ -136,7 +140,7 @@ graph LR
 
 | 控制台 | 输入（看 / 基于什么） | 操作（做 / 产出什么） |
 |---|---|---|
-| **kanban** | beeBox 实时状态（task / operation / 库区 / 异常 / 节拍） | 触发 task / 认领异常 / 签核 |
+| **kanban** | task 实时状态（task / 当前 operation / 所在库区 / 异常 / 节拍） | 触发 task / 认领异常 / 签核 |
 | **workshop** | 现有 beeOS 资产（beeBox / beeline / bee / 物料清单） | 设计 / 编辑 / 注册 / 上传 |
 
 > **workshop 写 → beeOS 资产；beeOS 状态 → kanban 读。设计在 workshop，运行在 kanban。**

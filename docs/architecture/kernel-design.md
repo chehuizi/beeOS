@@ -6,11 +6,11 @@
 
 ## 0. 一句话
 
-beeOS 四大要素 **beeBox / beeline / bee / operation**，两个控制台 **kanban / workshop**。
+beeOS 核心要素 **beeBox / beeline / bee / operation**，两个控制台 **kanban / workshop**。
 beeline 在 beeBox 内跑 operation 序列，agent operation 调 bee；
 每个 operation 驱动数字物料在 5 库区间流转。
 
-## 1. 四大要素 + 两个控制台
+## 1. 关系总览
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -37,7 +37,7 @@ beeline 在 beeBox 内跑 operation 序列，agent operation 调 bee；
 └──────────────────────────────────────────────────────┘
 ```
 
-## 2. 四大要素
+## 2. 核心要素
 
 | 要素 | 类比 | 定位 | 关系 |
 |---|---|---|---|
@@ -206,7 +206,7 @@ beeBox（车间，归属 1 个业务领域）
 ## 8. 已确定 vs 待澄清
 
 ### ✅ 已确定
-- 四大要素：beeBox / beeline / bee / operation
+- 核心要素：beeBox / beeline / bee / operation
 - 两个控制台：kanban / workshop
 - beeline 在 beeBox 内执行
 - operation 驱动数字物料在 5 库区间流转

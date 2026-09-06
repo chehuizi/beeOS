@@ -196,18 +196,18 @@ graph TB
     class return bad
 ```
 
-### 待澄清（beeBox 还"装"什么）
+### beeBox 还"装"什么（已定结论）
 
-| # | 候选 | 问题 |
-|---|---|---|
-| A | 适配器（Adapter） | 外部世界（DB / API / 文件）连接 |
-| B | 资源 / 凭证 | 连接串 / 凭证 / 限流 |
-| C | 业务规则（Rule） | beeBox 内置硬约束 |
-| D | **bee 工人池** | bee 是 beeBox 内部常驻？还是按需从外部拉？ |
-| E | 异常回流 | 退货区物料回流路径 |
-| F | Bin 流转规则 | 物料能否跨库区流转 / 流转约束 |
-| G | 看板 / 状态 | 精益"看板"在 beeBox 的体现 |
-| H | 度量（Metrics） | 平均耗时 / 在制 / 良率 |
+| # | 候选 | 状态 | 结论 |
+|---|---|---|---|
+| A | 适配器（Adapter） | ✅ **已定** | 适配器 = 物料的一种（工具类），beeBox 通过 Bin 装适配器 |
+| B | 资源 / 凭证 | ✅ **已定** | 放在 BOM 里（随物料走）—— 每个 BOM 声明它需要的凭证 / 连接串 / 限流 |
+| C | 业务规则（Rule） | ✅ **已定** | 规则在 beeline / operation 里（operation.qc_rules / 约束），beeBox 不单独管 |
+| D | **bee 工人池** | ✅ **已定** | bee 跟随 beeline，按需加载（operation.bee_ref 拉取）|
+| E | 异常回流 | ✅ **已定** | M0：退货区物料 = AwaitingHuman 状态，等人工在 kanban 上认领处理 |
+| F | Bin 流转规则 | ✅ **已定** | 物料只能按 operation 规定的路径流转（input_location → output_location）|
+| G | 看板 / 状态 | ✅ **已定** | 看板 = beeBox 物理层（5 库区/Bin/物料状态）+ kanban 控制台层 |
+| H | 度量（Metrics） | ✅ **已定** | metrics 从 Bin 物料数 + operation.elapsed 派生，不需要单独服务 |
 
 ## 5. beeline 与 operation
 
@@ -231,7 +231,8 @@ graph TB
 | type | ✅ | 加工类型 |
 | input_location | ✅ | 从哪里读物料 |
 | output_location | ✅ | 把物料落到哪里 |
-| bee_ref | 🟡 agent 才有 | 被调的 bee（如 `beex.finance.bank_reconciler`）|
+| bee_ref | 🟡 agent 才有 | 被调的 bee（如 `beex.finance.bank_reconciler`）—— 按需从 bee 注册表加载 |
+| resources_ref | 🟡 | 指向 BOM 里声明的资源（连接串 / 凭证 / 限流），随物料走 |
 | task | 🟡 | 工人 / 工具干的具体活（如 `reconcile_bank`）|
 | qc_rules | 🟡 qc 才有 | 校验规则 |
 | exception_handler | 🟡 | 异常处理（退货区 / 重试 / 人工）|
@@ -302,10 +303,18 @@ flowchart TD
 - operation 必含：seq / type / input_location / output_location
 - 4 种基础 operation 类型：data_io / transform / agent / qc / signoff
 - agent operation 才调 bee
+- **物料 = BOM 实例 = 库位上放的被动资源（数据 / 工具 / 文档等）；bee 不是物料**
+- **§4 A-H 8 项全部定论**（详见 §4 表格）
 
 ### ❓ 待继续打磨（v0.2+）
-- §4 beeBox 还"装"什么（A~H 8 个候选）
-- **D 项 bee 工人归属**（beeBox 内部常驻 vs 按需拉）
+- 跨 beeBox 协作（1 个 task 能不能跨车间）
+- BOM 中心部署形态（远端 / 内嵌 / 本地）
+- BOM 中心 resources_ref 解析机制（凭证加密 / 注入）
+- bee 注册表的查找 / 加载 / 释放机制
+- 数字物料粒度（字段 / 记录 / 文件）
+- kanban 移动端 / 大屏
+- workshop 多租户协作
+- operation 编排是否支持并行 / 条件分支
 - bee 干的具体活叫 `task`？
 - kanban 移动端 / 大屏
 - workshop 多租户协作

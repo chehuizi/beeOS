@@ -8,7 +8,7 @@
 
 beeOS 三大模块 **beeBox（容器）/ beeline（流水线）/ bee（工人）**，两个控制台 **kanban（用户）/ workshop（管理）**。
 **beeline 在 beeBox 内跑**，由 **operation（工序）** 序列组成（operation 是 beeline 内部组件），**agent operation 调 bee**；
-每个 operation 驱动数字物料在 **beeBox 的 5 库区**间流转。
+每个 operation 驱动物料在 **beeBox 的 5 库区**间流转。
 
 ## 1. 关系总览
 
@@ -22,7 +22,7 @@ graph TB
     beeBox["beeBox · 车间"]
     zones["5 库区（原料 / 线边 / 质检 / 成品 / 退货）"]
     bins["Bin"]
-    materials["数字物料"]
+    materials["物料"]
     beeline["beeline · 工艺路线"]
     operations["operation 序列<br/>（工序）"]
     opBasic["data_io / transform / qc / signoff"]
@@ -69,7 +69,7 @@ graph TB
 
 | 组件 | 类比 | 定位 | 关系 |
 |---|---|---|---|
-| **operation** | 工序 | beeline 的一步 | 驱动数字物料在 Bin 间流转 |
+| **operation** | 工序 | beeline 的一步 | 驱动物料在 Bin 间流转 |
 
 ## 3. 两个控制台
 
@@ -80,7 +80,7 @@ graph TB
 - **输入**（看什么）：
   - task 列表：每个 task 的状态（Queued / Running / Done / Failed / AwaitingHuman）
   - task 当前 operation：跑到第几步
-  - task 当前位置：在 5 库区/Bin 的哪个（task 内数字物料的位置）
+  - task 当前位置：在 5 库区/Bin 的哪个（task 内物料的位置）
   - 异常 task：哪些 task 异常、待人工处理
   - 耗时：每个 task / operation 的实际执行时间
 - **操作**（能做什么）：
@@ -132,12 +132,12 @@ flowchart LR
 ### 3.2 beeOS **workshop**（管理侧 / 设计视角）
 
 - **面向**：管理员 / 业务分析师 / 工艺工程师
-- **核心问题**：这个 beeBox 需要什么 beeline / operation / 数字物料 / bee？
+- **核心问题**：这个 beeBox 需要什么 beeline / operation / 物料 / bee？
 - **输入**（基于什么改）：
   - 现有 beeOS 资产：已注册的 beeBox / beeline / bee / BOM
   - 业务需求：新增场景、调整工艺、注册新 bee
 - **输出**（产出什么）：
-  - 设计好的 beeBox（含 5 库区 / Bin / 数字物料 schema）
+  - 设计好的 beeBox（含 5 库区 / Bin / BOM）
   - 编辑好的 beeline（含 operation 序列）
   - 注册的 bee（智能体）
   - 更新的 BOM
@@ -148,11 +148,11 @@ flowchart LR
 
 | 模块 | 作用 |
 |---|---|
-| beeBox 设计器 | 定义业务领域 / 5 库区 / Bin / 数字物料 schema |
+| beeBox 设计器 | 定义业务领域 / 5 库区 / Bin / BOM |
 | beeline 编辑器 | 拖拽 / 编排 operation 序列 |
 | operation 库 | 各类 operation 模板（data_io / transform / agent / qc / signoff）|
 | bee 注册表 | 管理 bee 智能体（能力 / 输入输出 / 适用 operation）|
-| BOM 中心 | 跨 beeBox 共享数字物料 schema |
+| BOM 中心 | 跨 beeBox 共享 BOM |
 
 ### 3.3 读写关系
 
@@ -175,7 +175,7 @@ graph TB
     qc["质检区 · QC<br/>验证 / 审核 / 签核"]
     return["退货区 · Return<br/>异常 / 返工"]
     bins["库位 · Bin<br/>每个库区下细分"]
-    materials["数字物料 · Digital Material<br/>数据 / 工具 / 文档等"]
+    materials["物料 · Material（BOM 实例）<br/>数据 / 工具 / 文档等"]
 
     beeBox --> zones
     zones --> raw
@@ -229,8 +229,8 @@ graph TB
 |---|---|---|
 | seq | ✅ | operation 序号 |
 | type | ✅ | 加工类型 |
-| input_location | ✅ | 从哪里读数字物料 |
-| output_location | ✅ | 把数字物料落到哪里 |
+| input_location | ✅ | 从哪里读物料 |
+| output_location | ✅ | 把物料落到哪里 |
 | bee_ref | 🟡 agent 才有 | 被调的 bee（如 `beex.finance.bank_reconciler`）|
 | task | 🟡 | 工人 / 工具干的具体活（如 `reconcile_bank`）|
 | qc_rules | 🟡 qc 才有 | 校验规则 |
@@ -296,7 +296,7 @@ flowchart TD
 - 核心要素：beeBox / beeline / bee（三大模块）+ operation（beeline 内部组件）
 - 两个控制台：kanban / workshop
 - beeline 在 beeBox 内执行
-- operation 驱动数字物料在 5 库区间流转
+- operation 驱动物料在 5 库区间流转
 - 5 库区固定 5 类（原料 / 线边 / 质检 / 成品 / 退货）
 - 节点命名为 `operation`（operation 即标准作业，不另设 SOP 层）
 - operation 必含：seq / type / input_location / output_location
@@ -312,4 +312,4 @@ flowchart TD
 - 跨 beeBox 协作（1 个 task 能不能跨车间）
 - BOM 中心部署形态（远端 / 内嵌 / 本地）
 - operation 编排是否支持并行 / 条件分支
-- 数字物料粒度（字段 / 记录 / 文件）
+- 物料粒度（字段 / 记录 / 文件）

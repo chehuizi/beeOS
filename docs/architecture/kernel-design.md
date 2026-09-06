@@ -20,7 +20,7 @@ graph TB
     workshop["workshop<br/>（管理）<br/>设计视图"]
 
     beeBox["beeBox · 车间"]
-    zones["5 库区（原料 / 线边 / 成品 / 质检 / 退货）"]
+    zones["5 库区（原料 / 线边 / 质检 / 成品 / 退货）"]
     locations["库位"]
     materials["数字物料"]
     beeline["beeline · 工艺路线"]
@@ -276,7 +276,7 @@ flowchart TD
 - 两个控制台：kanban / workshop
 - beeline 在 beeBox 内执行
 - operation 驱动数字物料在 5 库区间流转
-- 5 库区固定 5 类（原料 / 线边 / 成品 / 质检 / 退货）
+- 5 库区固定 5 类（原料 / 线边 / 质检 / 成品 / 退货）
 - 节点命名为 `operation`（operation 即标准作业，不另设 SOP 层）
 - operation 必含：seq / type / input_location / output_location
 - 4 种基础 operation 类型：data_io / transform / agent / qc / signoff

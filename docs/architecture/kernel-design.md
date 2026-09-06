@@ -20,7 +20,7 @@ graph TB
     workshop["workshop<br/>（管理）<br/>设计视图"]
 
     beeBox["beeBox · 车间"]
-    zones["5 库区<br/>原料 / 线边 / 成品 / 质检 / 退货"]
+    zones["5 库区（原料 / 线边 / 成品 / 质检 / 退货）"]
     locations["库位"]
     materials["数字物料"]
     beeline["beeline · 工艺路线"]

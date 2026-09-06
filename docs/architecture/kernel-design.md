@@ -93,22 +93,40 @@ graph TB
 **看板视图示意**：
 
 ```mermaid
-graph LR
-    raw["原料区<br/>入库位 A<br/>5 task 待开始"]
-    line["线边区<br/>加工 B/C<br/>3 task 加工中"]
-    qc["质检区<br/>待验 D<br/>1 task 待签"]
-    finished["成品区<br/>完成 E<br/>12 task 已交付"]
-    return["退货区<br/>异常 F<br/>2 task 待处理"]
+flowchart LR
+    subgraph R["原料区 · 入库位 A"]
+        R1["task#001<br/>op1 拉科目余额<br/>⏱ 2m"]
+        R2["task#002<br/>op1 拉科目余额<br/>⏱ 1m"]
+    end
+    subgraph L["线边区 · 加工 B/C"]
+        L1["task#003<br/>op2 agent 银行对账<br/>⏱ 5m"]
+        L2["task#004<br/>op2 agent 银行对账<br/>⏱ 4m"]
+    end
+    subgraph Q["质检区 · 待验 D"]
+        Q1["task#005<br/>op4 signoff 经理签核<br/>⏳ AwaitingHuman"]
+    end
+    subgraph F["成品区 · 完成 E"]
+        F1["task#006 ✓<br/>elapsed 8m"]
+        F2["task#007 ✓<br/>elapsed 7m"]
+    end
+    subgraph X["退货区 · 异常 F"]
+        X1["task#008 ✗<br/>对账不平 拒收"]
+    end
 
-    raw --> line --> qc --> finished
-    qc -.拒.-> return
+    R --> L --> Q --> F
+    Q -.拒.-> X
 
-    classDef zone fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
-    classDef ok fill:#dcfce7,stroke:#16a34a,color:#14532d
-    classDef bad fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
-    class raw,line,qc zone
-    class finished ok
-    class return bad
+    classDef raw fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+    classDef line fill:#e0e7ff,stroke:#4f46e5,color:#312e81
+    classDef qc fill:#fef3c7,stroke:#f59e0b,color:#78350f
+    classDef fin fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef ret fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+
+    class R1,R2 raw
+    class L1,L2 line
+    class Q1 qc
+    class F1,F2 fin
+    class X1 ret
 ```
 
 ### 3.2 beeOS **workshop**（管理侧 / 设计视角）

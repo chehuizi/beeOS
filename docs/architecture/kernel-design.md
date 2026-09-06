@@ -77,8 +77,13 @@ graph TB
 
 - **面向**：终端用户 / 操作员 / 业务人员
 - **核心问题**：现在 task 在哪跑？跑得怎样？哪里堵？哪里出问题？
+- **输入**（看什么）：
+  - beeBox 内部状态：task 状态、operation 进度、库区在制、异常告警、节拍时间
+- **操作**（能做什么）：
+  - 触发新 task
+  - 认领异常（退货区）
+  - 签核（质检区 / 成品区）
 - **视觉**：Kanban 看板 —— 物料在 5 库区/库位间流转的可视化视图
-- **主要内容**：task 状态、operation 进度、库区在制、异常告警、节拍时间
 - **精益对位**：Kanban（看板管理）—— 可视化、拉动、暴露问题
 
 **看板视图示意**：
@@ -106,8 +111,16 @@ graph LR
 
 - **面向**：管理员 / 业务分析师 / 工艺工程师
 - **核心问题**：这个 beeBox 需要什么 beeline / operation / 物料 / 智能体？
+- **输入**（基于什么改）：
+  - 现有 beeOS 资产：已注册的 beeBox / beeline / bee / SOP / BOM
+  - 业务需求：新增场景、调整工艺、注册新 bee、上传 SOP
+- **输出**（产出什么）：
+  - 设计好的 beeBox（含 5 库区 / 库位 / 数字物料 schema）
+  - 编辑好的 beeline（含 operation 序列）
+  - 注册的 bee（智能体）
+  - 上传/版本化的 SOP 文档
+  - 更新的 BOM
 - **视觉**：IDE / 表单 / 拖拽
-- **主要内容**：设计 beeBox / 编辑 beeline / 注册 bee / 维护 SOP / 管理 BOM
 - **精益对位**：Standard Work Design（标准作业设计）—— 标准化、模板化、复用
 
 **workshop 主要模块**：
@@ -123,12 +136,12 @@ graph LR
 
 ### 3.3 读写关系
 
-| 控制台 | 方向 | 操作 |
+| 控制台 | 输入（看 / 基于什么） | 操作（做 / 产出什么） |
 |---|---|---|
-| kanban | 只读 + 触发 | 看 task、触发 task、签核、认领异常 |
-| workshop | 读写 | 设计 beeBox、定义 beeline、注册 bee、编辑 SOP |
+| **kanban** | beeBox 实时状态（task / operation / 库区 / 异常 / 节拍） | 触发 task / 认领异常 / 签核 |
+| **workshop** | 现有 beeOS 资产（beeBox / beeline / bee / SOP / BOM） | 设计 / 编辑 / 注册 / 上传 |
 
-> **设计在 workshop，运行在 kanban；workshop 写，kanban 读。**
+> **workshop 写 → beeOS 资产；beeOS 状态 → kanban 读。设计在 workshop，运行在 kanban。**
 
 ## 4. beeBox 内部结构
 

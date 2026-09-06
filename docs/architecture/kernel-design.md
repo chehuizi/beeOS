@@ -82,7 +82,7 @@ graph TB
   - task 当前 operation：跑到第几步
   - task 当前位置：在 5 库区/库位的哪个（task 内数字物料的位置）
   - 异常 task：哪些 task 异常、待人工处理
-  - 节拍时间：每个 task / operation 的耗时
+  - 耗时：每个 task / operation 的实际执行时间
 - **操作**（能做什么）：
   - 触发新 task
   - 认领异常 task（退货区）
@@ -158,7 +158,7 @@ flowchart LR
 
 | 控制台 | 输入（看 / 基于什么） | 操作（做 / 产出什么） |
 |---|---|---|
-| **kanban** | task 实时状态（task / 当前 operation / 所在库区 / 异常 / 节拍） | 触发 task / 认领异常 / 签核 |
+| **kanban** | task 实时状态（task / 当前 operation / 所在库区 / 异常 / 耗时） | 触发 task / 认领异常 / 签核 |
 | **workshop** | 现有 beeOS 资产（beeBox / beeline / bee / BOM） | 设计 / 编辑 / 注册 / 上传 |
 
 > **workshop 写 → beeOS 资产；beeOS 状态 → kanban 读。设计在 workshop，运行在 kanban。**
@@ -207,7 +207,7 @@ graph TB
 | E | 异常回流 | 退货区物料回流路径 |
 | F | 库位流转规则 | 物料能否跨库区流转 / 流转约束 |
 | G | 看板 / 状态 | 精益"看板"在 beeBox 的体现 |
-| H | 度量（Metrics） | 节拍 / 在制 / 良率 |
+| H | 度量（Metrics） | 平均耗时 / 在制 / 良率 |
 
 ## 5. beeline 与 operation
 
@@ -288,7 +288,6 @@ flowchart TD
 | 拉动（Pull） | Task Receiver 接收触发 |
 | 单件流（One-piece Flow）| operation 一次执行一份物料 |
 | 改善（Kaizen） | 度量（§4 待澄清 H）+ 审计 |
-| 节拍时间（Takt Time）| operation.elapsed_ms + 库位在制聚合 |
 | 标准化作业 | operation 序列本身就是标准作业（输入/输出/类型已声明清楚）|
 
 ## 8. 已确定 vs 待澄清

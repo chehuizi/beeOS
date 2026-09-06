@@ -21,7 +21,7 @@ graph TB
 
     beeBox["beeBox · 车间"]
     zones["5 库区（原料 / 线边 / 质检 / 成品 / 退货）"]
-    locations["库位"]
+    bins["Bin"]
     materials["数字物料"]
     beeline["beeline · 工艺路线"]
     operations["operation 序列<br/>（工序）"]
@@ -37,8 +37,8 @@ graph TB
     beeBox --> zones
     beeBox --> beeline
     beeBox --> bee
-    zones --> locations
-    locations --> materials
+    zones --> bins
+    bins --> materials
     beeline --> operations
     operations --> opBasic
     operations --> opAgent
@@ -50,7 +50,7 @@ graph TB
     classDef worker fill:#fce7f3,stroke:#db2777,color:#831843
 
     class kanban,workshop console
-    class beeBox,zones,locations,materials box
+    class beeBox,zones,bins,materials box
     class beeline,operations,opBasic,opAgent flow
     class bee worker
 ```
@@ -69,7 +69,7 @@ graph TB
 
 | 组件 | 类比 | 定位 | 关系 |
 |---|---|---|---|
-| **operation** | 工序 | beeline 的一步 | 驱动数字物料在库位间流转 |
+| **operation** | 工序 | beeline 的一步 | 驱动数字物料在 Bin 间流转 |
 
 ## 3. 两个控制台
 
@@ -80,7 +80,7 @@ graph TB
 - **输入**（看什么）：
   - task 列表：每个 task 的状态（Queued / Running / Done / Failed / AwaitingHuman）
   - task 当前 operation：跑到第几步
-  - task 当前位置：在 5 库区/库位的哪个（task 内数字物料的位置）
+  - task 当前位置：在 5 库区/Bin 的哪个（task 内数字物料的位置）
   - 异常 task：哪些 task 异常、待人工处理
   - 耗时：每个 task / operation 的实际执行时间
 - **操作**（能做什么）：
@@ -94,22 +94,22 @@ graph TB
 
 ```mermaid
 flowchart LR
-    subgraph R["原料区 · 入库位 A"]
+    subgraph R["原料区 · Bin A"]
         R1["task#001<br/>op1 拉科目余额<br/>⏱ 2m"]
         R2["task#002<br/>op1 拉科目余额<br/>⏱ 1m"]
     end
-    subgraph L["线边区 · 加工 B/C"]
+    subgraph L["线边区 · Bin B/C"]
         L1["task#003<br/>op2 agent 银行对账<br/>⏱ 5m"]
         L2["task#004<br/>op2 agent 银行对账<br/>⏱ 4m"]
     end
-    subgraph Q["质检区 · 待验 D"]
+    subgraph Q["质检区 · Bin D"]
         Q1["task#005<br/>op4 signoff 经理签核<br/>⏳ AwaitingHuman"]
     end
-    subgraph F["成品区 · 完成 E"]
+    subgraph F["成品区 · Bin E"]
         F1["task#006 ✓<br/>elapsed 8m"]
         F2["task#007 ✓<br/>elapsed 7m"]
     end
-    subgraph X["退货区 · 异常 F"]
+    subgraph X["退货区 · Bin F"]
         X1["task#008 ✗<br/>对账不平 拒收"]
     end
 
@@ -137,7 +137,7 @@ flowchart LR
   - 现有 beeOS 资产：已注册的 beeBox / beeline / bee / BOM
   - 业务需求：新增场景、调整工艺、注册新 bee
 - **输出**（产出什么）：
-  - 设计好的 beeBox（含 5 库区 / 库位 / 数字物料 schema）
+  - 设计好的 beeBox（含 5 库区 / Bin / 数字物料 schema）
   - 编辑好的 beeline（含 operation 序列）
   - 注册的 bee（智能体）
   - 更新的 BOM
@@ -148,7 +148,7 @@ flowchart LR
 
 | 模块 | 作用 |
 |---|---|
-| beeBox 设计器 | 定义业务领域 / 5 库区 / 库位 / 数字物料 schema |
+| beeBox 设计器 | 定义业务领域 / 5 库区 / Bin / 数字物料 schema |
 | beeline 编辑器 | 拖拽 / 编排 operation 序列 |
 | operation 库 | 各类 operation 模板（data_io / transform / agent / qc / signoff）|
 | bee 注册表 | 管理 bee 智能体（能力 / 输入输出 / 适用 operation）|
@@ -174,7 +174,7 @@ graph TB
     finished["成品区 · Finished<br/>最终产出"]
     qc["质检区 · QC<br/>验证 / 审核 / 签核"]
     return["退货区 · Return<br/>异常 / 返工"]
-    locations["库位 · Location<br/>每个库区下细分"]
+    bins["库位 · Bin<br/>每个库区下细分"]
     materials["数字物料 · Digital Material<br/>数据 + 类型"]
 
     beeBox --> zones
@@ -183,14 +183,14 @@ graph TB
     zones --> finished
     zones --> qc
     zones --> return
-    zones --> locations
-    locations --> materials
+    zones --> bins
+    bins --> materials
 
     classDef box fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
     classDef ok fill:#dcfce7,stroke:#16a34a,color:#14532d
     classDef bad fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
     classDef neutral fill:#f3f4f6,stroke:#6b7280,color:#1f2937
-    class beeBox,zones,locations,materials box
+    class beeBox,zones,bins,materials box
     class raw,line neutral
     class finished,qc ok
     class return bad
@@ -205,7 +205,7 @@ graph TB
 | C | 业务规则（Rule） | beeBox 内置硬约束 |
 | D | **bee 工人池** | bee 是 beeBox 内部常驻？还是按需从外部拉？ |
 | E | 异常回流 | 退货区物料回流路径 |
-| F | 库位流转规则 | 物料能否跨库区流转 / 流转约束 |
+| F | Bin 流转规则 | 物料能否跨库区流转 / 流转约束 |
 | G | 看板 / 状态 | 精益"看板"在 beeBox 的体现 |
 | H | 度量（Metrics） | 平均耗时 / 在制 / 良率 |
 
@@ -241,12 +241,12 @@ graph TB
 ```mermaid
 flowchart TD
     start([beeline 启动])
-    op1["operation 1 · data_io<br/>读：原料区/库位 A<br/>写：线边区/库位 B"]
-    op2["operation 2 · agent<br/>读：线边区/库位 B<br/>写：线边区/库位 C<br/>→ 调 bee"]
-    op3["operation 3 · qc<br/>读：线边区/库位 C<br/>写：质检区/库位 D"]
-    op4{"operation 4 · signoff<br/>读：质检区/库位 D"}
-    op4pass["→ 写：成品区/库位 E（通过）"]
-    op4fail["→ 写：退货区/库位 F（拒绝）"]
+    op1["operation 1 · data_io<br/>读：原料区/Bin A<br/>写：线边区/Bin B"]
+    op2["operation 2 · agent<br/>读：线边区/Bin B<br/>写：线边区/Bin C<br/>→ 调 bee"]
+    op3["operation 3 · qc<br/>读：线边区/Bin C<br/>写：质检区/Bin D"]
+    op4{"operation 4 · signoff<br/>读：质检区/Bin D"}
+    op4pass["→ 写：成品区/Bin E（通过）"]
+    op4fail["→ 写：退货区/Bin F（拒绝）"]
     finish([beeline 结束])
 
     start --> op1 --> op2 --> op3 --> op4
@@ -284,7 +284,7 @@ flowchart TD
 | 价值流（Value Stream） | beeline |
 | 标准化作业 | beeline 蓝图（operation 序列）|
 | 自働化（Jidoka） | bee 智能体 + 异常回流 |
-| 看板（Kanban） | kanban 控制台 + 库位在制视图 |
+| 看板（Kanban） | kanban 控制台 + Bin 在制视图 |
 | 拉动（Pull） | Task Receiver 接收触发 |
 | 单件流（One-piece Flow）| operation 一次执行一份物料 |
 | 改善（Kaizen） | 度量（§4 待澄清 H）+ 审计 |

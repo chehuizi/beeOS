@@ -6,9 +6,9 @@
 
 ## 0. 一句话
 
-beeOS 三大模块 **beeBox / beeline / bee**，两个控制台 **kanban / workshop**。
-beeline 由 **operation（工序）** 序列组成（operation 是 beeline 内部组件），agent operation 调 bee；
-每个 operation 驱动数字物料在 5 库区间流转。
+beeOS 三大模块 **beeBox（容器）/ beeline（流水线）/ bee（工人）**，两个控制台 **kanban（用户）/ workshop（管理）**。
+**beeline 在 beeBox 内跑**，由 **operation（工序）** 序列组成（operation 是 beeline 内部组件），**agent operation 调 bee**；
+每个 operation 驱动数字物料在 **beeBox 的 5 库区**间流转。
 
 ## 1. 关系总览
 

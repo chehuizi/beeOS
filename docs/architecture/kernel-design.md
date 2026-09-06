@@ -12,29 +12,47 @@ beeline 由 **operation（工序）** 序列组成（operation 是 beeline 内�
 
 ## 1. 关系总览
 
-```
-┌──────────────────────────────────────────────────────┐
-│                      beeOS                           │
-│                                                      │
-│   ┌──────────────┐              ┌──────────────┐     │
-│   │   kanban     │              │   workshop   │     │
-│   │   (用户)     │              │  (管理)      │     │
-│   │   看板视图   │              │  设计视图    │     │
-│   └──────┬───────┘              └──────┬───────┘     │
-│          │ 读                          │ 写          │
-│          │                             │             │
-│          ▼                             ▼             │
-│   ┌──────────────────────────────────────────┐       │
-│   │  beeBox  车间                            │       │
-│   │   ├─ 5 库区                              │       │
-│   │   ├─ 库位 / 数字物料                     │       │
-│   │   ├─ beeline  工艺路线                   │       │
-│   │   │   └─ operation 序列                 │       │
-│   │   │      ├─ data_io / transform / qc    │       │
-│   │   │      └─ agent ──→ bee 工人         │       │
-│   │   └─ bee 工人                          │       │
-│   └──────────────────────────────────────────┘       │
-└──────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    beeOS["beeOS"]
+
+    kanban["kanban<br/>（用户）<br/>看板视图"]
+    workshop["workshop<br/>（管理）<br/>设计视图"]
+
+    beeBox["beeBox · 车间"]
+    zones["5 库区<br/>原料 / 线边 / 成品 / 质检 / 退货"]
+    locations["库位"]
+    materials["数字物料"]
+    beeline["beeline · 工艺路线"]
+    operations["operation 序列<br/>（工序）"]
+    opBasic["data_io / transform / qc / signoff"]
+    opAgent["agent"]
+    bee["bee · 工人"]
+
+    beeOS --> kanban
+    beeOS --> workshop
+    kanban -.读.-> beeBox
+    workshop -.写.-> beeBox
+
+    beeBox --> zones
+    beeBox --> beeline
+    beeBox --> bee
+    zones --> locations
+    locations --> materials
+    beeline --> operations
+    operations --> opBasic
+    operations --> opAgent
+    opAgent -.调.-> bee
+
+    classDef console fill:#fef3c7,stroke:#f59e0b,color:#78350f
+    classDef box fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+    classDef flow fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef worker fill:#fce7f3,stroke:#db2777,color:#831843
+
+    class kanban,workshop console
+    class beeBox,zones,locations,materials box
+    class beeline,operations,opBasic,opAgent flow
+    class bee worker
 ```
 
 ## 2. 核心要素
@@ -65,12 +83,23 @@ beeline 由 **operation（工序）** 序列组成（operation 是 beeline 内�
 
 **看板视图示意**：
 
-```
-┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐  │  ┌─────────┐
-│ 原料区  │ → │ 线边区  │ → │ 质检区  │ → │ 成品区  │  │  │ 退货区  │
-│ 入库位A │   │ 加工B/C │   │ 待验D   │   │ 完成E   │  │  │ 异常F   │
-│ 5 在制  │   │ 3 在制  │   │ 1 待签  │   │ 12 交付 │  │  │ 2 待处  │
-└─────────┘   └─────────┘   └─────────┘   └─────────┘  │  └─────────┘
+```mermaid
+graph LR
+    raw["原料区<br/>入库位 A<br/>5 在制"]
+    line["线边区<br/>加工 B/C<br/>3 在制"]
+    qc["质检区<br/>待验 D<br/>1 待签"]
+    finished["成品区<br/>完成 E<br/>12 交付"]
+    return["退货区<br/>异常 F<br/>2 待处理"]
+
+    raw --> line --> qc --> finished
+    qc -.拒.-> return
+
+    classDef zone fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+    classDef ok fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef bad fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    class raw,line,qc zone
+    class finished ok
+    class return bad
 ```
 
 ### 3.2 beeOS **workshop**（管理侧 / 设计视角）
@@ -103,16 +132,35 @@ beeline 由 **operation（工序）** 序列组成（operation 是 beeline 内�
 
 ## 4. beeBox 内部结构
 
-```
-beeBox（车间，归属 1 个业务领域）
-├─ 库区（Zone，5 类固定）
-│   ├─ 原料区（Raw）        外部输入 / 原始数据
-│   ├─ 线边区（Line-side）  加工中 / 中间结果
-│   ├─ 成品区（Finished）  最终产出
-│   ├─ 质检区（QC）        验证 / 审核 / 签核
-│   └─ 退货区（Return）    异常 / 返工
-├─ 库位（Location）：每个库区下细分
-└─ 数字物料（Digital Material）：库位上放的数据 + 类型
+```mermaid
+graph TB
+    beeBox["beeBox · 车间<br/>（归属 1 个业务领域）"]
+    zones["库区 · Zone（5 类固定）"]
+    raw["原料区 · Raw<br/>外部输入 / 原始数据"]
+    line["线边区 · Line-side<br/>加工中 / 中间结果"]
+    finished["成品区 · Finished<br/>最终产出"]
+    qc["质检区 · QC<br/>验证 / 审核 / 签核"]
+    return["退货区 · Return<br/>异常 / 返工"]
+    locations["库位 · Location<br/>每个库区下细分"]
+    materials["数字物料 · Digital Material<br/>数据 + 类型"]
+
+    beeBox --> zones
+    zones --> raw
+    zones --> line
+    zones --> finished
+    zones --> qc
+    zones --> return
+    zones --> locations
+    locations --> materials
+
+    classDef box fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+    classDef ok fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef bad fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    classDef neutral fill:#f3f4f6,stroke:#6b7280,color:#1f2937
+    class beeBox,zones,locations,materials box
+    class raw,line neutral
+    class finished,qc ok
+    class return bad
 ```
 
 ### 待澄清（beeBox 还"装"什么）
@@ -158,32 +206,33 @@ beeBox（车间，归属 1 个业务领域）
 
 ### 5.3 数据流（operation 驱动物料在 5 库区间流转）
 
-```
-[beeline 启动]
-  │
-  ▼
-[operation 1: data_io]
-  ├─ 读：原料区 / 库位 A（外部输入）
-  └─ 写：线边区 / 库位 B（加工中）
-  │
-  ▼
-[operation 2: agent] ──→ 调 bee
-  ├─ 读：线边区 / 库位 B
-  └─ 写：线边区 / 库位 C（新加工结果）
-  │
-  ▼
-[operation 3: qc]
-  ├─ 读：线边区 / 库位 C
-  └─ 写：质检区 / 库位 D（待验证）
-  │
-  ▼
-[operation 4: signoff]
-  ├─ 读：质检区 / 库位 D
-  ├─ 通过 → 写：成品区 / 库位 E
-  └─ 拒绝 → 写：退货区 / 库位 F
-  │
-  ▼
-[beeline 结束]
+```mermaid
+flowchart TD
+    start([beeline 启动])
+    op1["operation 1 · data_io<br/>读：原料区/库位 A<br/>写：线边区/库位 B"]
+    op2["operation 2 · agent<br/>读：线边区/库位 B<br/>写：线边区/库位 C<br/>→ 调 bee"]
+    op3["operation 3 · qc<br/>读：线边区/库位 C<br/>写：质检区/库位 D"]
+    op4{"operation 4 · signoff<br/>读：质检区/库位 D"}
+    op4pass["→ 写：成品区/库位 E（通过）"]
+    op4fail["→ 写：退货区/库位 F（拒绝）"]
+    finish([beeline 结束])
+
+    start --> op1 --> op2 --> op3 --> op4
+    op4 -->|通过| op4pass
+    op4 -->|拒绝| op4fail
+    op4pass --> finish
+    op4fail --> finish
+
+    classDef startend fill:#e0e7ff,stroke:#4f46e5,color:#312e81
+    classDef agent fill:#fce7f3,stroke:#db2777,color:#831843
+    classDef ok fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef bad fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    classDef step fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+    class start,finish startend
+    class op1,op3 step
+    class op2 agent
+    class op4pass ok
+    class op4fail bad
 ```
 
 ## 6. 5 大内核组件

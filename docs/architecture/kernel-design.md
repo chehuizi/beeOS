@@ -106,31 +106,44 @@ graph TB
 - **视觉**：Kanban 看板 —— task 在 beeBox 5 业务库区间流转的可视化视图
 - **精益对位**：Kanban（看板管理）—— 可视化、拉动、暴露问题
 
-**看板视图示意**：
+**看板视图示意（Trello 风格：5 列横排 = 5 业务库区，每列下 task 卡片堆叠）**：
 
 ```mermaid
 flowchart LR
-    subgraph R["原料区 · Bin A"]
-        R1["task#001<br/>op1 拉科目余额<br/>⏱ 2m"]
-        R2["task#002<br/>op1 拉科目余额<br/>⏱ 1m"]
+    subgraph R["📦 原料区<br/>Bin A · 2 task<br/>━━━━━━━━━━"]
+        R1["task#001<br/>op1 拉科目余额<br/>▶️ 2m"]
+        R2["task#002<br/>op1 拉科目余额<br/>▶️ 1m"]
     end
-    subgraph L["线边区 · Bin B/C"]
-        L1["task#003<br/>op2 agent 银行对账<br/>⏱ 5m"]
-        L2["task#004<br/>op2 agent 银行对账<br/>⏱ 4m"]
+    subgraph L["⚙️ 线边区<br/>Bin B/C · 2 task<br/>━━━━━━━━━━"]
+        L1["task#003<br/>op2 agent 银行对账<br/>▶️ 5m"]
+        L2["task#004<br/>op2 agent 银行对账<br/>▶️ 4m"]
     end
-    subgraph Q["质检区 · Bin D"]
+    subgraph Q["🔍 质检区<br/>Bin D · 1 task ⚠️<br/>━━━━━━━━━━"]
         Q1["task#005<br/>op4 signoff 经理签核<br/>⏳ AwaitingHuman"]
     end
-    subgraph F["成品区 · Bin E"]
-        F1["task#006 ✓<br/>elapsed 8m"]
-        F2["task#007 ✓<br/>elapsed 7m"]
+    subgraph F["✅ 成品区<br/>Bin E · 2 task<br/>━━━━━━━━━━"]
+        F1["task#006<br/>✓ 8m"]
+        F2["task#007<br/>✓ 7m"]
     end
-    subgraph X["退货区 · Bin F"]
-        X1["task#008 ✗<br/>对账不平 拒收"]
+    subgraph X["❌ 退货区<br/>Bin F · 1 task ⚠️<br/>━━━━━━━━━━"]
+        X1["task#008<br/>✗ 对账不平 拒收"]
     end
 
-    R --> L --> Q --> F
+    R ==> L ==> Q ==> F
     Q -.拒.-> X
+
+    classDef col fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+    classDef running fill:#e0e7ff,stroke:#4f46e5,color:#312e81
+    classDef awaiting fill:#fef3c7,stroke:#f59e0b,color:#78350f
+    classDef done fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef fail fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+
+    class R,L,Q,F,X col
+    class R1,R2,L1,L2 running
+    class Q1 awaiting
+    class F1,F2 done
+    class X1 fail
+```
 
     classDef raw fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
     classDef line fill:#e0e7ff,stroke:#4f46e5,color:#312e81

@@ -170,7 +170,7 @@ flowchart LR
 ```mermaid
 graph TB
     beeBox["beeBox · 车间<br/>（归属 1 个业务领域）"]
-    zones["库区 · Zone（6 类）"]
+    zones["库区 · Zone（6 类）<br/>原料 / 线边 / 质检 / 成品 / 退货 / 系统"]
     raw["原料区 · Raw<br/>外部输入 / 原始数据"]
     line["线边区 · Line-side<br/>加工中 / 中间结果"]
     qc["质检区 · QC<br/>验证 / 审核 / 签核"]

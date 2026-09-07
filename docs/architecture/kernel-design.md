@@ -163,7 +163,7 @@ flowchart LR
 - **面向**：管理员 / 业务分析师 / 工艺工程师
 - **核心问题**：这个 beeBox 需要什么 beeline / operation / 物料 / bee？
 - **输入**（基于什么改）：
-  - 现有 beeOS 资产：已注册的 beeBox / beeline / bee / BOM
+  - 现有 beeOS 资产：已注册的 beeBox / beeline 蓝图 / bee / BOM（**beeline 蓝图库与 BOM 中心是两类独立资产**：beeline = 工艺路线 schema；BOM = 物料清单 schema）|
   - 业务需求：新增场景、调整工艺、注册新 bee
 - **输出**（产出什么）：
   - 设计好的 beeBox（含 6 库区 / Bin / BOM）
@@ -178,17 +178,18 @@ flowchart LR
 | 模块 | 作用 |
 |---|---|
 | beeBox 设计器 | 定义业务领域 / 6 库区 / Bin / BOM |
-| beeline 编辑器 | 拖拽 / 编排 operation 序列 |
+| beeline 编辑器 | 拖拽 / 编排 operation 序列（**beeline 蓝图**，独立于 BOM）|
 | operation 库 | 各类 operation 模板（data_io / transform / agent / qc / signoff）|
 | bee 注册表 | 管理 bee 智能体（能力 / 输入输出 / 适用 operation）|
-| BOM 中心 | 跨 beeBox 共享 BOM |
+| **beeline 蓝图库** | **跨 beeBox 共享 beeline 蓝图**（工艺路线 schema，独立于 BOM 中心）|
+| BOM 中心 | 跨 beeBox 共享 BOM（物料清单 schema）|
 
 ### 3.3 读写关系
 
 | 控制台 | 输入（看 / 基于什么） | 操作（做 / 产出什么） |
 |---|---|---|
 | **kanban** | task 实时状态（task / 当前 operation / 所在库区 / 异常 / 耗时） | 触发 task / 认领异常 / 签核 |
-| **workshop** | 现有 beeOS 资产（beeBox / beeline / bee / BOM） | 设计 / 编辑 / 注册 / 上传 |
+| **workshop** | 现有 beeOS 资产（beeBox / beeline 蓝图 / bee / BOM） | 设计 / 编辑 / 注册 / 上传 |
 
 > **workshop 写 → beeOS 资产；beeOS 状态 → kanban 读。设计在 workshop，运行在 kanban。**
 
@@ -309,7 +310,7 @@ flowchart TD
 |---|---|---|---|
 | ① | Task Receiver | 接收任务 | beeBox 入口 |
 | ② | beeBox Router | 路由到目标 beeBox | Kernel 顶层 |
-| ③ | Beeline Cache | 缓存 beeline 蓝图 | beeBox 内部 |
+| ③ | Beeline Cache | 缓存 beeline 蓝图（独立于 BOM 中心）| beeBox 内部 |
 | ④ | Bee Planner | beeline miss 时规划 | beeBox 内部 |
 | ⑤ | Beeline Executor | 在 beeBox 内部执行 beeline operation | beeBox 内部 |
 
@@ -344,17 +345,15 @@ flowchart TD
 - **凭证也是物料**（系统库区 Bin 存放）—— 跟"工具也按物料管理"原则一致
 - **所有库位上的物料 = 某种 BOM 的 instance**（schema 在 BOM 中心，instance 在 Bin）
 - operation 用 `credential_ref` 指向系统库区 Bin（bee 从 Bin 拿凭证）
+- **beeline 蓝图（工艺路线 schema）独立于 BOM 中心（物料清单 schema）**—— 两个独立的 beeOS 资产
 
 ### ❓ 待继续打磨（v0.2+）
 - 跨 beeBox 协作（1 个 task 能不能跨车间）
 - BOM 中心部署形态（远端 / 内嵌 / 本地）
+- beeline 蓝图库部署形态（远端 / 内嵌 / 本地）
 - 系统库区凭证管理（凭证加密 / 注入 / 轮转 / 审计）
 - bee 注册表的查找 / 加载 / 释放机制
-- 数字物料粒度（字段 / 记录 / 文件）
+- 物料粒度（字段 / 记录 / 文件）
 - kanban 移动端 / 大屏
 - workshop 多租户协作
 - operation 编排是否支持并行 / 条件分支
-- 跨 beeBox 协作（1 个 task 能不能跨车间）
-- BOM 中心部署形态（远端 / 内嵌 / 本地）
-- operation 编排是否支持并行 / 条件分支
-- 物料粒度（字段 / 记录 / 文件）

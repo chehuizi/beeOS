@@ -8,7 +8,8 @@
 
 beeOS 三大模块 **beeBox（容器）/ beeline（流水线）/ bee（工人）**，两个控制台 **kanban（用户）/ workshop（管理）**。
 **beeline 在 beeBox 内跑**，由 **operation（工序）** 序列组成（operation 是 beeline 内部组件），**agent operation 调 bee**；
-每个 operation 驱动物料在 **beeBox 的 5 业务库区**间流转。
+beeBox 内部库区分为 **2 类**：**业务库区**（5 个：原料/线边/质检/成品/退货，物料流转）+ **系统库区**（1 个：凭证/连接/限流，bee 按需调取）。
+每个 operation 驱动物料在 **5 业务库区**间流转。
 
 ## 1. 关系总览
 
@@ -20,7 +21,6 @@ graph TB
     workshop["workshop<br/>（管理）<br/>设计视图"]
 
     beeBox["beeBox · 车间"]
-    zones["6 库区（原料 / 线边 / 质检 / 成品 / 退货 / 系统）"]
     bins["Bin"]
     materials["物料"]
     beeline["beeline · 工艺路线"]
@@ -29,16 +29,30 @@ graph TB
     opAgent["agent"]
     bee["bee · 工人"]
 
+    subgraph bizZones["业务库区（5 个，物料流转）"]
+        raw["原料区 · Raw"]
+        line["线边区 · Line-side"]
+        qc["质检区 · QC"]
+        finished["成品区 · Finished"]
+        ret["退货区 · Return"]
+    end
+
+    subgraph sysZones["系统库区（1 个，凭证/连接/限流）"]
+        system["系统库区 · System"]
+    end
+
     beeOS --> kanban
     beeOS --> workshop
     kanban -.读.-> beeBox
     workshop -.写.-> beeBox
 
-    beeBox --> zones
+    beeBox --> bizZones
+    beeBox --> sysZones
+    bizZones --> bins
+    sysZones --> bins
+    bins --> materials
     beeBox --> beeline
     beeBox --> bee
-    zones --> bins
-    bins --> materials
     beeline --> operations
     operations --> opBasic
     operations --> opAgent
@@ -48,11 +62,13 @@ graph TB
     classDef box fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
     classDef flow fill:#dcfce7,stroke:#16a34a,color:#14532d
     classDef worker fill:#fce7f3,stroke:#db2777,color:#831843
+    classDef sys fill:#fef3c7,stroke:#f59e0b,color:#78350f
 
     class kanban,workshop console
-    class beeBox,zones,bins,materials box
+    class beeBox,bins,materials box
     class beeline,operations,opBasic,opAgent flow
     class bee worker
+    class system,system sys
 ```
 
 ## 2. 核心要素
@@ -163,31 +179,32 @@ flowchart LR
 
 > **workshop 写 → beeOS 资产；beeOS 状态 → kanban 读。设计在 workshop，运行在 kanban。**
 
-> **库位（Bin）是统一管理粒度**——所有库区（5 业务 + 1 系统）下面都有 Bin，所有物料（数据 / 工具 / 凭证 / 文档等）都按 Bin 存放。
+> **库位（Bin）是统一管理粒度**——所有库区（业务 5 + 系统 1）下面都有 Bin，所有物料（数据 / 工具 / 凭证 / 文档等）都按 Bin 存放。
 
 ## 4. beeBox 内部结构
 
 ```mermaid
 graph TB
     beeBox["beeBox · 车间<br/>（归属 1 个业务领域）"]
-    zones["库区 · Zone（6 类）<br/>原料 / 线边 / 质检 / 成品 / 退货 / 系统"]
-    raw["原料区 · Raw<br/>外部输入 / 原始数据"]
-    line["线边区 · Line-side<br/>加工中 / 中间结果"]
-    qc["质检区 · QC<br/>验证 / 审核 / 签核"]
-    finished["成品区 · Finished<br/>最终产出"]
-    return["退货区 · Return<br/>异常 / 返工"]
-    system["系统库区 · System<br/>凭证 / 连接 / 限流"]
     bins["库位 · Bin<br/>每个库区下细分（统一管理粒度）"]
     materials["物料 · Material（BOM 实例）<br/>数据 / 工具 / 凭证 / 文档等<br/>所有 Bin 上的物料都有 schema（BOM）"]
 
-    beeBox --> zones
-    zones --> raw
-    zones --> line
-    zones --> qc
-    zones --> finished
-    zones --> return
-    zones --> system
-    raw & line & qc & finished & return & system --> bins
+    subgraph bizZones["业务库区（5 个，物料流转）"]
+        raw["原料区 · Raw<br/>外部输入 / 原始数据"]
+        line["线边区 · Line-side<br/>加工中 / 中间结果"]
+        qc["质检区 · QC<br/>验证 / 审核 / 签核"]
+        finished["成品区 · Finished<br/>最终产出"]
+        ret["退货区 · Return<br/>异常 / 返工"]
+    end
+
+    subgraph sysZones["系统库区（1 个，凭证/连接/限流）"]
+        system["系统库区 · System"]
+    end
+
+    beeBox --> bizZones
+    beeBox --> sysZones
+    bizZones --> bins
+    sysZones --> bins
     bins --> materials
 
     classDef box fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
@@ -195,7 +212,7 @@ graph TB
     classDef bad fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
     classDef neutral fill:#f3f4f6,stroke:#6b7280,color:#1f2937
     classDef sys fill:#fef3c7,stroke:#f59e0b,color:#78350f
-    class beeBox,zones,bins,materials box
+    class beeBox,bins,materials box
     class raw,line neutral
     class qc,finished ok
     class return bad
@@ -303,14 +320,13 @@ flowchart TD
 - 两个控制台：kanban / workshop
 - beeline 在 beeBox 内执行
 - operation 驱动物料在 5 业务库区间流转
-- 6 库区（5 业务 + 1 系统）= 5 业务库区固定 5 类（原料 / 线边 / 质检 / 成品 / 退货）+ 1 系统库区（凭证 / 连接 / 限流）
 - 节点命名为 `operation`（operation 即标准作业，不另设 SOP 层）
 - operation 必含：seq / type / input_location / output_location
 - 4 种基础 operation 类型：data_io / transform / agent / qc / signoff
 - agent operation 才调 bee
 - **物料 = BOM 实例 = 库位上放的被动资源（数据 / 工具 / 文档等）；bee 不是物料**
 - **§4 A-H 8 项全部定论**（详见 §4 表格）
-- **库区 = 5 业务（原料/线边/质检/成品/退货）+ 1 系统（凭证/连接/限流）= 6 类**
+- **库区 = 2 类（业务库区 + 系统库区）**：业务库区 5 个（原料/线边/质检/成品/退货，物料流转）+ 系统库区 1 个（凭证/连接/限流，bee 按需调取）
 - **库位（Bin）是统一管理粒度**——所有物料（含凭证）都按 Bin 存放
 - **凭证也是物料**（系统库区 Bin 存放）—— 跟"工具也按物料管理"原则一致
 - **所有库位上的物料 = 某种 BOM 的 instance**（schema 在 BOM 中心，instance 在 Bin）

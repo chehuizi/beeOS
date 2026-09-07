@@ -8,7 +8,7 @@
 
 beeOS 三大模块 **beeBox（容器）/ beeline（流水线）/ bee（工人）**，两个控制台 **kanban（用户）/ workshop（管理）**。
 **beeline 在 beeBox 内跑**，由 **operation（工序）** 序列组成（operation 是 beeline 内部组件），**agent operation 调 bee**；
-每个 operation 驱动物料在 **beeBox 的 5 库区**间流转。
+每个 operation 驱动物料在 **beeBox 的 5 业务库区**间流转。
 
 ## 1. 关系总览
 
@@ -80,14 +80,14 @@ graph TB
 - **输入**（看什么）：
   - task 列表：每个 task 的状态（Queued / Running / Done / Failed / AwaitingHuman）
   - task 当前 operation：跑到第几步
-  - task 当前位置：在 5 库区/Bin 的哪个（task 内物料的位置）
+  - task 当前位置：在 5 业务库区/Bin 的哪个（task 内物料的位置）
   - 异常 task：哪些 task 异常、待人工处理
   - 耗时：每个 task / operation 的实际执行时间
 - **操作**（能做什么）：
   - 触发新 task
   - 认领异常 task（退货区）
   - 签核 task（质检区 / 成品区）
-- **视觉**：Kanban 看板 —— task 在 beeBox 5 库区间流转的可视化视图
+- **视觉**：Kanban 看板 —— task 在 beeBox 5 业务库区间流转的可视化视图
 - **精益对位**：Kanban（看板管理）—— 可视化、拉动、暴露问题
 
 **看板视图示意**：
@@ -137,7 +137,7 @@ flowchart LR
   - 现有 beeOS 资产：已注册的 beeBox / beeline / bee / BOM
   - 业务需求：新增场景、调整工艺、注册新 bee
 - **输出**（产出什么）：
-  - 设计好的 beeBox（含 5 库区 / Bin / BOM）
+  - 设计好的 beeBox（含 6 库区 / Bin / BOM）
   - 编辑好的 beeline（含 operation 序列）
   - 注册的 bee（智能体）
   - 更新的 BOM
@@ -148,7 +148,7 @@ flowchart LR
 
 | 模块 | 作用 |
 |---|---|
-| beeBox 设计器 | 定义业务领域 / 5 库区 / Bin / BOM |
+| beeBox 设计器 | 定义业务领域 / 6 库区 / Bin / BOM |
 | beeline 编辑器 | 拖拽 / 编排 operation 序列 |
 | operation 库 | 各类 operation 模板（data_io / transform / agent / qc / signoff）|
 | bee 注册表 | 管理 bee 智能体（能力 / 输入输出 / 适用 operation）|
@@ -242,7 +242,7 @@ graph TB
 | qc_rules | 🟡 qc 才有 | 校验规则 |
 | exception_handler | 🟡 | 异常处理（退货区 / 重试 / 人工）|
 
-### 5.3 数据流（operation 驱动物料在 5 库区间流转）
+### 5.3 数据流（operation 驱动物料在 5 业务库区间流转）
 
 ```mermaid
 flowchart TD
@@ -302,8 +302,8 @@ flowchart TD
 - 核心要素：beeBox / beeline / bee（三大模块）+ operation（beeline 内部组件）
 - 两个控制台：kanban / workshop
 - beeline 在 beeBox 内执行
-- operation 驱动物料在 5 库区间流转
-- 5 库区固定 5 类（原料 / 线边 / 质检 / 成品 / 退货）
+- operation 驱动物料在 5 业务库区间流转
+- 6 库区（5 业务 + 1 系统）= 5 业务库区固定 5 类（原料 / 线边 / 质检 / 成品 / 退货）+ 1 系统库区（凭证 / 连接 / 限流）
 - 节点命名为 `operation`（operation 即标准作业，不另设 SOP 层）
 - operation 必含：seq / type / input_location / output_location
 - 4 种基础 operation 类型：data_io / transform / agent / qc / signoff

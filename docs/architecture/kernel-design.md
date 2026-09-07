@@ -233,7 +233,6 @@ graph TB
 | output_location | ✅ | 把物料落到哪里 |
 | bee_ref | 🟡 agent 才有 | 被调的 bee（如 `beex.finance.bank_reconciler`）—— 按需从 bee 注册表加载 |
 | resources_ref | 🟡 | 指向 BOM 里声明的资源（连接串 / 凭证 / 限流），随物料走 |
-| task | 🟡 | 工人 / 工具干的具体活（如 `reconcile_bank`）|
 | qc_rules | 🟡 qc 才有 | 校验规则 |
 | exception_handler | 🟡 | 异常处理（退货区 / 重试 / 人工）|
 
@@ -315,9 +314,6 @@ flowchart TD
 - kanban 移动端 / 大屏
 - workshop 多租户协作
 - operation 编排是否支持并行 / 条件分支
-- bee 干的具体活叫 `task`？
-- kanban 移动端 / 大屏
-- workshop 多租户协作
 - 跨 beeBox 协作（1 个 task 能不能跨车间）
 - BOM 中心部署形态（远端 / 内嵌 / 本地）
 - operation 编排是否支持并行 / 条件分支

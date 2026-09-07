@@ -178,7 +178,7 @@ graph TB
     return["退货区 · Return<br/>异常 / 返工"]
     system["系统库区 · System<br/>凭证 / 连接 / 限流"]
     bins["库位 · Bin<br/>每个库区下细分（统一管理粒度）"]
-    materials["物料 · Material（BOM 实例）<br/>数据 / 工具 / 凭证 / 文档等"]
+    materials["物料 · Material（BOM 实例）<br/>数据 / 工具 / 凭证 / 文档等<br/>所有 Bin 上的物料都有 schema（BOM）"]
 
     beeBox --> zones
     zones --> raw
@@ -207,12 +207,12 @@ graph TB
 | # | 候选 | 状态 | 结论 |
 |---|---|---|---|
 | A | 适配器（Adapter） | ✅ **已定** | 适配器 = 物料的一种（工具类），beeBox 通过 Bin 装适配器 |
-| B | 资源 / 凭证 | ✅ **已定** | 放在 BOM 里（随物料走）—— 每个 BOM 声明它需要的凭证 / 连接串 / 限流 |
+| B | 资源 / 凭证 | ✅ **已定** | 凭证 = 物料 = 凭证类 BOM 的实例。schema 在 BOM 中心，instance 在系统库区 Bin，bee 加工时按需调取（`operation.credential_ref`）|
 | C | 业务规则（Rule） | ✅ **已定** | 规则在 beeline / operation 里（operation.qc_rules / 约束），beeBox 不单独管 |
 | D | **bee 工人池** | ✅ **已定** | bee 跟随 beeline，按需加载（operation.bee_ref 拉取）|
 | E | 异常回流 | ✅ **已定** | M0：退货区物料 = AwaitingHuman 状态，等人工在 kanban 上认领处理 |
 | F | Bin 流转规则 | ✅ **已定** | 物料只能按 operation 规定的路径流转（input_location → output_location）|
-| G | 看板 / 状态 | ✅ **已定** | 看板 = beeBox 物理层（5 库区/Bin/物料状态）+ kanban 控制台层 |
+| G | 看板 / 状态 | ✅ **已定** | 看板 = beeBox 物理层（6 库区/Bin/物料状态）+ kanban 控制台层 |
 | H | 度量（Metrics） | ✅ **已定** | metrics 从 Bin 物料数 + operation.elapsed 派生，不需要单独服务 |
 
 ## 5. beeline 与 operation
@@ -313,6 +313,7 @@ flowchart TD
 - **库区 = 5 业务（原料/线边/质检/成品/退货）+ 1 系统（凭证/连接/限流）= 6 类**
 - **库位（Bin）是统一管理粒度**——所有物料（含凭证）都按 Bin 存放
 - **凭证也是物料**（系统库区 Bin 存放）—— 跟"工具也按物料管理"原则一致
+- **所有库位上的物料 = 某种 BOM 的 instance**（schema 在 BOM 中心，instance 在 Bin）
 - operation 用 `credential_ref` 指向系统库区 Bin（bee 从 Bin 拿凭证）
 
 ### ❓ 待继续打磨（v0.2+）

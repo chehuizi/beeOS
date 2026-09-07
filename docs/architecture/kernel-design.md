@@ -163,37 +163,43 @@ flowchart LR
 
 > **workshop 写 → beeOS 资产；beeOS 状态 → kanban 读。设计在 workshop，运行在 kanban。**
 
+> **库位（Bin）是统一管理粒度**——所有库区（5 业务 + 1 系统）下面都有 Bin，所有物料（数据 / 工具 / 凭证 / 文档等）都按 Bin 存放。
+
 ## 4. beeBox 内部结构
 
 ```mermaid
 graph TB
     beeBox["beeBox · 车间<br/>（归属 1 个业务领域）"]
-    zones["库区 · Zone（5 类固定）"]
+    zones["库区 · Zone（6 类）"]
     raw["原料区 · Raw<br/>外部输入 / 原始数据"]
     line["线边区 · Line-side<br/>加工中 / 中间结果"]
-    finished["成品区 · Finished<br/>最终产出"]
     qc["质检区 · QC<br/>验证 / 审核 / 签核"]
+    finished["成品区 · Finished<br/>最终产出"]
     return["退货区 · Return<br/>异常 / 返工"]
-    bins["库位 · Bin<br/>每个库区下细分"]
-    materials["物料 · Material（BOM 实例）<br/>数据 / 工具 / 文档等"]
+    system["系统库区 · System<br/>凭证 / 连接 / 限流"]
+    bins["库位 · Bin<br/>每个库区下细分（统一管理粒度）"]
+    materials["物料 · Material（BOM 实例）<br/>数据 / 工具 / 凭证 / 文档等"]
 
     beeBox --> zones
     zones --> raw
     zones --> line
-    zones --> finished
     zones --> qc
+    zones --> finished
     zones --> return
-    zones --> bins
+    zones --> system
+    raw & line & qc & finished & return & system --> bins
     bins --> materials
 
     classDef box fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
     classDef ok fill:#dcfce7,stroke:#16a34a,color:#14532d
     classDef bad fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
     classDef neutral fill:#f3f4f6,stroke:#6b7280,color:#1f2937
+    classDef sys fill:#fef3c7,stroke:#f59e0b,color:#78350f
     class beeBox,zones,bins,materials box
     class raw,line neutral
-    class finished,qc ok
+    class qc,finished ok
     class return bad
+    class system sys
 ```
 
 ### beeBox 还"装"什么（已定结论）
@@ -232,7 +238,7 @@ graph TB
 | input_location | ✅ | 从哪里读物料 |
 | output_location | ✅ | 把物料落到哪里 |
 | bee_ref | 🟡 agent 才有 | 被调的 bee（如 `beex.finance.bank_reconciler`）—— 按需从 bee 注册表加载 |
-| resources_ref | 🟡 | 指向 BOM 里声明的资源（连接串 / 凭证 / 限流），随物料走 |
+| credentials_ref | 🟡 agent 才有 | 指向系统库区 Bin（凭证 / 连接 / 限流类物料），bee 从 Bin 拿凭证 |
 | qc_rules | 🟡 qc 才有 | 校验规则 |
 | exception_handler | 🟡 | 异常处理（退货区 / 重试 / 人工）|
 
@@ -304,6 +310,10 @@ flowchart TD
 - agent operation 才调 bee
 - **物料 = BOM 实例 = 库位上放的被动资源（数据 / 工具 / 文档等）；bee 不是物料**
 - **§4 A-H 8 项全部定论**（详见 §4 表格）
+- **库区 = 5 业务（原料/线边/质检/成品/退货）+ 1 系统（凭证/连接/限流）= 6 类**
+- **库位（Bin）是统一管理粒度**——所有物料（含凭证）都按 Bin 存放
+- **凭证也是物料**（系统库区 Bin 存放）—— 跟"工具也按物料管理"原则一致
+- operation 用 `credentials_ref` 指向系统库区 Bin（bee 从 Bin 拿凭证）
 
 ### ❓ 待继续打磨（v0.2+）
 - 跨 beeBox 协作（1 个 task 能不能跨车间）

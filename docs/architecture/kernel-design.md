@@ -29,7 +29,7 @@ graph TB
     opAgent["agent"]
     bee["bee · 工人"]
 
-    subgraph bizZones["业务库区（5 个，物料流转）"]
+    subgraph bizZones["业务库区 5 个"]
         raw["原料区 · Raw"]
         line["线边区 · Line-side"]
         qc["质检区 · QC"]
@@ -37,7 +37,7 @@ graph TB
         ret["退货区 · Return"]
     end
 
-    subgraph sysZones["系统库区（1 个，凭证/连接/限流）"]
+    subgraph sysZones["系统库区 1 个"]
         system["系统库区 · System"]
     end
 
@@ -203,7 +203,7 @@ graph TB
     bins["库位 · Bin<br/>每个库区下细分（统一管理粒度）"]
     materials["物料 · Material（BOM 实例）<br/>数据 / 工具 / 凭证 / 文档等<br/>所有 Bin 上的物料都有 schema（BOM）"]
 
-    subgraph bizZones["业务库区（5 个，物料流转）"]
+    subgraph bizZones["业务库区 5 个"]
         raw["原料区 · Raw<br/>外部输入 / 原始数据"]
         line["线边区 · Line-side<br/>加工中 / 中间结果"]
         qc["质检区 · QC<br/>验证 / 审核 / 签核"]
@@ -211,7 +211,7 @@ graph TB
         ret["退货区 · Return<br/>异常 / 返工"]
     end
 
-    subgraph sysZones["系统库区（1 个，凭证/连接/限流）"]
+    subgraph sysZones["系统库区 1 个"]
         system["系统库区 · System"]
     end
 

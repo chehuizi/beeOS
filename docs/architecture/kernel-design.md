@@ -68,7 +68,7 @@ graph TB
     class beeBox,bins,materials box
     class beeline,operations,opBasic,opAgent flow
     class bee worker
-    class system,system sys
+    class system sys
 ```
 
 ## 2. 核心要素
@@ -229,7 +229,7 @@ graph TB
     class beeBox,bins,materials box
     class raw,line neutral
     class qc,finished ok
-    class return bad
+    class ret bad
     class system sys
 ```
 

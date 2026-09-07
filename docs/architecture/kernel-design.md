@@ -238,7 +238,7 @@ graph TB
 | input_location | ✅ | 从哪里读物料 |
 | output_location | ✅ | 把物料落到哪里 |
 | bee_ref | 🟡 agent 才有 | 被调的 bee（如 `beex.finance.bank_reconciler`）—— 按需从 bee 注册表加载 |
-| credentials_ref | 🟡 agent 才有 | 指向系统库区 Bin（凭证 / 连接 / 限流类物料），bee 从 Bin 拿凭证 |
+| credential_ref | 🟡 agent 才有 | 指向系统库区 Bin（凭证 / 连接 / 限流类物料），bee 从 Bin 拿凭证 |
 | qc_rules | 🟡 qc 才有 | 校验规则 |
 | exception_handler | 🟡 | 异常处理（退货区 / 重试 / 人工）|
 
@@ -313,7 +313,7 @@ flowchart TD
 - **库区 = 5 业务（原料/线边/质检/成品/退货）+ 1 系统（凭证/连接/限流）= 6 类**
 - **库位（Bin）是统一管理粒度**——所有物料（含凭证）都按 Bin 存放
 - **凭证也是物料**（系统库区 Bin 存放）—— 跟"工具也按物料管理"原则一致
-- operation 用 `credentials_ref` 指向系统库区 Bin（bee 从 Bin 拿凭证）
+- operation 用 `credential_ref` 指向系统库区 Bin（bee 从 Bin 拿凭证）
 
 ### ❓ 待继续打磨（v0.2+）
 - 跨 beeBox 协作（1 个 task 能不能跨车间）

@@ -26,29 +26,27 @@ flowchart TB
   opBasic["data_io transform qc signoff"]
   opAgent["agent"]
   bee["bee 工人"]
-  bizZones["业务库区 5 个"]
-  sysZones["系统库区 1 个"]
-  raw["原料区"]
-  line["线边区"]
-  qc["质检区"]
-  finished["成品区"]
-  ret["退货区"]
-  system["系统库区"]
+
+  subgraph biz["业务库区 5 个 物料流转"]
+    raw["原料区"]
+    line["线边区"]
+    qc["质检区"]
+    finished["成品区"]
+    ret["退货区"]
+  end
+
+  subgraph sys["系统库区 1 个 凭证连接限流"]
+    system["系统库区"]
+  end
 
   beeOS --> kanban
   beeOS --> workshop
   kanban -. read .-> beeBox
   workshop -. write .-> beeBox
-  beeBox --> bizZones
-  beeBox --> sysZones
-  bizZones --> raw
-  bizZones --> line
-  bizZones --> qc
-  bizZones --> finished
-  bizZones --> ret
-  sysZones --> system
-  bizZones --> bins
-  sysZones --> bins
+  beeBox --> biz
+  beeBox --> sys
+  biz --> bins
+  sys --> bins
   bins --> materials
   beeBox --> beeline
   beeBox --> bee
@@ -168,25 +166,23 @@ flowchart TB
   beeBox["beeBox 车间"]
   bins["Bin 库位"]
   materials["物料 BOM 实例"]
-  bizZones["业务库区 5 个"]
-  sysZones["系统库区 1 个"]
-  raw["原料区"]
-  line["线边区"]
-  qc["质检区"]
-  finished["成品区"]
-  ret["退货区"]
-  system["系统库区"]
 
-  beeBox --> bizZones
-  beeBox --> sysZones
-  bizZones --> raw
-  bizZones --> line
-  bizZones --> qc
-  bizZones --> finished
-  bizZones --> ret
-  sysZones --> system
-  bizZones --> bins
-  sysZones --> bins
+  subgraph biz["业务库区 5 个"]
+    raw["原料区"]
+    line["线边区"]
+    qc["质检区"]
+    finished["成品区"]
+    ret["退货区"]
+  end
+
+  subgraph sys["系统库区 1 个"]
+    system["系统库区"]
+  end
+
+  beeBox --> biz
+  beeBox --> sys
+  biz --> bins
+  sys --> bins
   bins --> materials
 ```
 

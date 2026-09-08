@@ -14,46 +14,42 @@ beeBox 内部库区分为 **2 类**：**业务库区**（5 个：原料/线边/�
 ## 1. 关系总览
 
 ```mermaid
-graph TB
-    beeOS["beeOS"]
+flowchart TB
+  beeOS["beeOS"]
+  kanban["kanban 看板视图"]
+  workshop["workshop 设计视图"]
+  beeBox["beeBox 车间"]
+  bins["Bin 库位"]
+  materials["物料 BOM 实例"]
+  beeline["beeline 工艺路线"]
+  operations["operation 序列"]
+  opBasic["data_io transform qc signoff"]
+  opAgent["agent"]
+  bee["bee 工人"]
+  bizZones["业务库区 5 个"]
+  sysZones["系统库区 1 个"]
+  raw["原料区"]
+  line["线边区"]
+  qc["质检区"]
+  finished["成品区"]
+  ret["退货区"]
+  system["系统库区"]
 
-    kanban["kanban<br/>看板视图"]
-    workshop["workshop<br/>设计视图"]
-
-    beeBox["beeBox 车间"]
-    bins["Bin"]
-    materials["物料"]
-    beeline["beeline 工艺路线"]
-    operations["operation 序列"]
-    opBasic["data_io / transform / qc / signoff"]
-    opAgent["agent"]
-    bee["bee 工人"]
-
-    bizZones["业务库区<br/>5 个"]
-    sysZones["系统库区<br/>1 个"]
-    raw["原料区"]
-    line["线边区"]
-    qc["质检区"]
-    finished["成品区"]
-    ret["退货区"]
-    system["系统库区"]
-
-    beeOS --> kanban
-    beeOS --> workshop
-    kanban -.读.-> beeBox
-    workshop -.写.-> beeBox
-
-    beeBox --> bizZones
-    beeBox --> sysZones
-    bizZones --> bins
-    sysZones --> bins
-    bins --> materials
-    beeBox --> beeline
-    beeBox --> bee
-    beeline --> operations
-    operations --> opBasic
-    operations --> opAgent
-    opAgent -.调.-> bee
+  beeOS --> kanban
+  beeOS --> workshop
+  kanban -. read .-> beeBox
+  workshop -. write .-> beeBox
+  beeBox --> bizZones
+  beeBox --> sysZones
+  bizZones --> bins
+  sysZones --> bins
+  bins --> materials
+  beeBox --> beeline
+  beeBox --> bee
+  beeline --> operations
+  operations --> opBasic
+  operations --> opAgent
+  opAgent -. call .-> bee
 ```
 
 ## 2. 核心要素
@@ -95,52 +91,31 @@ graph TB
 
 ```mermaid
 flowchart LR
-    subgraph R["📦 原料区<br/>Bin A · 2 task<br/>━━━━━━━━━━"]
-        R1["task#001<br/>op1 拉科目余额<br/>▶️ 2m"]
-        R2["task#002<br/>op1 拉科目余额<br/>▶️ 1m"]
-    end
-    subgraph L["⚙️ 线边区<br/>Bin B/C · 2 task<br/>━━━━━━━━━━"]
-        L1["task#003<br/>op2 agent 银行对账<br/>▶️ 5m"]
-        L2["task#004<br/>op2 agent 银行对账<br/>▶️ 4m"]
-    end
-    subgraph Q["🔍 质检区<br/>Bin D · 1 task ⚠️<br/>━━━━━━━━━━"]
-        Q1["task#005<br/>op4 signoff 经理签核<br/>⏳ AwaitingHuman"]
-    end
-    subgraph F["✅ 成品区<br/>Bin E · 2 task<br/>━━━━━━━━━━"]
-        F1["task#006<br/>✓ 8m"]
-        F2["task#007<br/>✓ 7m"]
-    end
-    subgraph X["❌ 退货区<br/>Bin F · 1 task ⚠️<br/>━━━━━━━━━━"]
-        X1["task#008<br/>✗ 对账不平 拒收"]
-    end
+  R["R 原料区\nBin A | 2 task"]
+  R1["task#001\nop1 拉科目余额\n▶ 2m"]
+  R2["task#002\nop1 拉科目余额\n▶ 1m"]
+  L["L 线边区\nBin B/C | 2 task"]
+  L1["task#003\nop2 agent 银行对账\n▶ 5m"]
+  L2["task#004\nop2 agent 银行对账\n▶ 4m"]
+  Q["Q 质检区\nBin D | 1 task"]
+  Q1["task#005\nop4 signoff 经理签核\nAwaitingHuman"]
+  F["F 成品区\nBin E | 2 task"]
+  F1["task#006\ndone 8m"]
+  F2["task#007\ndone 7m"]
+  X["X 退货区\nBin F | 1 task"]
+  X1["task#008\nfailed 对账不平 拒收"]
 
-    R ==> L ==> Q ==> F
-    Q -.拒.-> X
+  R --> R1
+  R --> R2
+  L --> L1
+  L --> L2
+  Q --> Q1
+  F --> F1
+  F --> F2
+  X --> X1
 
-    classDef col fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
-    classDef running fill:#e0e7ff,stroke:#4f46e5,color:#312e81
-    classDef awaiting fill:#fef3c7,stroke:#f59e0b,color:#78350f
-    classDef done fill:#dcfce7,stroke:#16a34a,color:#14532d
-    classDef fail fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
-
-    class R,L,Q,F,X col
-    class R1,R2,L1,L2 running
-    class Q1 awaiting
-    class F1,F2 done
-    class X1 fail
-```
-
-    classDef raw fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
-    classDef line fill:#e0e7ff,stroke:#4f46e5,color:#312e81
-    classDef qc fill:#fef3c7,stroke:#f59e0b,color:#78350f
-    classDef fin fill:#dcfce7,stroke:#16a34a,color:#14532d
-    classDef ret fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
-
-    class R1,R2 raw
-    class L1,L2 line
-    class Q1 qc
-    class F1,F2 fin
-    class X1 ret
+  R ==> L ==> Q ==> F
+  Q -. reject .-> X
 ```
 
 ### 3.2 beeOS **workshop**（管理侧 / 设计视角）
@@ -183,24 +158,24 @@ flowchart LR
 ## 4. beeBox 内部结构
 
 ```mermaid
-graph TB
-    beeBox["beeBox 车间"]
-    bins["Bin"]
-    materials["物料 BOM 实例"]
-    bizZones["业务库区 5 个"]
-    sysZones["系统库区 1 个"]
-    raw["原料区"]
-    line["线边区"]
-    qc["质检区"]
-    finished["成品区"]
-    ret["退货区"]
-    system["系统库区"]
+flowchart TB
+  beeBox["beeBox 车间"]
+  bins["Bin 库位"]
+  materials["物料 BOM 实例"]
+  bizZones["业务库区 5 个"]
+  sysZones["系统库区 1 个"]
+  raw["原料区"]
+  line["线边区"]
+  qc["质检区"]
+  finished["成品区"]
+  ret["退货区"]
+  system["系统库区"]
 
-    beeBox --> bizZones
-    beeBox --> sysZones
-    bizZones --> bins
-    sysZones --> bins
-    bins --> materials
+  beeBox --> bizZones
+  beeBox --> sysZones
+  bizZones --> bins
+  sysZones --> bins
+  bins --> materials
 ```
 
 ### beeBox 还"装"什么（已定结论）
@@ -247,31 +222,20 @@ graph TB
 
 ```mermaid
 flowchart TD
-    start([beeline 启动])
-    op1["operation 1 · data_io<br/>读：原料区/Bin A<br/>写：线边区/Bin B"]
-    op2["operation 2 · agent<br/>读：线边区/Bin B<br/>写：线边区/Bin C<br/>→ 调 bee"]
-    op3["operation 3 · qc<br/>读：线边区/Bin C<br/>写：质检区/Bin D"]
-    op4{"operation 4 · signoff<br/>读：质检区/Bin D"}
-    op4pass["→ 写：成品区/Bin E（通过）"]
-    op4fail["→ 写：退货区/Bin F（拒绝）"]
-    finish([beeline 结束])
+  start(["beeline 启动"])
+  op1["operation 1 data_io\n读 原料区 Bin A\n写 线边区 Bin B"]
+  op2["operation 2 agent\n读 线边区 Bin B\n写 线边区 Bin C\n调 bee"]
+  op3["operation 3 qc\n读 线边区 Bin C\n写 质检区 Bin D"]
+  op4{"operation 4 signoff\n读 质检区 Bin D"}
+  op4pass["写 成品区 Bin E 通过"]
+  op4fail["写 退货区 Bin F 拒绝"]
+  finish(["beeline 结束"])
 
-    start --> op1 --> op2 --> op3 --> op4
-    op4 -->|通过| op4pass
-    op4 -->|拒绝| op4fail
-    op4pass --> finish
-    op4fail --> finish
-
-    classDef startend fill:#e0e7ff,stroke:#4f46e5,color:#312e81
-    classDef agent fill:#fce7f3,stroke:#db2777,color:#831843
-    classDef ok fill:#dcfce7,stroke:#16a34a,color:#14532d
-    classDef bad fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
-    classDef step fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
-    class start,finish startend
-    class op1,op3 step
-    class op2 agent
-    class op4pass ok
-    class op4fail bad
+  start --> op1 --> op2 --> op3 --> op4
+  op4 -->|通过| op4pass
+  op4 -->|拒绝| op4fail
+  op4pass --> finish
+  op4fail --> finish
 ```
 
 ## 6. 5 大内核组件

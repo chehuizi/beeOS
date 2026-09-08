@@ -12,7 +12,7 @@
 
 .PHONY: help install dev test lint format type-check \
         dev-box dev-bee smoke clean \
-        bee-list box-manifest
+        bee-list box-manifest verify-mermaid
 
 # === 帮助 ===
 help:  ## 显示所有命令
@@ -35,6 +35,10 @@ bee-list:  ## 列出所有已注册 Box
 
 box-manifest:  ## 打印 MonthCloseBox 的 manifest
 	uv run month-close --manifest
+
+# === 文档验证 ===
+verify-mermaid:  ## 验证 docs/architecture/kernel-design.md 的 mermaid 块（静态 + mermaid.ink 真实渲染）
+	python3 scripts/verify_mermaid.py docs/architecture/kernel-design.md
 
 smoke:  ## 一行端到端：装包 + 跑 Box + 跑 Bee + 测
 	@echo "=== 1. Box 独立跑 ===" && uv run month-close --period 2026-07

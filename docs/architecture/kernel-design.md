@@ -324,37 +324,6 @@ flowchart TD
 | 改善（Kaizen） | 度量（§4 待澄清 H）+ 审计 |
 | 标准化作业 | operation 序列本身就是标准作业（输入/输出/类型已声明清楚）|
 
-## 8. 已确定 vs 待澄清
-
-### ✅ 已确定
-- 核心要素：beeBox / beeline / bee（三大模块）+ operation（beeline 内部组件）
-- 两个控制台：kanban / workshop
-- beeline 在 beeBox 内执行
-- operation 驱动物料在 5 业务库区间流转
-- 节点命名为 `operation`（operation 即标准作业，不另设 SOP 层）
-- operation 必含：seq / type / input_location / output_location
-- 4 种基础 operation 类型：data_io / transform / agent / qc / signoff
-- agent operation 才调 bee
-- **物料 = BOM 实例 = 库位上放的被动资源（数据 / 工具 / 文档等）；bee 不是物料**
-- **§4 A-H 8 项全部定论**（详见 §4 表格）
-- **库区 = 2 类（业务库区 + 系统库区）**：业务库区 5 个（原料/线边/质检/成品/退货，物料流转）+ 系统库区 1 个（凭证/连接/限流，bee 按需调取）
-- **库位（Bin）是统一管理粒度**——所有物料（含凭证）都按 Bin 存放
-- **凭证也是物料**（系统库区 Bin 存放）—— 跟"工具也按物料管理"原则一致
-- **所有库位上的物料 = 某种 BOM 的 instance**（schema 在 BOM 中心，instance 在 Bin）
-- operation 用 `credential_ref` 指向系统库区 Bin（bee 从 Bin 拿凭证）
-- **beeline 模板（工艺路线 schema）独立于 BOM 中心（物料清单 schema）**—— 两个独立的 beeOS 资产
-
-### ❓ 待继续打磨（v0.2+）
-- 跨 beeBox 协作（1 个 task 能不能跨车间）
-- 系统库区凭证管理（凭证加密 / 注入 / 轮转 / 审计）
-- bee 注册表的查找 / 加载 / 释放机制
-- 物料粒度（字段 / 记录 / 文件）
-- kanban 移动端 / 大屏
-- workshop 多租户协作
-- operation 编排是否支持并行 / 条件分支
-
-> **BOM 中心 / beeline 模板库 部署形态**已挪到 §9 统一讨论。
-
 ## 9. 部署形态（修订中）
 
 > **状态**：v0.1 草稿 · 修订中（需要你审 §9.4 单机版推荐 + §9.8 待澄清）
@@ -493,3 +462,70 @@ flowchart TD
 - 企业版调度进程具体调度什么（beeline 路由 / bee 资源池 / task 队列？）
 - 单 beeBox 内的"多业务领域"是不是允许（单机版/团队版一个 beeBox = 1 个业务领域？还是支持多？）
 - beeOS 整体的"操作系统级"能力要不要做（进程监控 / 资源隔离 / 安全沙箱）—— 现在没设计
+
+> §9 范围内的待澄清已挪到 §10 统一管理。
+
+## 10. 决策日志（已确定 vs 待澄清）
+
+> **本节是跨章节的"决策状态"汇总**——前面 §0-§9 写的是设计正文，本节是"哪些已经定、哪些还要讨论"。本节应随每次设计推进而更新。
+
+### 10.1 ✅ 已确定
+
+**核心要素**
+- 核心要素：beeBox / beeline / bee（三大模块）+ operation（beeline 内部组件）
+- 两个控制台：kanban / workshop
+- beeline 在 beeBox 内执行
+- operation 驱动物料在 5 业务库区间流转
+
+**operation**
+- 节点命名为 `operation`（operation 即标准作业，不另设 SOP 层）
+- operation 必含：seq / type / input_location / output_location
+- 4 种基础 operation 类型：data_io / transform / agent / qc / signoff
+- agent operation 才调 bee
+- operation 用 `credential_ref` 指向系统库区 Bin（bee 从 Bin 拿凭证）
+
+**物料 / 库区 / 凭证**
+- **物料 = BOM 实例 = 库位上放的被动资源（数据 / 工具 / 文档等）；bee 不是物料**
+- **库区 = 2 类（业务库区 + 系统库区）**：业务库区 5 个（原料/线边/质检/成品/退货，物料流转）+ 系统库区 1 个（凭证/连接/限流，bee 按需调取）
+- **库位（Bin）是统一管理粒度**——所有物料（含凭证）都按 Bin 存放
+- **凭证也是物料**（系统库区 Bin 存放）—— 跟"工具也按物料管理"原则一致
+- **所有库位上的物料 = 某种 BOM 的 instance**（schema 在 BOM 中心，instance 在 Bin）
+- **§4 A-H 8 项全部定论**（详见 §4 表格）
+
+**资产 / 模板**
+- **beeline 模板（工艺路线 schema）独立于 BOM 中心（物料清单 schema）**—— 两个独立的 beeOS 资产
+- **资产服务的存储层 = 文件系统抽象**（本地 fs / OSS / S3），上层是 domain API（schema / 版本 / 引用 / 权限）
+
+**部署形态（§9）**
+- **beeOS 没有独立进程**——是进程集合（产品 / 部署名）
+- **每个 beeBox 是 1 个独立进程**（单机版 N=1，团队版 / 企业版 N>1）
+- **控制台永远 1 个独立进程**（kanban / workshop 各 1 个）——多用户靠单进程内并发扛，要更大规模是"加机器"不是"加进程"
+- **单机版 = 3 进程**（1 个 beeBox + 1 个 kanban + 1 个 workshop）
+- **团队版 = N+3 进程**（N 个 beeBox + 1 个资产服务 + 1 个 kanban + 1 个 workshop）
+- **企业版 = N+4 进程**（1 个调度 + N 个 beeBox + 1 个资产服务 + 1 个 kanban + 1 个 workshop）
+- **资产层 = 内嵌（单机版）→ 远端（团队版 / 企业版）**——按触发条件升级
+- **命名按目标规模**：单机版 / 团队版 / 企业版（不用 M0/V1/V2 之类的版本号）
+
+### 10.2 ❓ 待澄清
+
+**跨章节（v0.2+）**
+- 跨 beeBox 协作（1 个 task 能不能跨车间）
+- 系统库区凭证管理（凭证加密 / 注入 / 轮转 / 审计）
+- bee 注册表的查找 / 加载 / 释放机制
+- 物料粒度（字段 / 记录 / 文件）
+- kanban 移动端 / 大屏
+- workshop 多租户协作
+- operation 编排是否支持并行 / 条件分支
+- **§10 beeOS kernel 子系统要不要新增**（类比 Linux kernel 5 大子系统：进程 / 内存 / 文件系统 / 网络 / 设备驱动）
+
+**部署形态（§9 范围内）**
+- 单机版启动 CLI 名（`beebox` / `kanban` / `workshop` / 统一 `beeos` ——避免旧 M0/M1 名字）
+- 单机版 3 进程启动方式（1 个 CLI 拉 3 子进程 / 3 个独立 CLI 各自起）
+- 单机版控制台 ↔ beeBox 进程通信协议（HTTP REST / WebSocket / gRPC）
+- 单机版持久化格式（BOM 用 JSON / YAML / SQLite？）
+- 团队版远端资产服务的 API 形态（REST / gRPC / 文件 watch？）
+- 企业版调度进程具体调度什么（beeline 路由 / bee 资源池 / task 队列？）
+- 单 beeBox 内的"多业务领域"是不是允许（单机版/团队版一个 beeBox = 1 个业务领域？还是支持多？）
+- beeOS 整体的"操作系统级"能力要不要做（进程监控 / 资源隔离 / 安全沙箱）—— 现在没设计
+
+> 任何"待澄清"定下来后，移到 §10.1 已确定，并在对应章节加详细设计。

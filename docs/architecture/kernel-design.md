@@ -17,29 +17,26 @@ beeBox 内部库区分为 **2 类**：**业务库区**（5 个：原料/线边/�
 graph TB
     beeOS["beeOS"]
 
-    kanban["kanban<br/>（用户）<br/>看板视图"]
-    workshop["workshop<br/>（管理）<br/>设计视图"]
+    kanban["kanban<br/>看板视图"]
+    workshop["workshop<br/>设计视图"]
 
-    beeBox["beeBox · 车间"]
+    beeBox["beeBox 车间"]
     bins["Bin"]
     materials["物料"]
-    beeline["beeline · 工艺路线"]
-    operations["operation 序列<br/>（工序）"]
+    beeline["beeline 工艺路线"]
+    operations["operation 序列"]
     opBasic["data_io / transform / qc / signoff"]
     opAgent["agent"]
-    bee["bee · 工人"]
+    bee["bee 工人"]
 
-    subgraph bizZones["业务库区 5 个"]
-        raw["原料区 · Raw"]
-        line["线边区 · Line-side"]
-        qc["质检区 · QC"]
-        finished["成品区 · Finished"]
-        ret["退货区 · Return"]
-    end
-
-    subgraph sysZones["系统库区 1 个"]
-        system["系统库区 · System"]
-    end
+    bizZones["业务库区<br/>5 个"]
+    sysZones["系统库区<br/>1 个"]
+    raw["原料区"]
+    line["线边区"]
+    qc["质检区"]
+    finished["成品区"]
+    ret["退货区"]
+    system["系统库区"]
 
     beeOS --> kanban
     beeOS --> workshop
@@ -57,18 +54,6 @@ graph TB
     operations --> opBasic
     operations --> opAgent
     opAgent -.调.-> bee
-
-    classDef console fill:#fef3c7,stroke:#f59e0b,color:#78350f
-    classDef box fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
-    classDef flow fill:#dcfce7,stroke:#16a34a,color:#14532d
-    classDef worker fill:#fce7f3,stroke:#db2777,color:#831843
-    classDef sys fill:#fef3c7,stroke:#f59e0b,color:#78350f
-
-    class kanban,workshop console
-    class beeBox,bins,materials box
-    class beeline,operations,opBasic,opAgent flow
-    class bee worker
-    class system sys
 ```
 
 ## 2. 核心要素
@@ -199,38 +184,23 @@ flowchart LR
 
 ```mermaid
 graph TB
-    beeBox["beeBox · 车间<br/>（归属 1 个业务领域）"]
-    bins["库位 · Bin<br/>每个库区下细分（统一管理粒度）"]
-    materials["物料 · Material（BOM 实例）<br/>数据 / 工具 / 凭证 / 文档等<br/>所有 Bin 上的物料都有 schema（BOM）"]
-
-    subgraph bizZones["业务库区 5 个"]
-        raw["原料区 · Raw<br/>外部输入 / 原始数据"]
-        line["线边区 · Line-side<br/>加工中 / 中间结果"]
-        qc["质检区 · QC<br/>验证 / 审核 / 签核"]
-        finished["成品区 · Finished<br/>最终产出"]
-        ret["退货区 · Return<br/>异常 / 返工"]
-    end
-
-    subgraph sysZones["系统库区 1 个"]
-        system["系统库区 · System"]
-    end
+    beeBox["beeBox 车间"]
+    bins["Bin"]
+    materials["物料 BOM 实例"]
+    bizZones["业务库区 5 个"]
+    sysZones["系统库区 1 个"]
+    raw["原料区"]
+    line["线边区"]
+    qc["质检区"]
+    finished["成品区"]
+    ret["退货区"]
+    system["系统库区"]
 
     beeBox --> bizZones
     beeBox --> sysZones
     bizZones --> bins
     sysZones --> bins
     bins --> materials
-
-    classDef box fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
-    classDef ok fill:#dcfce7,stroke:#16a34a,color:#14532d
-    classDef bad fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
-    classDef neutral fill:#f3f4f6,stroke:#6b7280,color:#1f2937
-    classDef sys fill:#fef3c7,stroke:#f59e0b,color:#78350f
-    class beeBox,bins,materials box
-    class raw,line neutral
-    class qc,finished ok
-    class ret bad
-    class system sys
 ```
 
 ### beeBox 还"装"什么（已定结论）

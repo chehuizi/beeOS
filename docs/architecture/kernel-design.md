@@ -119,31 +119,42 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-  R["R 原料区\nBin A | 2 task"]
-  R1["task#001\nop1 拉科目余额\n▶ 2m"]
-  R2["task#002\nop1 拉科目余额\n▶ 1m"]
-  L["L 线边区\nBin B/C | 2 task"]
-  L1["task#003\nop2 agent 银行对账\n▶ 5m"]
-  L2["task#004\nop2 agent 银行对账\n▶ 4m"]
-  Q["Q 质检区\nBin D | 1 task"]
-  Q1["task#005\nop4 signoff 经理签核\nAwaitingHuman"]
-  F["F 成品区\nBin E | 2 task"]
-  F1["task#006\ndone 8m"]
-  F2["task#007\ndone 7m"]
-  X["X 退货区\nBin F | 1 task"]
-  X1["task#008\nfailed 对账不平 拒收"]
-
-  R --> R1
-  R --> R2
-  L --> L1
-  L --> L2
-  Q --> Q1
-  F --> F1
-  F --> F2
-  X --> X1
+  subgraph R["R 原料区"]
+    R1["task#001\nop1 拉科目余额\n▶ 2m"]
+    R2["task#002\nop1 拉科目余额\n▶ 1m"]
+  end
+  subgraph L["L 线边区"]
+    L1["task#003\nop2 agent 银行对账\n▶ 5m"]
+    L2["task#004\nop2 agent 银行对账\n▶ 4m"]
+  end
+  subgraph Q["Q 质检区"]
+    Q1["task#005\nop4 signoff 经理签核\nAwaitingHuman"]
+  end
+  subgraph F["F 成品区"]
+    F1["task#006\ndone 8m"]
+    F2["task#007\ndone 7m"]
+  end
+  subgraph X["X 退货区"]
+    X1["task#008\nfailed 对账不平 拒收"]
+  end
 
   R ==> L ==> Q ==> F
   Q -. reject .-> X
+
+  classDef raw fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+  classDef line fill:#e0e7ff,stroke:#4f46e5,color:#312e81
+  classDef qc fill:#fef3c7,stroke:#d97706,color:#78350f
+  classDef fin fill:#dcfce7,stroke:#16a34a,color:#14532d
+  classDef ret fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+
+  class R1 raw
+  class R2 raw
+  class L1 line
+  class L2 line
+  class Q1 qc
+  class F1 fin
+  class F2 fin
+  class X1 ret
 ```
 
 ### 3.2 beeOS **workshop**（管理侧 / 设计视角）

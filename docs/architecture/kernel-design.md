@@ -41,6 +41,12 @@ flowchart TB
   workshop -. write .-> beeBox
   beeBox --> bizZones
   beeBox --> sysZones
+  bizZones --> raw
+  bizZones --> line
+  bizZones --> qc
+  bizZones --> finished
+  bizZones --> ret
+  sysZones --> system
   bizZones --> bins
   sysZones --> bins
   bins --> materials
@@ -173,6 +179,12 @@ flowchart TB
 
   beeBox --> bizZones
   beeBox --> sysZones
+  bizZones --> raw
+  bizZones --> line
+  bizZones --> qc
+  bizZones --> finished
+  bizZones --> ret
+  sysZones --> system
   bizZones --> bins
   sysZones --> bins
   bins --> materials

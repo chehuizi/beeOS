@@ -54,6 +54,30 @@ flowchart TB
   operations --> opBasic
   operations --> opAgent
   opAgent -. call .-> bee
+
+  classDef console fill:#fef3c7,stroke:#d97706,color:#78350f
+  classDef box fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+  classDef flow fill:#dcfce7,stroke:#16a34a,color:#14532d
+  classDef worker fill:#fce7f3,stroke:#db2777,color:#831843
+  classDef bizzone fill:#e0f2fe,stroke:#0284c7,color:#075985
+  classDef syszone fill:#ffedd5,stroke:#ea580c,color:#7c2d12
+
+  class kanban console
+  class workshop console
+  class beeBox box
+  class bins box
+  class materials box
+  class beeline flow
+  class operations flow
+  class opBasic flow
+  class opAgent flow
+  class bee worker
+  class raw bizzone
+  class line bizzone
+  class qc bizzone
+  class finished bizzone
+  class ret bizzone
+  class system syszone
 ```
 
 ## 2. 核心要素
@@ -184,6 +208,20 @@ flowchart TB
   biz --> bins
   sys --> bins
   bins --> materials
+
+  classDef box fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+  classDef bizzone fill:#e0f2fe,stroke:#0284c7,color:#075985
+  classDef syszone fill:#ffedd5,stroke:#ea580c,color:#7c2d12
+
+  class beeBox box
+  class bins box
+  class materials box
+  class raw bizzone
+  class line bizzone
+  class qc bizzone
+  class finished bizzone
+  class ret bizzone
+  class system syszone
 ```
 
 ### beeBox 还"装"什么（已定结论）

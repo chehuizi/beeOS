@@ -373,29 +373,28 @@ flowchart TD
 
 **进程层 = A 单机版（3 进程：1 个 beeBox + kanban + workshop）**
 
-```text
-┌───────────────── beeBox 进程（1 个独立进程）─────────────────┐
-│                                                              │
-│  车间      beeline      bee                                  │
-│  beeBox    (工艺路线)   (工人)                               │
-│                                                              │
-│  资产层    BOM 中心     beeline 模板库                       │
-│            (内嵌 dict)  (内嵌 dict)                          │
-│                                                              │
-│  内部通信  直接函数调用 / 进程内消息                          │
-│  外部接口  HTTP / WebSocket（供 kanban / workshop 调用）      │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
-                            ▲
-                            │ HTTP / WebSocket
-                            │
-       ┌────────────────────┼────────────────────┐
-       │                    │                    │
-┌──────┴──────┐    ┌────────┴────────┐
-│  kanban 进程 │    │ workshop 进程   │
-│  (用户侧 UI)  │    │  (管理侧 UI)     │
-│  独立 1 进程  │    │  独立 1 进程     │
-└─────────────┘    └─────────────────┘
+```mermaid
+flowchart TB
+  subgraph beeBox["beeBox 进程 1 个独立进程"]
+    beeline["beeline 工艺路线"]
+    bee["bee 工人"]
+    bom["BOM 中心 内嵌 dict"]
+    template["beeline 模板库 内嵌 dict"]
+  end
+
+  kanban["kanban 进程 用户侧 UI"]
+  workshop["workshop 进程 管理侧 UI"]
+
+  kanban -. HTTP WebSocket .-> beeBox
+  workshop -. HTTP WebSocket .-> beeBox
+
+  classDef process fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+  classDef asset fill:#e0f2fe,stroke:#0284c7,color:#075985
+  classDef console fill:#fef3c7,stroke:#d97706,color:#78350f
+
+  class beeline,bee process
+  class bom,template asset
+  class kanban,workshop console
 ```
 
 **核心约束（已修订）**：

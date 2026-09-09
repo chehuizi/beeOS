@@ -43,12 +43,6 @@ flowchart TB
   workshop -. write .-> beeBox
   beeBox --> biz
   beeBox --> sys
-  biz --> raw
-  biz --> line
-  biz --> qc
-  biz --> finished
-  biz --> ret
-  sys --> system
   biz --> bins
   sys --> bins
   bins --> materials

@@ -308,7 +308,9 @@ flowchart TD
   op4fail --> finish
 ```
 
-## 7. 5 大内核组件
+## 7. 5 大内核组件 & task E2E 流程
+
+### 7.1 5 大内核组件（运行时视角）
 
 | 编号 | 名称 | 职责 | 在哪运行 |
 |---|---|---|---|
@@ -317,6 +319,64 @@ flowchart TD
 | ③ | Beeline Cache | 缓存 beeline 模板（独立于 BOM 中心）| beeBox 内部 |
 | ④ | Bee Planner | beeline miss 时规划 | beeBox 内部 |
 | ⑤ | Beeline Executor | 在 beeBox 内部执行 beeline operation | beeBox 内部 |
+
+### 7.2 task E2E 流程（一个 task 从进入到完成）
+
+**触发 → 接收 → 定位 → operation 循环 → 完成**：
+
+```mermaid
+flowchart TB
+  trigger["触发\nkanban 触发 / 系统事件 / 调度器"]
+  receive["① Task Receiver 接收\n校验 + 分配 task ID"]
+  locateHit{"beeline 命中？"}
+  cache["③ Beeline Cache 命中\n加载已缓存的 beeline 模板"]
+  planner["④ Bee Planner 规划\nbeeline miss 时"]
+  init["初始化 task state\n物料进入第一个 input_location"]
+  loop["⑤ Beeline Executor\n按 seq 顺序执行 operation"]
+  exception{"op 异常？"}
+  returnTo["退货区 AwaitingHuman\n等人工在 kanban 认领"]
+  signoff{"最后 op 是 signoff？"}
+  finished["完成\n物料到成品区"]
+  kanban["状态同步到 kanban\nDone 状态"]
+  audit["审计 / 度量记录"]
+
+  trigger --> receive
+  receive --> locateHit
+  locateHit -->|是| cache
+  locateHit -->|否| planner
+  cache --> init
+  planner --> init
+  init --> loop
+  loop --> exception
+  exception -->|是| returnTo
+  exception -->|否| signoff
+  returnTo --> kanban
+  signoff -->|是| finished
+  signoff -->|否| loop
+  finished --> kanban
+  kanban --> audit
+```
+
+**流程阶段说明**：
+
+| 阶段 | 涉及组件 | 关键动作 |
+|---|---|---|
+| 1. 触发 | （外部）| kanban 上点"新建 task" / 系统事件触发 / 调度器分发（企业版）|
+| 2. 接收 | ① Task Receiver | 校验输入 / 权限，分配 task ID，写入 task state |
+| 3. 定位 beeline | ③ Beeline Cache / ④ Bee Planner | 命中 → 加载；miss → Bee Planner 规划（推荐 beeline）|
+| 4. 初始化 | （Beeline Executor 内部）| 物料从原料区拉到 beeline 第一个 op 的 input_location |
+| 5. operation 循环 | ⑤ Beeline Executor | 按 seq 顺序执行 op；每 op 完成 = 物料流转到 output_location |
+| 6. 异常处理 | （异常回流逻辑）| 任意 op 异常 → 物料到退货区 AwaitingHuman，等人工认领 |
+| 7. 签核 / 完成 | ⑤ Beeline Executor | signoff op 通过 → 物料到成品区；qc / data_io / transform / agent → 直接下一 op |
+| 8. 状态同步 | ③ Beeline Cache 旁路 / kanban 进程 | 实时推 task 状态变化到 kanban 控制台 |
+| 9. 审计 | （Beeline Executor 旁路）| 写 task 审计日志 / 度量数据 |
+
+**关键约束**：
+- **operation 严格按 seq 顺序执行**——不允许并行（v0.1），避免物料竞争（参考 §6.2 operation 必含属性）
+- **物料在 op 之间流转**——每个 op 必须显式声明 input_location / output_location（参考 §6.2）
+- **agent op 调 bee**——bee 从系统库区拿凭证（参考 §5.1 / §6.2 credential_ref）
+- **异常就回退货区**——不重试，不跳过（v0.1 简化），等人工处理
+- **状态实时同步 kanban**——task 状态变化立刻推，不批处理
 
 ## 8. 部署形态（修订中）
 

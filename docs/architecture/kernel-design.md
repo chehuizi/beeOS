@@ -80,7 +80,20 @@ flowchart TB
   class system syszone
 ```
 
-## 2. 核心要素
+## 2. 精益概念 ↔ beeOS 映射
+
+| 精益概念 | beeOS 落地 |
+|---|---|
+| 价值流（Value Stream） | beeline |
+| 标准化作业 | beeline 模板（operation 序列）|
+| 自働化（Jidoka） | bee 智能体 + 异常回流 |
+| 看板（Kanban） | kanban 控制台 + Bin 在制视图 |
+| 拉动（Pull） | Task Receiver 接收触发 |
+| 单件流（One-piece Flow）| operation 一次执行一份物料 |
+| 改善（Kaizen） | 度量（§4 待澄清 H）+ 审计 |
+| 标准化作业 | operation 序列本身就是标准作业（输入/输出/类型已声明清楚）|
+
+## 3. 核心要素
 
 ### 三大模块
 
@@ -96,9 +109,9 @@ flowchart TB
 |---|---|---|---|
 | **operation** | 工序 | beeline 的一步 | 驱动物料在 Bin 间流转 |
 
-## 3. 两个控制台
+## 4. 两个控制台
 
-### 3.1 beeOS **kanban**（用户侧 / 现场视角）
+### 4.1 beeOS **kanban**（用户侧 / 现场视角）
 
 - **面向**：终端用户 / 操作员 / 业务人员
 - **核心问题**：现在 task 在 beeBox 里怎么跑？跑到哪了？哪里堵？哪里出问题？
@@ -157,7 +170,7 @@ flowchart LR
   class X1 ret
 ```
 
-### 3.2 beeOS **workshop**（管理侧 / 设计视角）
+### 4.2 beeOS **workshop**（管理侧 / 设计视角）
 
 - **面向**：管理员 / 业务分析师 / 工艺工程师
 - **核心问题**：这个 beeBox 需要什么 beeline / operation / 物料 / bee？
@@ -183,7 +196,7 @@ flowchart LR
 | **beeline 模板库** | **跨 beeBox 共享 beeline 模板**（工艺路线 schema，独立于 BOM 中心）|
 | BOM 中心 | 跨 beeBox 共享 BOM（物料清单 schema）|
 
-### 3.3 读写关系
+### 4.3 读写关系
 
 | 控制台 | 输入（看 / 基于什么） | 操作（做 / 产出什么） |
 |---|---|---|
@@ -194,7 +207,7 @@ flowchart LR
 
 > **库位（Bin）是统一管理粒度**——所有库区（业务 5 + 系统 1）下面都有 Bin，所有物料（数据 / 工具 / 凭证 / 文档等）都按 Bin 存放。
 
-## 4. beeBox 内部结构
+## 5. beeBox 内部结构
 
 ```mermaid
 flowchart TB
@@ -248,9 +261,9 @@ flowchart TB
 | G | 看板 / 状态 | ✅ **已定** | 看板 = beeBox 物理层（6 库区/Bin/物料状态）+ kanban 控制台层 |
 | H | 度量（Metrics） | ✅ **已定** | metrics 从 Bin 物料数 + operation.elapsed 派生，不需要单独服务 |
 
-## 5. beeline 与 operation
+## 6. beeline 与 operation
 
-### 5.1 operation 类型
+### 6.1 operation 类型
 
 | type | 是否需要 bee | 例子 |
 |---|---|---|
@@ -262,7 +275,7 @@ flowchart TB
 
 > 关键：**不是每个 operation 都需要 bee**。只有需要"判断/推理/对话"的 operation 才放 bee。
 
-### 5.2 operation 必含属性
+### 6.2 operation 必含属性
 
 | 属性 | 必含 | 含义 |
 |---|---|---|
@@ -275,7 +288,7 @@ flowchart TB
 | qc_rules | 🟡 qc 才有 | 校验规则 |
 | exception_handler | 🟡 | 异常处理（退货区 / 重试 / 人工）|
 
-### 5.3 数据流（operation 驱动物料在 5 业务库区间流转）
+### 6.3 数据流（operation 驱动物料在 5 业务库区间流转）
 
 ```mermaid
 flowchart TD
@@ -295,7 +308,7 @@ flowchart TD
   op4fail --> finish
 ```
 
-## 6. 5 大内核组件
+## 7. 5 大内核组件
 
 | 编号 | 名称 | 职责 | 在哪运行 |
 |---|---|---|---|
@@ -304,19 +317,6 @@ flowchart TD
 | ③ | Beeline Cache | 缓存 beeline 模板（独立于 BOM 中心）| beeBox 内部 |
 | ④ | Bee Planner | beeline miss 时规划 | beeBox 内部 |
 | ⑤ | Beeline Executor | 在 beeBox 内部执行 beeline operation | beeBox 内部 |
-
-## 7. 精益概念 ↔ beeOS 映射
-
-| 精益概念 | beeOS 落地 |
-|---|---|
-| 价值流（Value Stream） | beeline |
-| 标准化作业 | beeline 模板（operation 序列）|
-| 自働化（Jidoka） | bee 智能体 + 异常回流 |
-| 看板（Kanban） | kanban 控制台 + Bin 在制视图 |
-| 拉动（Pull） | Task Receiver 接收触发 |
-| 单件流（One-piece Flow）| operation 一次执行一份物料 |
-| 改善（Kaizen） | 度量（§4 待澄清 H）+ 审计 |
-| 标准化作业 | operation 序列本身就是标准作业（输入/输出/类型已声明清楚）|
 
 ## 8. 部署形态（修订中）
 

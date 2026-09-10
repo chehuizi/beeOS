@@ -254,7 +254,7 @@ flowchart TB
 |---|---|---|---|
 | A | 适配器（Adapter） | ✅ **已定** | 适配器 = 物料的一种（工具类），beeBox 通过 Bin 装适配器 |
 | B | 资源 / 凭证 | ✅ **已定** | 凭证 = 物料 = 凭证类 BOM 的实例。schema 在 BOM 中心，instance 在系统库区 Bin，bee 加工时按需调取（`operation.credential_ref`）|
-| C | 业务规则（Rule） | ✅ **已定** | 规则在 beeline / operation 里（operation.qc_rules / 约束），beeBox 不单独管 |
+| C | 业务规则（Rule） | ✅ **已定** | 规则在 beeline / operation 里（operation.rules / 约束），beeBox 不单独管 |
 | D | **bee 工人池** | ✅ **已定** | bee 跟随 beeline，按需加载（operation.bee_ref 拉取）|
 | E | 异常回流 | ✅ **已定** | 初始阶段：退货区物料 = AwaitingHuman 状态，等人工在 kanban 上认领处理 |
 | F | Bin 流转规则 | ✅ **已定** | 物料只能按 operation 规定的路径流转（input_locations → output_locations）|
@@ -285,7 +285,7 @@ flowchart TB
 | output_locations | ✅ | 落到哪些 Bin 可多 |
 | bee_ref | 🟡 agent 才有 | 被调的 bee（如 `beex.finance.bank_reconciler`）—— 按需从 bee 注册表加载 |
 | credential_ref | 🟡 agent 才有 | 指向系统库区 Bin（凭证 / 连接 / 限流类物料），bee 从 Bin 拿凭证 |
-| qc_rules | 🟡 qc 才有 | 校验规则 |
+| rules | 🟡 qc 必含 | handler 的输入参数（按 type 不同而不同，qc 是校验规则、data_io 是数据格式、agent 是 prompt 等）|
 | exception_handler | 🟡 | 异常处理（退货区 / 重试 / 人工）|
 
 ### 6.3 数据流（operation 驱动物料在 5 业务库区间流转）

@@ -6,7 +6,7 @@
 
 ## 0. 一句话
 
-beeOS 三大模块 **beeBox（容器）/ beeline（流水线）/ bee（工人）**，两个控制台 **kanban（用户）/ workshop（管理）**。
+beeOS 三大模块 **beeBox（车间）/ beeline（流水线）/ bee（工人）**，两个控制台 **kanban（用户）/ workshop（管理）**。
 **beeline 在 beeBox 内跑**，由 **operation（工序）** 序列组成（operation 是 beeline 内部组件），**agent operation 调 bee**；
 beeBox 内部库区分为 **2 类**：**业务库区**（5 个：原料/线边/质检/成品/退货，物料流转）+ **系统库区**（1 个：凭证/连接/限流，bee 按需调取）。
 每个 operation 驱动物料在 **5 业务库区**间流转。
@@ -99,7 +99,7 @@ flowchart TB
 
 | 模块 | 类比 | 定位 | 关系 |
 |---|---|---|---|
-| **beeBox** | 车间 | 容器 | beeline 在它内部执行；bee 被它调度 |
+| **beeBox** | 车间 | 容器（装 beeline / bee / 库区）| beeline 在它内部执行；bee 被它调度 |
 | **beeline** | 流水线 / 工艺路线 | beeBox 内的工作流 | 由 operation 序列组成；agent operation 调 bee |
 | **bee** | 工人 | 智能体执行者 | 被 agent operation 调用 |
 

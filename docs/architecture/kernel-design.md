@@ -257,7 +257,7 @@ flowchart TB
 | C | 业务规则（Rule） | ✅ **已定** | 规则在 beeline / operation 里（operation.rules / 约束），beeBox 不单独管 |
 | D | **bee 工人池** | ✅ **已定** | bee 跟随 beeline，按需加载（operation.bee_ref 拉取）|
 | E | 异常回流 | ✅ **已定** | 初始阶段：退货区物料 = AwaitingHuman 状态，等人工在 kanban 上认领处理 |
-| F | Bin 流转规则 | ✅ **已定** | 物料只能按 operation 规定的路径流转（input_locations → output_locations）|
+| F | Bin 流转规则 | ✅ **已定** | **业务物料**按 operation 规定的路径流转（input_locations → output_locations）；**系统物料**（凭证 / 连接 / 限流）在原地被 operation / bee 读取，不参与流转 |
 | G | 看板 / 状态 | ✅ **已定** | 看板 = beeBox 物理层（6 库区/Bin/物料状态）+ kanban 控制台层 |
 | H | 度量（Metrics） | ✅ **已定** | metrics 从 Bin 物料数 + operation.elapsed 派生，不需要单独服务 |
 
@@ -284,8 +284,8 @@ flowchart TB
 | input_locations | ✅ | 读哪些 Bin 可多 |
 | output_locations | ✅ | 落到哪些 Bin 可多 |
 | bee_ref | 🟡 agent 才有 | 被调的 bee（如 `beex.finance.bank_reconciler`）—— 按需从 bee 注册表加载 |
-| credential_ref | 🟡 agent 才有 | 指向系统库区 Bin（凭证 / 连接 / 限流类物料），bee 从 Bin 拿凭证 |
-| rules | 🟡 qc 必含 | handler 的输入参数（按 type 不同而不同，qc 是校验规则、data_io 是数据格式、agent 是 prompt 等）|
+| credential_ref | 🟡 agent 才有 | 指向**系统物料**（凭证 / 连接 / 限流的 BOM instance），bee 从 Bin 拿系统物料（只读不流转）|
+| rules | 🟡 qc 必含 | op 的输入参数（按 type 不同而不同——qc 是校验规则、data_io 是数据格式 / 字段必填、transform 是字段映射 / 缺省值、agent 是 prompt 模板 / 输出 schema、signoff 是审批规则）|
 | exception_handler | 🟡 | 异常处理（退货区 / 重试 / 人工）|
 
 ### 6.3 数据流（operation 驱动物料在 5 业务库区间流转）
@@ -539,10 +539,13 @@ flowchart TB
 - operation 用 `credential_ref` 指向系统库区 Bin（bee 从 Bin 拿凭证）
 
 **物料 / 库区 / 凭证**
-- **物料 = BOM 实例 = 库位上放的被动资源（数据 / 工具 / 文档等）；bee 不是物料**
+- **物料 = BOM 实例 = 库位上放的被动资源（数据 / 工具 / 凭证 / 文档等）；bee 不是物料**
 - **库区 = 2 类（业务库区 + 系统库区）**：业务库区 5 个（原料/线边/质检/成品/退货，物料流转）+ 系统库区 1 个（凭证/连接/限流，bee 按需调取）
 - **库位（Bin）是统一管理粒度**——所有物料（含凭证）都按 Bin 存放
-- **凭证也是物料**（系统库区 Bin 存放）—— 跟"工具也按物料管理"原则一致
+- **物料 = 业务物料 + 系统物料**：
+  - **业务物料** = 被 operation 驱动流转的（input → output 路径），如科目余额、PDF、对账结果
+  - **系统物料** = 被 operation / bee 读取的（**只读不流转**），如凭证、连接、限流配置、数据集
+  - 两者都符合 BOM schema，区别是"使用方式"（流转 vs 只读）
 - **所有库位上的物料 = 某种 BOM 的 instance**（schema 在 BOM 中心，instance 在 Bin）
 - **§4 A-H 8 项全部定论**（详见 §4 表格）
 

@@ -308,9 +308,9 @@ flowchart TD
   op4fail --> finish
 ```
 
-## 7. 5 大内核组件 & task E2E 流程
+## 7. 内核组件 & task E2E 流程
 
-### 7.1 5 大内核组件（运行时视角）
+### 7.1 内核组件（运行时视角）
 
 | 编号 | 名称 | 职责 | 在哪运行 |
 |---|---|---|---|
@@ -502,7 +502,8 @@ flowchart TB
 - **§1 关系总览**里的"业务库区/系统库区" = beeBox 进程内的逻辑模块（不独立进程）
 - **§3 kanban / workshop** = 各自独立 1 进程（**v0.1 之前说是"进程内 Web 路由"是错的**）
 - **§4 beeBox 内部结构**的"beeBox 车间"框 = 1 个 beeBox 进程（含三大模块 + 资产 + 库区 / Bin / 物料）
-- **§6 5 大内核组件** = beeBox 进程内的逻辑组件（Task Receiver / Router / Beeline Cache / Bee Planner / Beeline Executor）
+- **§7 内核组件** = beeBox 进程内的运行时组件（Task Receiver / Beeline Cache / Bee Planner / Beeline Executor）+ Kernel 顶层 Router
+- **§7.2 task E2E 流程** = 触发 → 接收 → 定位 beeline → operation 循环 → 完成
 - **§7 精益概念映射**里的"看板/标准化作业"= 控制台进程 + beeBox 进程分别暴露的视图 / 资源
 
 ### 8.8 ❓ 待澄清（§8 范围内）

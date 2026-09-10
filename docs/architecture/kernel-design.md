@@ -310,15 +310,16 @@ flowchart TD
 
 ## 7. 内核组件 & task E2E 流程
 
-### 7.1 内核组件（运行时视角）
+### 7.1 内核组件（beeBox 进程内部）
 
 | 编号 | 名称 | 职责 | 在哪运行 |
 |---|---|---|---|
 | ① | Task Receiver | 接收任务 | beeBox 入口 |
-| ② | beeBox Router | 路由到目标 beeBox | Kernel 顶层 |
-| ③ | Beeline Cache | 缓存 beeline 模板（独立于 BOM 中心）| beeBox 内部 |
-| ④ | Bee Planner | beeline miss 时规划 | beeBox 内部 |
-| ⑤ | Beeline Executor | 在 beeBox 内部执行 beeline operation | beeBox 内部 |
+| ② | Beeline Cache | 缓存 beeline 模板（独立于 BOM 中心）| beeBox 内部 |
+| ③ | Bee Planner | beeline miss 时规划 | beeBox 内部 |
+| ④ | Beeline Executor | 在 beeBox 内部执行 beeline operation | beeBox 内部 |
+
+> **beeBox Router / 调度器不在 beeBox 内部**——按规模分级，详见 §8.9。
 
 ### 7.2 task E2E 流程（一个 task 从进入到完成）
 
@@ -514,8 +515,9 @@ flowchart TB
 - **§1 关系总览**里的"业务库区/系统库区" = beeBox 进程内的逻辑模块（不独立进程）
 - **§3 kanban / workshop** = 各自独立 1 进程（**v0.1 之前说是"进程内 Web 路由"是错的**）
 - **§4 beeBox 内部结构**的"beeBox 车间"框 = 1 个 beeBox 进程（含三大模块 + 资产 + 库区 / Bin / 物料）
-- **§7 内核组件** = beeBox 进程内的运行时组件（Task Receiver / Beeline Cache / Bee Planner / Beeline Executor）+ Kernel 顶层 Router
+- **§7 内核组件** = beeBox 进程内的运行时组件（Task Receiver / Beeline Cache / Bee Planner / Beeline Executor）—— Router / 调度器按规模分级（详见 §8.9）
 - **§7.2 task E2E 流程** = 触发 → 接收 → 定位 beeline → operation 循环 → 完成
+- **§8.9 Router / 调度器按规模分级** = 单机版无 Router（直接放行），团队版 1 个 Router（按 beeBox_id 路由），企业版被调度器取代 / 协同
 - **§7 精益概念映射**里的"看板/标准化作业"= 控制台进程 + beeBox 进程分别暴露的视图 / 资源
 
 ### 8.8 ❓ 待澄清（§8 范围内）
@@ -530,6 +532,22 @@ flowchart TB
 - beeOS 整体的"操作系统级"能力要不要做（进程监控 / 资源隔离 / 安全沙箱）—— 现在没设计
 
 > §8 范围内的待澄清已挪到 §9 统一管理。
+
+### 8.9 Router / 调度器按规模分级
+
+`beeBox Router` 不属于 beeBox 内部组件（不在 §7.1）——它**只跟多 beeBox 场景相关**，按规模分级：
+
+| 规模 | Router / 调度器 | 行为 |
+|---|---|---|
+| **单机版（N=1）** | **无 Router** | 直接放行，无路由逻辑 |
+| **团队版（N>1）** | **1 个 Router**（独立进程）| 按 `beeBox_id` 路由到目标 beeBox 进程 |
+| **企业版（N>1 + 调度器）** | **1 个调度器** + Router 协同 | 调度器分发 + Router 路由到具体 beeBox |
+
+**关键说明**：
+- 单机版只有 1 个 beeBox，**不需要路由**——所有 task 都到这个 beeBox
+- 团队版 1 个 Router 是"按业务领域分发"的轻量路由
+- 企业版有调度器，Router 跟调度器协同（调度器决定"哪个 task 给哪个 beeBox"，Router 在网络层送达具体 beeBox 进程）
+- 不存在独立的 "Kernel 顶层" 概念——单 beeBox 时 Router 退化为"直接放行"，多 beeBox 时 Router / 调度器是独立进程
 
 ## 9. 决策日志（v0.1 快照）
 

@@ -335,7 +335,10 @@ flowchart TB
   loop["⑤ Beeline Executor\n按 seq 顺序执行 operation"]
   exception{"op 异常？"}
   returnTo["退货区 AwaitingHuman\n等人工在 kanban 认领"]
-  signoff{"最后 op 是 signoff？"}
+  signoff{"当前 op 是 signoff？"}
+  suspend["signoff 挂起\n物料留在质检区\ntask 状态 AwaitingHuman\nExecutor 释放线程\n继续处理其他 task"]
+  resumeEvent["Resume Event\n人工在 kanban 点通过/拒绝"]
+  approve{"签核通过？"}
   finished["完成\n物料到成品区"]
   kanban["状态同步到 kanban\nDone 状态"]
   audit["审计 / 度量记录"]
@@ -351,8 +354,12 @@ flowchart TB
   exception -->|是| returnTo
   exception -->|否| signoff
   returnTo --> kanban
-  signoff -->|是| finished
+  signoff -->|是| suspend
   signoff -->|否| loop
+  suspend -. 等待 .-> resumeEvent
+  resumeEvent --> approve
+  approve -->|是| finished
+  approve -->|否| returnTo
   finished --> kanban
   kanban --> audit
 ```
@@ -367,16 +374,21 @@ flowchart TB
 | 4. 初始化 | （Beeline Executor 内部）| 物料从原料区拉到 beeline 第一个 op 的 input_locations |
 | 5. operation 循环 | ⑤ Beeline Executor | 按 seq 顺序执行 op；每 op 完成 = 物料流转到 output_locations |
 | 6. 异常处理 | （异常回流逻辑）| 任意 op 异常 → 物料到退货区 AwaitingHuman，等人工认领 |
-| 7. 签核 / 完成 | ⑤ Beeline Executor | signoff op 通过 → 物料到成品区；qc / data_io / transform / agent → 直接下一 op |
+| 7. 签核 / 挂起 / 恢复 | ⑤ Beeline Executor + ⑤ 挂起 | 执行到 signoff op → 物料留在质检区 → task 状态变 AwaitingHuman → Executor 保存 task state + 释放线程 → 继续处理其他 task；人工在 kanban 点通过/拒绝 → 触发 Resume Event → task 恢复继续 |
 | 8. 状态同步 | ③ Beeline Cache 旁路 / kanban 进程 | 实时推 task 状态变化到 kanban 控制台 |
 | 9. 审计 | （Beeline Executor 旁路）| 写 task 审计日志 / 度量数据 |
 
 **关键约束**：
 - **operation 严格按 seq 顺序执行**——不允许并行（v0.1），避免物料竞争（参考 §6.2 operation 必含属性）
 - **物料在 op 之间流转**——每个 op 必须显式声明 input_locations / output_locations（参考 §6.2）
-- **agent op 调 bee**——bee 从系统库区拿凭证（参考 §5.1 / §6.2 credential_ref）
+- **agent op 调 bee**——bee 从系统库区拿系统物料（凭证 / 连接 / 限流，参考 §5.1 / §6.2 credential_ref）
+- **signoff 阻塞 = Executor 释放线程**——signoff 不阻塞 Executor（避免线程/协程被全部占满），通过"挂起 / 恢复"机制：Executor 保存 task state + 释放线程，Resume Event 触发后续
 - **异常就回退货区**——不重试，不跳过（v0.1 简化），等人工处理
 - **状态实时同步 kanban**——task 状态变化立刻推，不批处理
+
+**v0.1 简化 / v0.2 完整（signoff 挂起/恢复）**：
+- v0.1：Executor 释放线程后**轮询 Resume**（简单实现，单 beeBox 够用）
+- v0.2：完整事件驱动 Resume Event（多 beeBox 场景，事件路由到正确 beeBox）
 
 ## 8. 部署形态（修订中）
 
@@ -573,6 +585,8 @@ flowchart TB
 - kanban 移动端 / 大屏
 - workshop 多租户协作
 - operation 编排是否支持并行 / 条件分支
+- **signoff 挂起/恢复 v0.2 完整实现**——v0.1 简化（Executor 释放 + 轮询 Resume），v0.2 完整事件驱动 Resume Event（多 beeBox 场景事件路由到正确 beeBox）
+- **task state 持久化机制**——Executor 释放线程前 / 恢复后怎么持久化 task state（v0.1 本地 JSON，v0.2 状态服务）
 - **§10 beeOS kernel 子系统要不要新增**（类比 Linux kernel 5 大子系统：进程 / 内存 / 文件系统 / 网络 / 设备驱动）
 
 **部署形态（§8 范围内）**

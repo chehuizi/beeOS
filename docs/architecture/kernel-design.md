@@ -189,7 +189,7 @@ flowchart LR
 
 | 模块 | 作用 |
 |---|---|
-| beeBox 设计器 | 定义业务领域 / 6 库区 / Bin / BOM |
+| beeBox 设计器 | 定义业务领域 / 6 库区 / Bin / **关联的 BOM 引用列表**（从 BOM 中心选，beeBox 不定义 BOM 内容）|
 | beeline 编辑器 | 拖拽 / 编排 operation 序列（**beeline 模板**，独立于 BOM）|
 | operation 库 | 各类 operation 模板（data_io / transform / agent / qc / signoff）|
 | bee 注册表 | 管理 bee 智能体（能力 / 输入输出 / 适用 operation）|
@@ -559,6 +559,7 @@ flowchart TB
   - **系统物料** = 被 operation / bee 读取的（**只读不流转**），如凭证、连接、限流配置、数据集
   - 两者都符合 BOM schema，区别是"使用方式"（流转 vs 只读）
 - **所有库位上的物料 = 某种 BOM 的 instance**（schema 在 BOM 中心，instance 在 Bin）
+- **beeBox 跟 BOM 中心是引用关系，不是定义关系**——beeBox 通过"BOM 引用列表"从 BOM 中心选 schema，beeBox 不定义 BOM 内容
 - **§4 A-H 8 项全部定论**（详见 §4 表格）
 
 **资产 / 模板**

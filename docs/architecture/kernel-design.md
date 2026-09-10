@@ -284,7 +284,7 @@ flowchart TB
 | input_locations | ✅ | 读哪些 Bin 可多 |
 | output_locations | ✅ | 落到哪些 Bin 可多 |
 | bee_ref | 🟡 agent 才有 | 被调的 bee（如 `beex.finance.bank_reconciler`）—— 按需从 bee 注册表加载 |
-| credential_ref | 🟡 agent 才有 | 指向**系统物料**（凭证 / 连接 / 限流的 BOM instance），bee 从 Bin 拿系统物料（只读不流转）|
+| credential_ref | 🟡 agent 才有 | 指向**系统物料**（凭证 / 连接 / 限流的实例，对应 BOM schema），bee 从 Bin 拿系统物料（只读不流转）|
 | rules | 🟡 qc 必含 | op 的输入参数（按 type 不同而不同——qc 是校验规则、data_io 是数据格式 / 字段必填、transform 是字段映射 / 缺省值、agent 是 prompt 模板 / 输出 schema、signoff 是审批规则）|
 | exception_handler | 🟡 | 异常处理（退货区 / 重试 / 人工）|
 
@@ -334,7 +334,7 @@ flowchart TD
 flowchart TB
   trigger["触发\nkanban 触发 / 系统事件 / 调度器"]
   receive["① Task Receiver 接收\n校验 + 分配 task ID"]
-  locateHit{"beeline 命中？"}
+  locateHit{"beeline 模板命中？"}
   cache["③ Beeline Cache 命中\n加载已缓存的 beeline 模板"]
   planner["④ Bee Planner 规划\nbeeline miss 时"]
   init["初始化 task state\n物料进入第一个 input_locations"]
@@ -605,7 +605,7 @@ flowchart TB
   - **业务物料** = 被 operation 驱动流转的（input → output 路径），如科目余额、PDF、对账结果
   - **系统物料** = 被 operation / bee 读取的（**只读不流转**），如凭证、连接、限流配置、数据集
   - 两者都符合 BOM schema，区别是"使用方式"（流转 vs 只读）
-- **所有库位上的物料 = 某种 BOM 的 instance**（schema 在 BOM 中心，instance 在 Bin）
+- **所有库位上的物料 = 某种物料（按 BOM schema 实例化的 BOM instance）**——BOM schema 在 BOM 中心，BOM instance 在 Bin
 - **beeBox 跟 BOM 中心是引用关系，不是定义关系**——beeBox 通过"BOM 引用列表"从 BOM 中心选 schema，beeBox 不定义 BOM 内容
 - **§4 A-H 8 项全部定论**（详见 §4 表格）
 

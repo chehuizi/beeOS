@@ -257,7 +257,7 @@ flowchart TB
 | C | 业务规则（Rule） | ✅ **已定** | 规则在 beeline / operation 里（operation.qc_rules / 约束），beeBox 不单独管 |
 | D | **bee 工人池** | ✅ **已定** | bee 跟随 beeline，按需加载（operation.bee_ref 拉取）|
 | E | 异常回流 | ✅ **已定** | 初始阶段：退货区物料 = AwaitingHuman 状态，等人工在 kanban 上认领处理 |
-| F | Bin 流转规则 | ✅ **已定** | 物料只能按 operation 规定的路径流转（input_location → output_location）|
+| F | Bin 流转规则 | ✅ **已定** | 物料只能按 operation 规定的路径流转（input_locations → output_locations）|
 | G | 看板 / 状态 | ✅ **已定** | 看板 = beeBox 物理层（6 库区/Bin/物料状态）+ kanban 控制台层 |
 | H | 度量（Metrics） | ✅ **已定** | metrics 从 Bin 物料数 + operation.elapsed 派生，不需要单独服务 |
 
@@ -281,8 +281,8 @@ flowchart TB
 |---|---|---|
 | seq | ✅ | operation 序号 |
 | type | ✅ | 加工类型 |
-| input_location | ✅ | 从哪里读物料 |
-| output_location | ✅ | 把物料落到哪里 |
+| input_locations | ✅ | 读哪些 Bin 可多 |
+| output_locations | ✅ | 落到哪些 Bin 可多 |
 | bee_ref | 🟡 agent 才有 | 被调的 bee（如 `beex.finance.bank_reconciler`）—— 按需从 bee 注册表加载 |
 | credential_ref | 🟡 agent 才有 | 指向系统库区 Bin（凭证 / 连接 / 限流类物料），bee 从 Bin 拿凭证 |
 | qc_rules | 🟡 qc 才有 | 校验规则 |
@@ -331,7 +331,7 @@ flowchart TB
   locateHit{"beeline 命中？"}
   cache["③ Beeline Cache 命中\n加载已缓存的 beeline 模板"]
   planner["④ Bee Planner 规划\nbeeline miss 时"]
-  init["初始化 task state\n物料进入第一个 input_location"]
+  init["初始化 task state\n物料进入第一个 input_locations"]
   loop["⑤ Beeline Executor\n按 seq 顺序执行 operation"]
   exception{"op 异常？"}
   returnTo["退货区 AwaitingHuman\n等人工在 kanban 认领"]
@@ -364,8 +364,8 @@ flowchart TB
 | 1. 触发 | （外部）| kanban 上点"新建 task" / 系统事件触发 / 调度器分发（企业版）|
 | 2. 接收 | ① Task Receiver | 校验输入 / 权限，分配 task ID，写入 task state |
 | 3. 定位 beeline | ③ Beeline Cache / ④ Bee Planner | 命中 → 加载；miss → Bee Planner 规划（推荐 beeline）|
-| 4. 初始化 | （Beeline Executor 内部）| 物料从原料区拉到 beeline 第一个 op 的 input_location |
-| 5. operation 循环 | ⑤ Beeline Executor | 按 seq 顺序执行 op；每 op 完成 = 物料流转到 output_location |
+| 4. 初始化 | （Beeline Executor 内部）| 物料从原料区拉到 beeline 第一个 op 的 input_locations |
+| 5. operation 循环 | ⑤ Beeline Executor | 按 seq 顺序执行 op；每 op 完成 = 物料流转到 output_locations |
 | 6. 异常处理 | （异常回流逻辑）| 任意 op 异常 → 物料到退货区 AwaitingHuman，等人工认领 |
 | 7. 签核 / 完成 | ⑤ Beeline Executor | signoff op 通过 → 物料到成品区；qc / data_io / transform / agent → 直接下一 op |
 | 8. 状态同步 | ③ Beeline Cache 旁路 / kanban 进程 | 实时推 task 状态变化到 kanban 控制台 |
@@ -373,7 +373,7 @@ flowchart TB
 
 **关键约束**：
 - **operation 严格按 seq 顺序执行**——不允许并行（v0.1），避免物料竞争（参考 §6.2 operation 必含属性）
-- **物料在 op 之间流转**——每个 op 必须显式声明 input_location / output_location（参考 §6.2）
+- **物料在 op 之间流转**——每个 op 必须显式声明 input_locations / output_locations（参考 §6.2）
 - **agent op 调 bee**——bee 从系统库区拿凭证（参考 §5.1 / §6.2 credential_ref）
 - **异常就回退货区**——不重试，不跳过（v0.1 简化），等人工处理
 - **状态实时同步 kanban**——task 状态变化立刻推，不批处理
@@ -533,7 +533,7 @@ flowchart TB
 
 **operation**
 - 节点命名为 `operation`（operation 即标准作业，不另设 SOP 层）
-- operation 必含：seq / type / input_location / output_location
+- operation 必含：seq / type / input_locations / output_locations
 - 4 种基础 operation 类型：data_io / transform / agent / qc / signoff
 - agent operation 才调 bee
 - operation 用 `credential_ref` 指向系统库区 Bin（bee 从 Bin 拿凭证）

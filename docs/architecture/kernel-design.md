@@ -320,6 +320,11 @@ flowchart TD
 | ④ | Beeline Executor | 在 beeBox 内部执行 beeline operation | beeBox 内部 |
 
 > **beeBox Router / 调度器不在 beeBox 内部**——按规模分级，详见 §8.9。
+>
+> **Beeline Cache 失效策略**：
+> - **单机版**（模板源在 beeBox 进程内）—— **自动失效**。workshop 通过 IPC（HTTP / WebSocket）调 beeBox 暴露的"修改模板" API，模板源变化直接刷新 Cache（Cache 跟源同进程，源变 Cache 立即刷新）。
+> - **团队版**（模板源在远端服务）—— **轮询或推送**。beeBox 进程定时拉版本号（轮询），或 workshop 主动通知（推送）。详见 §8.x。
+> - **企业版**（模板源多副本）—— 推送 + 消息队列。保证通知不丢。
 
 ### 7.2 task E2E 流程（一个 task 从进入到完成）
 
@@ -549,6 +554,22 @@ flowchart TB
 - 企业版有调度器，Router 跟调度器协同（调度器决定"哪个 task 给哪个 beeBox"，Router 在网络层送达具体 beeBox 进程）
 - 不存在独立的 "Kernel 顶层" 概念——单 beeBox 时 Router 退化为"直接放行"，多 beeBox 时 Router / 调度器是独立进程
 
+### 8.10 Beeline Cache 失效策略（按规模）
+
+| 规模 | 模板源在哪 | Cache 失效机制 |
+|---|---|---|
+| **单机版** | beeBox 进程内（内嵌）| **自动失效**——workshop 通过 IPC（HTTP / WebSocket）调 beeBox 暴露的"修改模板" API，模板源变化直接刷新 Cache（Cache 跟源同进程）|
+| **团队版** | 远端服务（独立进程）| **轮询或推送**——beeBox 进程定时拉版本号（轮询），或 workshop 主动通知（推送）|
+| **企业版** | 远端服务（多副本）| **推送 + 消息队列**——保证通知不丢，beeBox 进程订阅消息队列 |
+
+**关键约束**：
+- 模板源和 Cache 必须在**逻辑上一致**——源变了 Cache 必须能感知
+- 单机版 0 额外机制（源在同进程）——最简
+- 团队版 / 企业版按规模升级——避免 v0.1 过度设计
+- v0.1 单机版 = 自动失效；v0.2 团队版 / 企业版 = 轮询 / 推送 / 消息队列
+
+> 详细协议（轮询周期 / 推送格式 / 消息队列选型）放 v0.2 设计。
+
 ## 9. 决策日志（v0.1 快照）
 
 > **本附录是跨章节的"决策状态"汇总**——前面 §0-§9 写的是设计正文，本附录是"哪些已经定、哪些还要讨论"。本附录应随每次设计推进而更新。
@@ -606,6 +627,7 @@ flowchart TB
 - operation 编排是否支持并行 / 条件分支
 - **signoff 挂起/恢复 v0.2 完整实现**——v0.1 简化（Executor 释放 + 轮询 Resume），v0.2 完整事件驱动 Resume Event（多 beeBox 场景事件路由到正确 beeBox）
 - **task state 持久化机制**——Executor 释放线程前 / 恢复后怎么持久化 task state（v0.1 本地 JSON，v0.2 状态服务）
+- **Beeline Cache 失效协议 v0.2**——v0.1 单机版自动失效（Cache 跟源同进程），v0.2 团队版 / 企业版 Cache 失效协议（轮询周期 / 推送格式 / 消息队列选型）
 - **§10 beeOS kernel 子系统要不要新增**（类比 Linux kernel 5 大子系统：进程 / 内存 / 文件系统 / 网络 / 设备驱动）
 
 **部署形态（§8 范围内）**

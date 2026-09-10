@@ -192,7 +192,7 @@ flowchart LR
 | beeBox 设计器 | 定义业务领域 / 6 库区 / Bin / **关联的 BOM 引用列表**（从 BOM 中心选，beeBox 不定义 BOM 内容）|
 | beeline 编辑器 | 拖拽 / 编排 operation 序列（**beeline 模板**，独立于 BOM）|
 | operation 库 | 各类 operation 模板（data_io / transform / agent / qc / signoff）|
-| bee 注册表 | 管理 bee 智能体（能力 / 输入输出 / 适用 operation）|
+| bee 注册表 | 管理 bee 智能体（能力 / 输入输出 / 适用 operation / 代码位置）——**beeOS 资产的一种**（跟 BOM 中心 / beeline 模板库并列）|
 | **beeline 模板库** | **跨 beeBox 共享 beeline 模板**（工艺路线 schema，独立于 BOM 中心）|
 | BOM 中心 | 跨 beeBox 共享 BOM（物料清单 schema）|
 
@@ -431,6 +431,13 @@ flowchart TB
 
 ### 8.3 资产层方案对比
 
+> **资产层 = 3 类数据资产**：
+> - **BOM 中心**（物料清单 schema）
+> - **beeline 模板库**（工艺路线 schema）
+> - **bee 注册表**（bee 智能体定义 schema）—— 之前未明确
+>
+> 3 类资产**都按相同形态分级**（内嵌 / 本地 / 远端），下面表适用于所有 3 类。
+
 | 形态 | 存储位置 | 进程边界 | 访问延迟 | 适用 |
 |---|---|---|---|---|
 | **内嵌** | beeOS 进程内（Python dict + JSON 文件持久化）| 在 beeOS 进程 | O(1) | 单机版 |
@@ -439,7 +446,7 @@ flowchart TB
 
 **关键约束**：
 - "内嵌"和"远端"**不能同时存在**同一份数据——选一种就不能混
-- "本地"和"远端"可以并存（比如 BOM 内嵌、beeline 模板库 远端）
+- "本地"和"远端"可以并存（比如 BOM 内嵌、beeline 模板库 远端、bee 注册表 远端）
 
 ### 8.4 单机版选型（推荐 + 理由）
 
@@ -511,6 +518,7 @@ flowchart TB
 - **按触发条件升级资产 / 调度**——不到那个规模不拆
 - **进程层和资产层独立演进**——可以"单机版 3 进程 + 资产远端"（理论上）
 - **回退要可逆**——团队版拆出去的资产服务，理论上能合并回 beeBox 进程
+- **3 类资产同步升级**——BOM 中心 / beeline 模板库 / bee 注册表 在每个阶段都按相同形态（3 类都内嵌 / 3 类都远端），保持一致
 
 ### 8.7 跟其他章节的对应
 
@@ -602,7 +610,11 @@ flowchart TB
 - **§4 A-H 8 项全部定论**（详见 §4 表格）
 
 **资产 / 模板**
-- **beeline 模板（工艺路线 schema）独立于 BOM 中心（物料清单 schema）**—— 两个独立的 beeOS 资产
+- **3 类 beeOS 资产**（之前 §4 没明确 bee 注册表，现在补全）：
+  - **BOM 中心** = 物料清单 schema（业务物料 + 系统物料）
+  - **beeline 模板库** = 工艺路线 schema（独立于 BOM 中心）
+  - **bee 注册表** = bee 智能体定义（能力 / 输入输出 / 适用 operation / 代码位置）
+- **3 类资产都按相同形态分级**（内嵌 / 本地 / 远端）—— 详见 §8.3
 - **资产服务的存储层 = 文件系统抽象**（本地 fs / OSS / S3），上层是 domain API（schema / 版本 / 引用 / 权限）
 
 **部署形态（§9）**
@@ -628,6 +640,7 @@ flowchart TB
 - **signoff 挂起/恢复 v0.2 完整实现**——v0.1 简化（Executor 释放 + 轮询 Resume），v0.2 完整事件驱动 Resume Event（多 beeBox 场景事件路由到正确 beeBox）
 - **task state 持久化机制**——Executor 释放线程前 / 恢复后怎么持久化 task state（v0.1 本地 JSON，v0.2 状态服务）
 - **Beeline Cache 失效协议 v0.2**——v0.1 单机版自动失效（Cache 跟源同进程），v0.2 团队版 / 企业版 Cache 失效协议（轮询周期 / 推送格式 / 消息队列选型）
+- **bee 注册表生命周期 v0.2**——bee 智能体的注册 / 加载 / 释放 / 版本管理 / 灰度发布 / 回收机制（v0.1 单机版内嵌简化为 beeBox 进程内 Python 模块）
 - **§10 beeOS kernel 子系统要不要新增**（类比 Linux kernel 5 大子系统：进程 / 内存 / 文件系统 / 网络 / 设备驱动）
 
 **部署形态（§8 范围内）**

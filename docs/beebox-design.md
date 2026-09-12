@@ -66,12 +66,22 @@ beeBox 是持续交付 1 个明确业务结果的数字精益工作单元。
 | **beeBox instance** | 安装后正在运行的实例 | 1 instance → N task run |
 | **task run** | 一次具体业务交付 | instance 内的一次执行（走完 1 条 beeline = N 个 operation 步骤）|
 
+**关键概念区分（beeBox release vs beeline_version）**：
+
+| 维度 | 含义 | 类比 |
+|---|---|---|
+| `beeBox release` | beeBox **运行时**的版本（代码 / 二进制 / 部署包）| MySQL server release（软件）|
+| `beeline_version` | beeBox 内**数据资产**（工艺路线）的版本 | MySQL database schema version（数据）|
+
+> 两个版本号**正交**——`beeline_version` 变化不需要 `beeBox release` 变化，反之亦然。
+
 **版本绑定（不可变性原则）**：
-- task run **创建时**绑定（snapshot）它依赖的 `beeBox release` + `beeline_version`；bind 之后不再变
-- 绑定范围 = 整条 beeline（含 N 个 operation 版本）—— operation 版本隐式跟随 beeline_version，不单独存储
+- task run **创建时**绑定（snapshot）`beeBox release` + `beeline_version`；bind 之后不再变
+- 绑定范围 = 整条 beeline（含 N 个 operation 版本）—— operation 版本隐式跟随 `beeline_version`
 - instance 升级后只影响新创建的 task run；运行中的 task run 继续用原版本（不被升级打断）
-- `beeline_version` 跟 `beeBox release` 是正交两个维度，可独立升级单条 beeline 不动其他
-- 回滚 = 部署上一个 release 或回退 beeline_version；不改变已 bind task run 的版本（保持 in-flight 不变性）
+- 升级 `beeline_version` = 仅数据资产升级，`beeBox release` 编号不变
+- 升级 `beeBox release` = 仅运行时升级，已存在的 `beeline_version` 不变（除非该 release 内含 beeline 变更）
+- 回滚 = 部署上一个 release 或回退 `beeline_version`；不改变已 bind task run 的版本（保持 in-flight 不变性）
 
 **审计字段**（每个 task run 必含）：
 - `task_run.beeBox_release` — 任务创建时的 beeBox release 标识

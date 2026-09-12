@@ -116,8 +116,8 @@ task run 创建时 **snapshot release**——产品一旦发布不可变，task 
 
 - **snapshot 时点** = task run 创建瞬间
 - **绑定范围** = release 隐含引用的全部 beeline_version + 依赖版本（隐式跟随 release）
-- **升级语义** = 部署新 release 到**新 instance**；旧 instance 继续跑老 release；不影响已 bind task run；只影响新创建的 task run
-- **回滚语义** = 部署上一个 release 到新 instance；不改变已 bind task run
+- **升级语义** = 部署新 release 到**新 instance** + **切流**（新接收的触发切到新 instance）；in-flight task run 不受切流影响，继续在旧 instance 上跑老 release；旧 instance 跑完所有 task run 后下线
+- **回滚语义** = 部署上一个 release 到新 instance + 切流回老版本；in-flight task run 不受影响
 - **beeline 升级** = 升级 beeline_version + 产生新 release（beeline 升级必然带动 release 升级）
 
 #### 1.5.5 审计字段
@@ -130,7 +130,7 @@ task run 创建时 **snapshot release**——产品一旦发布不可变，task 
 
 ### 1.6 履约合同
 
-每个 beeBox 都带一份"交付合同"：
+每个 beeBox 都带一份"履约合同"：
 
 - **业务结果定义**——承诺交付什么（可被验收的产出）
 - **验收标准**——怎么算"做完了"（量化指标 + 抽样方法）

@@ -12,7 +12,7 @@ beeBox 是持续交付一类明确业务结果的数字精益工作单元。
 
 ---
 
-## 1. 产品和领域模型
+## 1. 产品定位和领域模型
 
 beeBox 跟所有产品一样有**两件事**：**生命周期**（怎么从设计走到部署）和**运行关系**（产品跑在什么之上）。两件事落到产品上，beeBox 跑起来后每次接收触发产生 1 个 task run——产品完成一次履约，交付 1 个具体业务结果。
 
@@ -149,7 +149,20 @@ flowchart TB
 - runtime **不属于 beeBox 产品本身**——它是 beeBox 跑在什么之上
 - 想要新 runtime 版本 = 重新创建 1 个 **新 runtime deployment**（不修改老 deployment；runtime deployment 没有"升级"这一说，每次版本变化都是新创建）；新 deployment 跟老 release **有兼容边界**——对**不兼容**的老 release 不升级（老 instance 继续在**老 deployment** 上跑完所有 in-flight task run 后下线），兼容的老 release 正常升级
 
-### 1.7 task run 履约
+---
+
+## 2. 核心契约与执行语义
+
+### 2.1 履约合同
+
+每个 beeBox 都带一份"履约合同"：
+
+- **业务结果定义**——承诺交付什么（可被验收的产出）
+- **验收标准**——怎么算"做完了"（量化指标 + 抽样方法）
+- **改善指标**——怎么算"做得好"（运行效率 / 异常率 / 时延）
+- **例外条款**——什么情况不交付 / 退回（异常 / 失败 / 超出范围时的回退路径）
+
+### 2.2 task run 履约
 
 beeBox 跑起来后持续接收触发，每次触发产生 1 个 **task run**——产品完成一次履约，交付 1 个具体业务结果。
 
@@ -158,7 +171,7 @@ beeBox 跑起来后持续接收触发，每次触发产生 1 个 **task run**—
 - task run 是 **产品完成一次履约**——instance 内的一次具体执行单位
 - 走完 1 个 task run = 走完 1 条 beeline = 跑完 N 个 operation 步骤
 
-### 1.8 版本引用
+### 2.3 版本引用
 
 task run 引用 release（product 不可变，固定引用）：
 
@@ -168,7 +181,7 @@ task run 引用 release（product 不可变，固定引用）：
 - **回滚语义** = 部署上一个 release 到新 instance + 切流回老版本；in-flight task run 不受影响
 - **beeline 升级** = 升级 beeline_version + 产生新 release（beeline 升级必然带动 release 升级）
 
-### 1.9 审计字段
+### 2.4 审计字段
 
 每个 task run 必须带 4 个审计字段：
 
@@ -178,17 +191,6 @@ task run 引用 release（product 不可变，固定引用）：
 | `task_run.beeBox_instance_id` | 任务创建时的 instance 标识（执行位置）|
 | `task_run.beeLine_id` | 任务走的是哪条 beeline（beeLine 的标识）|
 | `task_run.beeLine_version` | 任务走的那条 beeline 的版本号（显式记录）|
-
----
-
-## 2. 履约合同
-
-每个 beeBox 都带一份"履约合同"：
-
-- **业务结果定义**——承诺交付什么（可被验收的产出）
-- **验收标准**——怎么算"做完了"（量化指标 + 抽样方法）
-- **改善指标**——怎么算"做得好"（运行效率 / 异常率 / 时延）
-- **例外条款**——什么情况不交付 / 退回（异常 / 失败 / 超出范围时的回退路径）
 
 ---
 
@@ -209,8 +211,8 @@ task run 引用 release（product 不可变，固定引用）：
 
 ### 3.3 履约实现
 
-- **task run 触发**：instance 接收触发（§1.7）→ 产生 1 个 task run
-- **beeline 加载**：task run 走 1 条 beeline（从 §1.8 release 隐含引用）
+- **task run 触发**：instance 接收触发（§2.2）→ 产生 1 个 task run
+- **beeline 加载**：task run 走 1 条 beeline（从 §2.3 release 隐含引用）
 - **operation 执行**：task run 跑完 1 条 beeline = N 个 operation
 - **异常处理**：op 异常 → 按 §1.3 持续流动原则暴露（具体机制留待后续）
-- **审计**：每个 task run 记录 §1.9 字段
+- **审计**：每个 task run 记录 §2.4 字段

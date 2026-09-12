@@ -187,7 +187,7 @@ task run 引用 release（product 不可变，固定引用）：
 
 - **definition 存储**：beeBox definition 是结构化 schema 描述（JSON / DB 存储）
 - **release 打包**：definition 经过发布流程变成不可变 artifact（带 beeline_version + 依赖版本）
-- **instance 部署**：release 部署到 runtime deployment → 启动 1 个 instance（进程 / 容器）
+- **instance 部署**：release 部署到 runtime deployment → 启动 1 个 instance（运行实体）
 
 #### 1.3.2 运行侧实现
 

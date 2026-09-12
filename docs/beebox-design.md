@@ -82,25 +82,30 @@ flowchart LR
 
 #### 1.5.2 运行关系（空间维度）
 
-instance 必须跑在一个执行环境之上——这就是 **beeBox runtime**：
+instance 必须跑在一个执行环境之上——这就是 **beeBox runtime**。runtime 拆成 2 层：**runtime environment**（设计 / 类型）跟 **runtime deployment**（具体部署）；instance 部署在 deployment 里。
 
 ```mermaid
 flowchart TB
-  rt["beeBox runtime\n执行环境 基础设施"]
+  env["runtime environment\n设计 / 类型"]
+  d1["runtime deployment #1\n可用区 A"]
+  d2["runtime deployment #2\n可用区 B"]
   i1["instance #1"]
   i2["instance #2"]
   i3["instance #3"]
-  rt --> i1
-  rt --> i2
-  rt --> i3
+  env --> d1
+  env --> d2
+  d1 --> i1
+  d1 --> i2
+  d2 --> i3
 ```
 
-- 1 个 runtime = 1 个环境边界（同一环境下的多 instance 共享）
-- **多租户场景**：同一环境内多个**逻辑独立**的 beeBox instance（不同租户 / 不同业务线）共享 1 个 runtime——每个 instance 跑各自的 release，互相隔离
-- **多副本场景**：**同一个** beeBox instance 由多个 runtime worker / Replica 同时执行——多副本跑同一份 release，用于横向扩展 / 高可用
-- 多环境场景：dev / staging / prod 各 1 个 runtime
+- **runtime environment** = runtime 的设计 / 类型定义（schema / 模板）
+- **runtime deployment** = environment 的一次具体部署（environment 的实例化）
+- **beeBox instance** = 部署在 runtime deployment 里的应用
+- **3 层关系**：1 environment → 1...N deployment（多节点 / 跨可用区）；1 deployment → 1...N instance（多租户 / 多副本 / 多业务线）
+- 多环境场景：dev / staging / prod 各 1 个 environment
 - runtime **不属于 beeBox 产品本身**——它是 beeBox 跑在什么之上
-- 升级 runtime **不强制升级 release**（runtime 是基础设施维度，跟产品生命周期正交）；runtime 升级**有兼容边界**——某些老 release 可能跟新 runtime 不兼容；对**不兼容**的老 release **不升级**（老 instance 继续在**老 runtime** 上跑完所有 in-flight task run 后下线），兼容的老 release 正常升级
+- 升级 runtime deployment **不强制升级 release**（runtime deployment 跟 release 是独立维度）；升级**有兼容边界**——对**不兼容**的老 release **不升级**（老 instance 继续在**老 deployment** 上跑完所有 in-flight task run 后下线），兼容的老 release 正常升级
 
 #### 1.5.3 产品完成一次履约（task run）
 

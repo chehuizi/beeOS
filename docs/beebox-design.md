@@ -99,9 +99,8 @@ flowchart TB
   d2 --> i3
 ```
 
-- **runtime** = 提供的可执行 runtime（软件 / 引擎，有版本）
 - **runtime environment** = 实际运行环境 + 隔离边界
-- **runtime deployment** = 某个 **runtime 版本**在 environment 的一次具体部署
+- **runtime deployment** = 某个 **runtime 版本**在 environment 的一次具体部署（runtime 隐含在 deployment 里）
 - **beeBox instance** = 部署在 runtime deployment 里的应用
 - **3 层关系**：1 environment → 1...N deployment（多节点 / 跨机器 / 不同 runtime 版本）；1 deployment → 1...N instance（多租户 / 多副本 / 多业务线）
 - **多 environment 场景**：多个 **runtime environment** 描述不同环境类型（dev / staging / prod / 不同云厂商）——每个 environment 是独立的隔离边界

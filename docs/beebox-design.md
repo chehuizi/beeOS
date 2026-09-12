@@ -59,29 +59,71 @@ beeBox 是持续交付 1 个明确业务结果的数字精益工作单元。
 
 ### 1.5 产品生命周期与运行关系
 
-| 层面 | 层级 | 含义 | 关系 |
-|---|---|---|---|
-| **产品生命周期** | **beeBox definition** | 产品定义——业务结果 / 验收标准 / 改善指标 / beeline 列表 / 物料 schema 引用 / bee 引用 | 1 def → N release |
-| **产品生命周期** | **beeBox release** | 围绕 1 个业务结果发布的**不可变业务产品包**（固定引用其全部 beeline_version 和依赖版本）| 1 release → N instance |
-| **产品生命周期** | **beeBox instance** | release 的一个部署实例（正在跑）| 1 instance → N task run |
-| **运行关系** | **beeBox runtime** | 让 instance 能跑的执行环境 | 1 runtime → N instance |
+beeBox 跟所有产品一样有两件事：**生命周期**（怎么从设计走到部署）和**运行关系**（产品跑在什么之上）。再加上"产品被使用 1 次"——共同构成 beeBox 的完整图景。
 
-> **关键区分**：
-> - **产品生命周期**（前 3 层）= definition → release → instance 的演化（产品从设计到部署的时间维度）
-> - **运行关系**（第 4 层）= instance 跑在 runtime 上的分层关系（产品跑在什么之上的空间维度）
-> - **task run 不在这两层里**——它是 instance 内的一次具体执行单位（走完 1 条 beeline = N 个 operation 步骤）
+#### 1.5.1 产品生命周期（时间维度）
 
-**版本绑定（不可变性原则）**：
-- task run **创建时**绑定 `beeBox release`（业务产品包不可变，bind 之后不再变）
-- 绑定范围 = release 隐含引用的全部 beeline_version + 依赖版本（隐式跟随 release）
-- instance 升级后只影响新创建的 task run；运行中的 task run 继续用原 release（不被升级打断）
-- 升级 release = 部署新 release；不影响已 bind task run
-- 升级单条 beeline = 升级 beeline_version + 产生新 release（beeline 升级必然带动 release 升级）
-- 回滚 = 部署上一个 release；不改变已 bind task run 的版本
+beeBox 走过 3 个阶段，每个阶段交付一份产物，产物被下一阶段消费：
 
-**审计字段**（每个 task run 必含）：
-- `task_run.beeBox_release` — 任务创建时的 release 标识
-- `task_run.beeLine_version` — 由 release 隐式确定（task run 不单独存，可推导）
+```mermaid
+flowchart LR
+  def["definition\n产品定义"]
+  rel["release\n业务产品包\n不可变"]
+  ins["instance\n部署实例\n正在跑"]
+  def -->|发布| rel
+  rel -->|部署| ins
+```
+
+- **definition**（产品定义）——业务结果 / 验收标准 / 改善指标 / beeline 列表 / 物料 schema 引用 / bee 引用
+- **release**（业务产品包）——围绕 1 个业务结果发布的不可变版本，固定引用其全部 beeline_version 和依赖版本
+- **instance**（部署实例）——release 的一个部署，正在跑
+
+每个阶段一对多：1 个 definition → 多个 release（版本演进）；1 个 release → 多个 instance（多环境 / 多租户）。
+
+#### 1.5.2 运行关系（空间维度）
+
+instance 必须跑在一个执行环境之上——这就是 **beeBox runtime**：
+
+```mermaid
+flowchart TB
+  rt["beeBox runtime\n执行环境 基础设施"]
+  i1["instance #1"]
+  i2["instance #2"]
+  i3["instance #3"]
+  rt --> i1
+  rt --> i2
+  rt --> i3
+```
+
+- 1 个 runtime 支撑多个 instance（多租户 / 多环境）
+- runtime **不属于 beeBox 产品本身**——它是 beeBox 跑在什么之上
+- 升级 runtime 不需要升级 release（runtime 是基础设施维度，跟产品生命周期正交）
+
+#### 1.5.3 产品被使用 1 次（task run）
+
+beeBox 跑起来后持续接收触发，每次触发产生 1 个 **task run**——产品被消费 1 次，交付 1 个具体业务结果。
+
+- task run **不在产品生命周期里**（不是产品演化的某个阶段）
+- task run **不在运行关系里**（不是 instance 跟 runtime 的关系）
+- task run 是 **产品被消费 1 次**——instance 内的一次具体执行单位
+- 走完 1 个 task run = 走完 1 条 beeline = 跑完 N 个 operation 步骤
+
+#### 1.5.4 版本绑定（不可变性原则）
+
+task run 创建时 **snapshot release**——产品一旦发布不可变，task run 锁住它创建时的 release：
+
+- **snapshot 时点** = task run 创建瞬间
+- **绑定范围** = release 隐含引用的全部 beeline_version + 依赖版本（隐式跟随 release）
+- **升级语义** = 部署新 release；不影响已 bind task run；只影响新创建的 task run
+- **回滚语义** = 部署上一个 release；不改变已 bind task run
+- **beeline 升级** = 升级 beeline_version + 产生新 release（beeline 升级必然带动 release 升级）
+
+#### 1.5.5 审计字段
+
+| 字段 | 含义 |
+|---|---|
+| `task_run.beeBox_release` | 任务创建时的 release 标识 |
+| `task_run.beeLine_version` | 由 release 隐式确定（task run 不单独存，可推导）|
 
 ### 1.6 交付合同
 

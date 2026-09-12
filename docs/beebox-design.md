@@ -64,29 +64,29 @@ beeBox 跟所有产品一样有**两件事**：**生命周期**（怎么从设�
 **总览图**（概念流转）：
 
 ```mermaid
-flowchart LR
+flowchart TB
   def["beeBox definition\n产品定义"]
-  rel["beeBox release\n业务产品包 不可变"]
-  ins["beeBox instance\n部署实例"]
   env["runtime environment\n实际运行环境"]
+  rel["beeBox release\n业务产品包 不可变"]
   dep["runtime deployment\n某 runtime 版本的部署"]
+  ins["beeBox instance\n部署实例"]
   run["task run\n1 次履约"]
   result["1 个具体业务结果"]
 
   def -->|发布| rel
-  rel -->|部署| ins
   env -->|1...N| dep
+  rel -->|部署| ins
   dep -->|1...N| ins
-  run -.引用.-> rel
   ins -->|持续接收触发| run
   run -->|交付| result
+  run -.引用.-> rel
 ```
 
 **图怎么读**：
-- 横向 = **产品生命周期**（def → rel → ins）
-- 纵向 = **运行关系**（env → dep → ins）
-- **instance 是交叉点**——既在产品侧（来自 release），又在运行侧（跑在 deployment 里）
-- **task run 是履约**——instance 持续接收触发，每次产生 1 个 task run，**引用 release**，交付 1 个具体业务结果
+- **产品侧**：definition → release → instance（自上而下）
+- **运行侧**：environment → deployment → instance（自上而下）
+- **instance 是产品侧和运行侧的交叉点**——既来自 release，又跑在 deployment 里
+- **履约**：instance 持续接收触发，每次产生 1 个 task run，**引用 release**，交付 1 个具体业务结果
 
 #### 1.5.1 产品生命周期（时间维度）
 

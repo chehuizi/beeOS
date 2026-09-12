@@ -100,7 +100,7 @@ flowchart TB
 - **多副本场景**：**同一个** beeBox instance 由多个 runtime worker / Replica 同时执行——多副本跑同一份 release，用于横向扩展 / 高可用
 - 多环境场景：dev / staging / prod 各 1 个 runtime
 - runtime **不属于 beeBox 产品本身**——它是 beeBox 跑在什么之上
-- 升级 runtime **不强制升级 release**（runtime 是基础设施维度，跟产品生命周期正交）；但 runtime 升级**必须向后兼容已发布的 release**——保证老 instance 上的老 release 还能继续跑
+- 升级 runtime **不强制升级 release**（runtime 是基础设施维度，跟产品生命周期正交）；runtime 升级**有兼容边界**——某些老 release 可能跟新 runtime 不兼容；对**不兼容**的老 release **不升级**（老 instance 继续在**老 runtime** 上跑完所有 in-flight task run 后下线），兼容的老 release 正常升级
 
 #### 1.5.3 产品完成一次履约（task run）
 

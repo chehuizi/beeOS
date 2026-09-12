@@ -66,6 +66,17 @@ beeBox 是持续交付 1 个明确业务结果的数字精益工作单元。
 | **beeBox instance** | 安装后正在运行的实例 | 1 instance → N task run |
 | **task run** | 一次具体业务交付 | instance 内的一次执行（走完 1 条 beeline = N 个 operation 步骤）|
 
+**版本绑定（不可变性原则）**：
+- task run **创建时**绑定（snapshot）它依赖的 `beeBox release` + `beeline_version`；bind 之后不再变
+- 绑定范围 = 整条 beeline（含 N 个 operation 版本）—— operation 版本隐式跟随 beeline_version，不单独存储
+- instance 升级后只影响新创建的 task run；运行中的 task run 继续用原版本（不被升级打断）
+- `beeline_version` 跟 `beeBox release` 是正交两个维度，可独立升级单条 beeline 不动其他
+- 回滚 = 部署上一个 release 或回退 beeline_version；不改变已 bind task run 的版本（保持 in-flight 不变性）
+
+**审计字段**（每个 task run 必含）：
+- `task_run.beeBox_release` — 任务创建时的 beeBox release 标识
+- `task_run.beeLine_version` — 任务创建时的 beeline 版本标识
+
 ### 1.6 交付合同
 
 每个 beeBox 都带一份"交付合同"：

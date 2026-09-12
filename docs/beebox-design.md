@@ -95,7 +95,9 @@ flowchart TB
   rt --> i3
 ```
 
-- 1 个 runtime 支撑多个 instance（多租户 / 多环境）
+- 1 个 runtime = 1 个环境边界（同一环境下的多 instance 共享）
+- 多租户 / 多副本场景：同一环境跑 N 个 instance，共享 1 个 runtime
+- 多环境场景：dev / staging / prod 各 1 个 runtime
 - runtime **不属于 beeBox 产品本身**——它是 beeBox 跑在什么之上
 - 升级 runtime 不需要升级 release（runtime 是基础设施维度，跟产品生命周期正交）
 

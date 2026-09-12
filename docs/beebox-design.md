@@ -1,7 +1,7 @@
 # beeBox 设计 v0.1
 
 > **状态**：v0.1 草稿 · 修订中
-> **日期**：2026-09-11
+> **日期**：2026-09-13
 > **定位**：beeBox = 持续交付一类明确业务结果的数字精益工作单元
 
 ---
@@ -12,11 +12,9 @@ beeBox 是持续交付一类明确业务结果的数字精益工作单元。
 
 ---
 
-## 1. 产品定位
+## 1. 产品和领域模型
 
-### 1.1 概念基础
-
-#### 1.1.1 第一性定义
+### 1.1 第一性定义
 
 > **beeBox 是持续交付一类明确业务结果的数字精益工作单元。**
 
@@ -27,7 +25,7 @@ beeBox 是持续交付一类明确业务结果的数字精益工作单元。
 - **数字精益工作单元**——精益 cell 的数字版本，装在机器上的、可远程观察的
 - **产品单元**——1 个独立可安装、可运行、可度量、可改善的产品单元
 
-#### 1.1.2 产品属性
+### 1.2 产品属性
 
 | 属性 | 含义 |
 |---|---|
@@ -36,7 +34,7 @@ beeBox 是持续交付一类明确业务结果的数字精益工作单元。
 | **可度量** | 运行时数据可观测、可统计 |
 | **可持续改善** | 运行时数据反哺业务改进（看板 → 调优 → 验证）|
 
-#### 1.1.3 核心价值
+### 1.3 核心价值
 
 | 价值 | 含义 |
 |---|---|
@@ -44,7 +42,7 @@ beeBox 是持续交付一类明确业务结果的数字精益工作单元。
 | **持续流动** | 通过拉动 / WIP 限制 / 队列透明 / 瓶颈暴露，持续减少等待与积压 |
 | **持续改善** | 运行时数据反哺业务改进（看板数据 → 调优 → 验证）|
 
-#### 1.1.4 边界关系
+### 1.4 边界关系
 
 | 概念 | 范围 | 关系 |
 |---|---|---|
@@ -54,58 +52,13 @@ beeBox 是持续交付一类明确业务结果的数字精益工作单元。
 | **企业价值流** | 端到端业务流 | 1...N 个 beeBox 串联 |
 
 例子（电商订单履行）：
+
 - beeBox 1：订单接收（验收 = 入库率）
 - beeBox 2：仓库分拣（验收 = 准确率）
 - beeBox 3：物流发货（验收 = 及时率）
 - 3 个 beeBox 串联 = 订单履行企业价值流
 
-### 1.2 产品生命周期与运行关系
-
-beeBox 跟所有产品一样有**两件事**：**生命周期**（怎么从设计走到部署）和**运行关系**（产品跑在什么之上）。两件事落到产品上，beeBox 跑起来后每次接收触发产生 1 个 task run——产品完成一次履约，交付 1 个具体业务结果。
-
-**总览图**（概念流转）：
-
-```mermaid
-flowchart TB
-  subgraph prod["产品侧"]
-    def["beeBox definition\n产品定义"]
-    rel["beeBox release\n业务产品包 不可变"]
-    ins["beeBox instance\n部署实例"]
-  end
-
-  subgraph rt["运行侧"]
-    env["runtime environment\n实际运行环境"]
-    dep["runtime deployment\n某 runtime 版本的部署"]
-  end
-
-  run["task run\n1 次履约"]
-  result["1 个具体业务结果"]
-
-  def -->|发布| rel
-  rel -->|部署| ins
-  env -->|1...N| dep
-  dep -->|1...N| ins
-  ins -->|持续接收触发| run
-  run -->|交付| result
-  run -.引用.-> rel
-
-  classDef product fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
-  classDef runtime fill:#ffedd5,stroke:#ea580c,color:#7c2d12
-  classDef fulfill fill:#dcfce7,stroke:#16a34a,color:#14532d
-
-  class def,rel,ins product
-  class env,dep runtime
-  class run,result fulfill
-```
-
-**图怎么读**：
-- 蓝色 = **产品侧**（definition → release → instance）
-- 橙色 = **运行侧**（environment → deployment → instance）
-- 绿色 = **履约层**（instance 持续接收触发 → task run → 交付业务结果）
-- **instance 是产品侧和运行侧的交叉点**——既来自 release，又跑在 deployment 里
-- **task run 引用 release**——instance 跑 task run 时固定引用 release 版本（不可变）
-
-#### 1.2.1 产品生命周期（时间维度）
+### 1.5 产品生命周期
 
 beeBox 走过 3 个阶段：**前 2 阶段**（definition / release）是 beeBox 的产物（被设计 / 被发布）；**第 3 阶段**（instance）是 beeBox 的运行实例——产品装上后开始跑，持续接收触发产生 task run。
 
@@ -124,7 +77,7 @@ flowchart LR
 
 每个阶段一对多：1 个 definition → 多个 release（版本演进）；1 个 release → 多个 instance（多环境 / 多租户）。
 
-#### 1.2.2 运行关系（空间维度）
+### 1.6 运行关系
 
 instance 必须跑在一个执行环境之上——这就是 **beeBox runtime**。runtime 拆成 2 层：**runtime environment**（实际运行环境 + 隔离边界）跟 **runtime deployment**（某 runtime 版本在 environment 的一次具体部署）；instance 部署在 deployment 里。
 
@@ -151,7 +104,7 @@ flowchart TB
 - runtime **不属于 beeBox 产品本身**——它是 beeBox 跑在什么之上
 - 想要新 runtime 版本 = 重新创建 1 个 **新 runtime deployment**（不修改老 deployment；runtime deployment 没有"升级"这一说，每次版本变化都是新创建）；新 deployment 跟老 release **有兼容边界**——对**不兼容**的老 release 不升级（老 instance 继续在**老 deployment** 上跑完所有 in-flight task run 后下线），兼容的老 release 正常升级
 
-#### 1.2.3 产品完成一次履约（task run）
+### 1.7 task run 履约
 
 beeBox 跑起来后持续接收触发，每次触发产生 1 个 **task run**——产品完成一次履约，交付 1 个具体业务结果。
 
@@ -160,7 +113,7 @@ beeBox 跑起来后持续接收触发，每次触发产生 1 个 **task run**—
 - task run 是 **产品完成一次履约**——instance 内的一次具体执行单位
 - 走完 1 个 task run = 走完 1 条 beeline = 跑完 N 个 operation 步骤
 
-#### 1.2.4 版本引用（不可变性原则）
+### 1.8 版本引用
 
 task run 引用 release（product 不可变，固定引用）：
 
@@ -170,7 +123,9 @@ task run 引用 release（product 不可变，固定引用）：
 - **回滚语义** = 部署上一个 release 到新 instance + 切流回老版本；in-flight task run 不受影响
 - **beeline 升级** = 升级 beeline_version + 产生新 release（beeline 升级必然带动 release 升级）
 
-#### 1.2.5 审计字段
+### 1.9 审计字段
+
+每个 task run 必须带 4 个审计字段：
 
 | 字段 | 含义 |
 |---|---|
@@ -179,30 +134,9 @@ task run 引用 release（product 不可变，固定引用）：
 | `task_run.beeLine_id` | 任务走的是哪条 beeline（beeLine 的标识）|
 | `task_run.beeLine_version` | 任务走的那条 beeline 的版本号（显式记录）|
 
-### 1.3 实现设计
+---
 
-具体说明 §1.2 提到的组件怎么落地实现。
-
-#### 1.3.1 产品侧实现
-
-- **definition 存储**：beeBox definition 是结构化 schema 描述（JSON / DB 存储）
-- **release 打包**：definition 经过发布流程变成不可变 artifact（带 beeline_version + 依赖版本）
-- **instance 部署**：release 部署到 runtime deployment → 启动 1 个 instance（运行实体）
-
-#### 1.3.2 运行侧实现
-
-- **runtime deployment 启动**：在 environment 内启动 1 个 runtime deployment（绑定到某 runtime 版本）
-- **instance 接入**：instance 启动时绑定到 1 个 runtime deployment
-
-#### 1.3.3 履约实现
-
-- **task run 触发**：instance 接收触发（§1.2.3）→ 产生 1 个 task run
-- **beeline 加载**：task run 走 1 条 beeline（从 §1.2 release 隐含引用）
-- **operation 执行**：task run 跑完 1 条 beeline = N 个 operation
-- **异常处理**：op 异常 → 按 §1.1.3 持续流动原则暴露（具体机制留待后续）
-- **审计**：每个 task run 记录 §1.2.5 字段
-
-### 1.4 履约合同
+## 2. 履约合同
 
 每个 beeBox 都带一份"履约合同"：
 
@@ -210,3 +144,28 @@ task run 引用 release（product 不可变，固定引用）：
 - **验收标准**——怎么算"做完了"（量化指标 + 抽样方法）
 - **改善指标**——怎么算"做得好"（运行效率 / 异常率 / 时延）
 - **例外条款**——什么情况不交付 / 退回（异常 / 失败 / 超出范围时的回退路径）
+
+---
+
+## 3. 实现设计
+
+具体说明 §1 提到的产品组件怎么落地实现。
+
+### 3.1 产品侧实现
+
+- **definition 存储**：beeBox definition 是结构化 schema 描述（JSON / DB 存储）
+- **release 打包**：definition 经过发布流程变成不可变 artifact（带 beeline_version + 依赖版本）
+- **instance 部署**：release 部署到 runtime deployment → 启动 1 个 instance（运行实体）
+
+### 3.2 运行侧实现
+
+- **runtime deployment 启动**：在 environment 内启动 1 个 runtime deployment（绑定到某 runtime 版本）
+- **instance 接入**：instance 启动时绑定到 1 个 runtime deployment
+
+### 3.3 履约实现
+
+- **task run 触发**：instance 接收触发（§1.7）→ 产生 1 个 task run
+- **beeline 加载**：task run 走 1 条 beeline（从 §1.8 release 隐含引用）
+- **operation 执行**：task run 跑完 1 条 beeline = N 个 operation
+- **异常处理**：op 异常 → 按 §1.3 持续流动原则暴露（具体机制留待后续）
+- **审计**：每个 task run 记录 §1.9 字段

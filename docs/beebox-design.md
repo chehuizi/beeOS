@@ -8,7 +8,7 @@
 
 ## 0. 一句话
 
-beeBox 是持续交付 1 个明确业务结果的数字精益工作单元。
+beeBox 是持续交付一类明确业务结果的数字精益工作单元。
 
 ---
 
@@ -16,11 +16,11 @@ beeBox 是持续交付 1 个明确业务结果的数字精益工作单元。
 
 ### 1.1 第一性定义
 
-> **beeBox 是持续交付 1 个明确业务结果的数字精益工作单元。**
+> **beeBox 是持续交付一类明确业务结果的数字精益工作单元。**
 
 拆开看 4 个关键词：
 
-- **业务结果**——可被验收的产出（不是任务、不是流程、不是操作）
+- **业务结果**——可被验收的产出（不是任务、不是流程、不是操作）；beeBox 围绕"一类"（一组同类的）业务结果构建——可以持续重复跑出 N 个具体的业务结果
 - **持续交付**——不是一次性完成，是持续地、可重复地交付
 - **数字精益工作单元**——精益 cell 的数字版本，装在机器上的、可远程观察的
 - **单元**——1 个独立可安装、可运行、可度量、可改善的产品单元
@@ -99,13 +99,13 @@ flowchart TB
 - runtime **不属于 beeBox 产品本身**——它是 beeBox 跑在什么之上
 - 升级 runtime 不需要升级 release（runtime 是基础设施维度，跟产品生命周期正交）
 
-#### 1.5.3 产品被使用 1 次（task run）
+#### 1.5.3 产品完成一次履约（task run）
 
-beeBox 跑起来后持续接收触发，每次触发产生 1 个 **task run**——产品被消费 1 次，交付 1 个具体业务结果。
+beeBox 跑起来后持续接收触发，每次触发产生 1 个 **task run**——产品完成一次履约，交付 1 个具体业务结果。
 
 - task run **不在产品生命周期里**（不是产品演化的某个阶段）
 - task run **不在运行关系里**（不是 instance 跟 runtime 的关系）
-- task run 是 **产品被消费 1 次**——instance 内的一次具体执行单位
+- task run 是 **产品完成一次履约**——instance 内的一次具体执行单位
 - 走完 1 个 task run = 走完 1 条 beeline = 跑完 N 个 operation 步骤
 
 #### 1.5.4 版本绑定（不可变性原则）
@@ -114,8 +114,8 @@ task run 创建时 **snapshot release**——产品一旦发布不可变，task 
 
 - **snapshot 时点** = task run 创建瞬间
 - **绑定范围** = release 隐含引用的全部 beeline_version + 依赖版本（隐式跟随 release）
-- **升级语义** = 部署新 release；不影响已 bind task run；只影响新创建的 task run
-- **回滚语义** = 部署上一个 release；不改变已 bind task run
+- **升级语义** = 部署新 release 到**新 instance**；旧 instance 继续跑老 release；不影响已 bind task run；只影响新创建的 task run
+- **回滚语义** = 部署上一个 release 到新 instance；不改变已 bind task run
 - **beeline 升级** = 升级 beeline_version + 产生新 release（beeline 升级必然带动 release 升级）
 
 #### 1.5.5 审计字段
@@ -123,7 +123,8 @@ task run 创建时 **snapshot release**——产品一旦发布不可变，task 
 | 字段 | 含义 |
 |---|---|
 | `task_run.beeBox_release` | 任务创建时的 release 标识 |
-| `task_run.beeLine_version` | 由 release 隐式确定（task run 不单独存，可推导）|
+| `task_run.beeLine_id` | 任务走的是哪条 beeline（beeLine 的标识）|
+| `task_run.beeLine_version` | 任务走的那条 beeline 的版本号（显式记录）|
 
 ### 1.6 交付合同
 

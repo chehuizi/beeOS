@@ -179,7 +179,39 @@ task run 引用 release（product 不可变，固定引用）：
 | `task_run.beeLine_id` | 任务走的是哪条 beeline（beeLine 的标识）|
 | `task_run.beeLine_version` | 任务走的那条 beeline 的版本号（显式记录）|
 
-### 1.3 履约合同
+### 1.3 实现设计
+
+具体说明 §1.2 提到的组件怎么落地实现。
+
+#### 1.3.1 产品侧实现
+
+- **definition 存储**：beeBox definition 是结构化 schema 描述（JSON / DB 存储）
+- **release 打包**：definition 经过发布流程变成不可变 artifact（带 beeline_version + 依赖版本）
+- **instance 部署**：release 部署到 runtime deployment → 启动 1 个 instance（进程 / 容器）
+
+#### 1.3.2 运行侧实现
+
+- **runtime deployment 启动**：在 environment 内启动 1 个 runtime deployment（绑定到某 runtime 版本）
+- **instance 接入**：instance 启动时绑定到 1 个 runtime deployment
+
+#### 1.3.3 履约实现
+
+- **task run 调度**：instance 接收触发 → 分配 task ID → 定位 beeline
+- **operation 执行**：按 seq 顺序执行 operation，物料按 input/output 路径在 5 业务库区间流转
+- **看板**：实时展示 task 状态（在哪个库区 / 哪个 operation / 异常）
+- **异常回流**：op 异常 → 物料到退货区 → 人工认领处理
+- **审计**：所有 task run 记录 §1.2.5 审计字段
+
+#### 1.3.4 内核组件
+
+| 组件 | 职责 |
+|---|---|
+| **Task Receiver** | 接收 task（来自 kanban / 系统事件），校验 + 分配 task ID |
+| **Beeline Cache** | 缓存 beeline 模板（v0.1 内嵌，Cache 跟源同进程自动失效）|
+| **Bee Planner** | beeline miss 时规划（推荐 beeline）|
+| **Beeline Executor** | 在 instance 内按 seq 顺序执行 operation，驱动物料流转 |
+
+### 1.4 履约合同
 
 每个 beeBox 都带一份"履约合同"：
 

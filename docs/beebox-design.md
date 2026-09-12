@@ -46,7 +46,8 @@ beeBox 是持续交付 1 个明确业务结果的数字精益工作单元。
 
 | 概念 | 范围 | 关系 |
 |---|---|---|
-| **beeline** | 1 类任务的标准作业路线 | 最小执行单元 |
+| **operation** | 1 个不可再分的加工动作（input / output / type 已声明）| 最小执行单元（原子工序）|
+| **beeline** | 1 类任务的标准作业路线 | 1...N 个 operation 的有序序列 |
 | **beeBox** | 1 个可独立运营和验收的数字工作 cell | 1...N 条 beeline 组成 |
 | **企业价值流** | 端到端业务流 | 1...N 个 beeBox 串联 |
 
@@ -63,7 +64,7 @@ beeBox 是持续交付 1 个明确业务结果的数字精益工作单元。
 | **beeBox definition** | 设计蓝图（业务结果定义 / 验收标准 / 改善指标 / beeline 列表）| 1 def → N release |
 | **beeBox release** | 一次不可变、可交付的版本 | 1 release → N instance |
 | **beeBox instance** | 安装后正在运行的实例 | 1 instance → N task run |
-| **task run** | 一次具体业务交付 | instance 内的一次执行 |
+| **task run** | 一次具体业务交付 | instance 内的一次执行（走完 1 条 beeline = N 个 operation 步骤）|
 
 ### 1.6 交付合同
 

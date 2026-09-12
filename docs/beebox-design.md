@@ -128,7 +128,7 @@ task run 创建时 **snapshot release**——产品一旦发布不可变，task 
 | `task_run.beeLine_id` | 任务走的是哪条 beeline（beeLine 的标识）|
 | `task_run.beeLine_version` | 任务走的那条 beeline 的版本号（显式记录）|
 
-### 1.6 交付合同
+### 1.6 履约合同
 
 每个 beeBox 都带一份"交付合同"：
 

@@ -82,7 +82,7 @@ flowchart LR
 
 #### 1.5.2 运行关系（空间维度）
 
-instance 必须跑在一个执行环境之上——这就是 **beeBox runtime**。runtime 拆成 2 层：**runtime environment**（设计 / 类型）跟 **runtime deployment**（具体部署）；instance 部署在 deployment 里。
+instance 必须跑在一个执行环境之上——这就是 **beeBox runtime**。runtime 拆成 2 层：**runtime environment**（实际运行环境 + 隔离边界）跟 **runtime deployment**（某 runtime 版本在 environment 的一次具体部署）；instance 部署在 deployment 里。
 
 ```mermaid
 flowchart TB

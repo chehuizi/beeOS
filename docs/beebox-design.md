@@ -14,6 +14,51 @@ beeBox 是持续交付一类明确业务结果的数字精益工作单元。
 
 ## 1. 产品和领域模型
 
+beeBox 跟所有产品一样有**两件事**：**生命周期**（怎么从设计走到部署）和**运行关系**（产品跑在什么之上）。两件事落到产品上，beeBox 跑起来后每次接收触发产生 1 个 task run——产品完成一次履约，交付 1 个具体业务结果。
+
+**总览图**（概念流转）：
+
+```mermaid
+flowchart TB
+  subgraph prod["产品侧"]
+    def["beeBox definition\n产品定义"]
+    rel["beeBox release\n业务产品包 不可变"]
+    ins["beeBox instance\n部署实例"]
+  end
+
+  subgraph rt["运行侧"]
+    env["runtime environment\n实际运行环境"]
+    dep["runtime deployment\n某 runtime 版本的部署"]
+  end
+
+  run["task run\n1 次履约"]
+  result["1 个具体业务结果"]
+
+  def -->|发布| rel
+  rel -->|部署| ins
+  env -->|1...N| dep
+  dep -->|1...N| ins
+  ins -->|持续接收触发| run
+  run -->|交付| result
+  run -.引用.-> rel
+
+  classDef product fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+  classDef runtime fill:#ffedd5,stroke:#ea580c,color:#7c2d12
+  classDef fulfill fill:#dcfce7,stroke:#16a34a,color:#14532d
+
+  class def,rel,ins product
+  class env,dep runtime
+  class run,result fulfill
+```
+
+**图怎么读**：
+
+- 蓝色 = **产品侧**（definition → release → instance）
+- 橙色 = **运行侧**（environment → deployment → instance）
+- 绿色 = **履约层**（instance 持续接收触发 → task run → 交付业务结果）
+- **instance 是产品侧和运行侧的交叉点**——既来自 release，又跑在 deployment 里
+- **task run 引用 release**——instance 跑 task run 时固定引用 release 版本（不可变）
+
 ### 1.1 第一性定义
 
 > **beeBox 是持续交付一类明确业务结果的数字精益工作单元。**

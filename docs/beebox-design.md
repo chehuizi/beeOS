@@ -59,20 +59,17 @@ beeBox 是持续交付 1 个明确业务结果的数字精益工作单元。
 
 ### 1.5 4 层模型
 
-| 层级 | 含义 | 关系 |
-|---|---|---|
-| **beeBox definition** | 产品定义——业务结果 / 验收标准 / 改善指标 / beeline 列表 / 物料 schema 引用 / bee 引用 | 1 def → N release |
-| **beeBox release** | 围绕 1 个业务结果发布的**不可变业务产品包**（固定引用其全部 beeline_version 和依赖版本）| 1 release → N instance |
-| **beeBox instance** | release 的一个部署实例（正在跑）| 1 instance → N task run |
-| **beeBox runtime** | 基础设施层——让 instance 能跑的执行环境 | 1 runtime → N instance |
+| 层面 | 层级 | 含义 | 关系 |
+|---|---|---|---|
+| **产品模型** | **beeBox definition** | 产品定义——业务结果 / 验收标准 / 改善指标 / beeline 列表 / 物料 schema 引用 / bee 引用 | 1 def → N release |
+| **产品模型** | **beeBox release** | 围绕 1 个业务结果发布的**不可变业务产品包**（固定引用其全部 beeline_version 和依赖版本）| 1 release → N instance |
+| **产品模型** | **beeBox instance** | release 的一个部署实例（正在跑）| 1 instance → N task run |
+| **基础设施** | **beeBox runtime** | 让 instance 能跑的执行环境 | 1 runtime → N instance |
 
 > **关键区分**：
-> - **definition** = 设计蓝图（业务定义）
-> - **release** = 业务产品包（不可变）
-> - **instance** = 部署实例（跑）
-> - **runtime** = 基础设施（让 instance 跑）
->
-> **task run 不在 4 层里**——它是 instance 内的一次具体执行单位（走完 1 条 beeline = N 个 operation 步骤）。
+> - **产品模型**（前 3 层）= 描述"beeBox 是什么、发布什么、跑在哪"——beeBox 本身的层级
+> - **基础设施**（第 4 层）= "instance 跑在什么之上"——独立层面，跟产品模型分层
+> - **task run 不在 4 层里**——它是 instance 内的一次具体执行单位（走完 1 条 beeline = N 个 operation 步骤）
 
 **版本绑定（不可变性原则）**：
 - task run **创建时**绑定 `beeBox release`（业务产品包不可变，bind 之后不再变）

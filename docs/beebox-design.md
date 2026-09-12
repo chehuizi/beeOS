@@ -175,6 +175,7 @@ task run 引用 release（product 不可变，固定引用）：
 | 字段 | 含义 |
 |---|---|
 | `task_run.beeBox_release` | 任务创建时的 release 标识 |
+| `task_run.beeBox_instance_id` | 任务创建时的 instance 标识（执行位置）|
 | `task_run.beeLine_id` | 任务走的是哪条 beeline（beeLine 的标识）|
 | `task_run.beeLine_version` | 任务走的那条 beeline 的版本号（显式记录）|
 

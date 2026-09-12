@@ -99,7 +99,7 @@ flowchart TB
 - 多租户 / 多副本场景：同一环境跑 N 个 instance，共享 1 个 runtime
 - 多环境场景：dev / staging / prod 各 1 个 runtime
 - runtime **不属于 beeBox 产品本身**——它是 beeBox 跑在什么之上
-- 升级 runtime 不需要升级 release（runtime 是基础设施维度，跟产品生命周期正交）
+- 升级 runtime **不强制升级 release**（runtime 是基础设施维度，跟产品生命周期正交）；但 runtime 升级**必须向后兼容已发布的 release**——保证老 instance 上的老 release 还能继续跑
 
 #### 1.5.3 产品完成一次履约（task run）
 

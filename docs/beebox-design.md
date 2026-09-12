@@ -61,6 +61,33 @@ beeBox 是持续交付一类明确业务结果的数字精益工作单元。
 
 beeBox 跟所有产品一样有**两件事**：**生命周期**（怎么从设计走到部署）和**运行关系**（产品跑在什么之上）。两件事落到产品上，beeBox 跑起来后每次接收触发产生 1 个 task run——产品完成一次履约，交付 1 个具体业务结果。
 
+**总览图**（概念流转）：
+
+```mermaid
+flowchart LR
+  def["beeBox definition\n产品定义"]
+  rel["beeBox release\n业务产品包 不可变"]
+  ins["beeBox instance\n部署实例"]
+  env["runtime environment\n实际运行环境"]
+  dep["runtime deployment\n某 runtime 版本的部署"]
+  run["task run\n1 次履约"]
+  result["1 个具体业务结果"]
+
+  def -->|发布| rel
+  rel -->|部署| ins
+  env -->|1...N| dep
+  dep -->|1...N| ins
+  rel -.引用.-> run
+  ins -->|持续接收触发| run
+  run -->|交付| result
+```
+
+**图怎么读**：
+- 横向 = **产品生命周期**（def → rel → ins）
+- 纵向 = **运行关系**（env → dep → ins）
+- **instance 是交叉点**——既在产品侧（来自 release），又在运行侧（跑在 deployment 里）
+- **task run 是履约**——instance 持续接收触发，每次产生 1 个 task run，**引用 release**，交付 1 个具体业务结果
+
 #### 1.5.1 产品生命周期（时间维度）
 
 beeBox 走过 3 个阶段，每个阶段交付一份产物，产物被下一阶段消费：
@@ -116,12 +143,12 @@ beeBox 跑起来后持续接收触发，每次触发产生 1 个 **task run**—
 - task run 是 **产品完成一次履约**——instance 内的一次具体执行单位
 - 走完 1 个 task run = 走完 1 条 beeline = 跑完 N 个 operation 步骤
 
-#### 1.5.4 版本绑定（不可变性原则）
+#### 1.5.4 版本引用（不可变性原则）
 
-task run 创建时 **snapshot release**——产品一旦发布不可变，task run 锁住它创建时的 release：
+task run 引用 release（product 不可变，引用即快照）：
 
-- **snapshot 时点** = task run 创建瞬间
-- **绑定范围** = release 隐含引用的全部 beeline_version + 依赖版本（隐式跟随 release）
+- **引用时点** = task run 创建瞬间
+- **引用范围** = release 隐含引用的全部 beeline_version + 依赖版本（隐式跟随 release）
 - **升级语义** = 部署新 release 到**新 instance** + **切流**（新接收的触发切到新 instance）；in-flight task run 不受切流影响，继续在旧 instance 上跑老 release；旧 instance 跑完所有 task run 后下线
 - **回滚语义** = 部署上一个 release 到新 instance + 切流回老版本；in-flight task run 不受影响
 - **beeline 升级** = 升级 beeline_version + 产生新 release（beeline 升级必然带动 release 升级）

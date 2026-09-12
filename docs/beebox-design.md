@@ -196,11 +196,11 @@ task run 引用 release（product 不可变，固定引用）：
 
 #### 1.3.3 履约实现
 
-- **task run 调度**：instance 接收触发 → 分配 task ID → 定位 beeline
-- **operation 执行**：按 seq 顺序执行 operation，物料按 input/output 路径在 5 业务库区间流转
-- **看板**：实时展示 task 状态（在哪个库区 / 哪个 operation / 异常）
-- **异常回流**：op 异常 → 物料到退货区 → 人工认领处理
-- **审计**：所有 task run 记录 §1.2.5 审计字段
+- **task run 触发**：instance 接收触发（§1.2.3）→ 产生 1 个 task run
+- **beeline 加载**：task run 走 1 条 beeline（从 §1.2 release 隐含引用）
+- **operation 执行**：task run 跑完 1 条 beeline = N 个 operation
+- **异常处理**：op 异常 → 按 §1.1.3 持续流动原则暴露（具体机制留待后续）
+- **审计**：每个 task run 记录 §1.2.5 字段
 
 ### 1.4 履约合同
 

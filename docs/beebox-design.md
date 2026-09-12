@@ -105,7 +105,7 @@ flowchart TB
 - **3 层关系**：1 environment → 1...N deployment；1 deployment → 1...N instance
 - **多 environment 场景**：多个 **runtime environment** 描述不同环境类型（dev / staging / prod / 不同云厂商）——每个 environment 是独立的隔离边界
 - runtime **不属于 beeBox 产品本身**——它是 beeBox 跑在什么之上
-- 升级 runtime deployment = 升级到新的 **runtime 版本**；**不强制升级 release**（runtime 跟 release 是独立维度）；升级**有兼容边界**——对**不兼容**的老 release **不升级**（老 instance 继续在**老 deployment** 上跑完所有 in-flight task run 后下线），兼容的老 release 正常升级
+- 想要新 runtime 版本 = 重新创建 1 个 **新 runtime deployment**（不修改老 deployment；runtime deployment 没有"升级"这一说，每次版本变化都是新创建）；新 deployment 跟老 release **有兼容边界**——对**不兼容**的老 release 不升级（老 instance 继续在**老 deployment** 上跑完所有 in-flight task run 后下线），兼容的老 release 正常升级
 
 #### 1.5.3 产品完成一次履约（task run）
 

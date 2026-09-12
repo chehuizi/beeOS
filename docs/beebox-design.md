@@ -61,31 +61,30 @@ beeBox 是持续交付 1 个明确业务结果的数字精益工作单元。
 
 | 层级 | 含义 | 关系 |
 |---|---|---|
-| **beeBox definition** | 设计蓝图（业务结果定义 / 验收标准 / 改善指标 / beeline 列表）| 1 def → N release |
-| **beeBox release** | 一次不可变、可交付的版本 | 1 release → N instance |
-| **beeBox instance** | 安装后正在运行的实例 | 1 instance → N task run |
-| **task run** | 一次具体业务交付 | instance 内的一次执行（走完 1 条 beeline = N 个 operation 步骤）|
+| **beeBox definition** | 产品定义——业务结果 / 验收标准 / 改善指标 / beeline 列表 / 物料 schema 引用 / bee 引用 | 1 def → N release |
+| **beeBox release** | 围绕 1 个业务结果发布的**不可变业务产品包**（固定引用其全部 beeline_version 和依赖版本）| 1 release → N instance |
+| **beeBox instance** | release 的一个部署实例（正在跑）| 1 instance → N task run |
+| **beeBox runtime** | 基础设施层——让 instance 能跑的执行环境 | 1 runtime → N instance |
 
-**关键概念区分（beeBox release vs beeline_version）**：
-
-| 维度 | 含义 | 类比 |
-|---|---|---|
-| `beeBox release` | beeBox **运行时**的版本（代码 / 二进制 / 部署包）| MySQL server release（软件）|
-| `beeline_version` | beeBox 内**数据资产**（工艺路线）的版本 | MySQL database schema version（数据）|
-
-> 两个版本号**正交**——`beeline_version` 变化不需要 `beeBox release` 变化，反之亦然。
+> **关键区分**：
+> - **definition** = 设计蓝图（业务定义）
+> - **release** = 业务产品包（不可变）
+> - **instance** = 部署实例（跑）
+> - **runtime** = 基础设施（让 instance 跑）
+>
+> **task run 不在 4 层里**——它是 instance 内的一次具体执行单位（走完 1 条 beeline = N 个 operation 步骤）。
 
 **版本绑定（不可变性原则）**：
-- task run **创建时**绑定（snapshot）`beeBox release` + `beeline_version`；bind 之后不再变
-- 绑定范围 = 整条 beeline（含 N 个 operation 版本）—— operation 版本隐式跟随 `beeline_version`
-- instance 升级后只影响新创建的 task run；运行中的 task run 继续用原版本（不被升级打断）
-- 升级 `beeline_version` = 仅数据资产升级，`beeBox release` 编号不变
-- 升级 `beeBox release` = 仅运行时升级，已存在的 `beeline_version` 不变（除非该 release 内含 beeline 变更）
-- 回滚 = 部署上一个 release 或回退 `beeline_version`；不改变已 bind task run 的版本（保持 in-flight 不变性）
+- task run **创建时**绑定 `beeBox release`（业务产品包不可变，bind 之后不再变）
+- 绑定范围 = release 隐含引用的全部 beeline_version + 依赖版本（隐式跟随 release）
+- instance 升级后只影响新创建的 task run；运行中的 task run 继续用原 release（不被升级打断）
+- 升级 release = 部署新 release；不影响已 bind task run
+- 升级单条 beeline = 升级 beeline_version + 产生新 release（beeline 升级必然带动 release 升级）
+- 回滚 = 部署上一个 release；不改变已 bind task run 的版本
 
 **审计字段**（每个 task run 必含）：
-- `task_run.beeBox_release` — 任务创建时的 beeBox release 标识
-- `task_run.beeLine_version` — 任务创建时的 beeline 版本标识
+- `task_run.beeBox_release` — 任务创建时的 release 标识
+- `task_run.beeLine_version` — 由 release 隐式确定（task run 不单独存，可推导）
 
 ### 1.6 交付合同
 

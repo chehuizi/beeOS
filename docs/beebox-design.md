@@ -202,15 +202,6 @@ task run 引用 release（product 不可变，固定引用）：
 - **异常回流**：op 异常 → 物料到退货区 → 人工认领处理
 - **审计**：所有 task run 记录 §1.2.5 审计字段
 
-#### 1.3.4 内核组件
-
-| 组件 | 职责 |
-|---|---|
-| **Task Receiver** | 接收 task（来自 kanban / 系统事件），校验 + 分配 task ID |
-| **Beeline Cache** | 缓存 beeline 模板（v0.1 内嵌，Cache 跟源同进程自动失效）|
-| **Bee Planner** | beeline miss 时规划（推荐 beeline）|
-| **Beeline Executor** | 在 instance 内按 seq 顺序执行 operation，驱动物料流转 |
-
 ### 1.4 履约合同
 
 每个 beeBox 都带一份"履约合同"：

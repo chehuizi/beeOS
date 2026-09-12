@@ -103,7 +103,7 @@ flowchart TB
 - 橙色 = **运行侧**（environment → deployment → instance）
 - 绿色 = **履约层**（instance 持续接收触发 → task run → 交付业务结果）
 - **instance 是产品侧和运行侧的交叉点**——既来自 release，又跑在 deployment 里
-- **task run 引用 release**——instance 跑 task run 时绑定 release 版本（不可变，引用即快照）
+- **task run 引用 release**——instance 跑 task run 时固定引用 release 版本（不可变）
 
 #### 1.2.1 产品生命周期（时间维度）
 
@@ -162,7 +162,7 @@ beeBox 跑起来后持续接收触发，每次触发产生 1 个 **task run**—
 
 #### 1.2.4 版本引用（不可变性原则）
 
-task run 引用 release（product 不可变，引用即快照）：
+task run 引用 release（product 不可变，固定引用）：
 
 - **引用时点** = task run 创建瞬间
 - **引用范围** = release 隐含引用的全部 beeline_version + 依赖版本（隐式跟随 release）

@@ -77,7 +77,7 @@ flowchart LR
   rel -->|部署| ins
   env -->|1...N| dep
   dep -->|1...N| ins
-  rel -.引用.-> run
+  run -.引用.-> rel
   ins -->|持续接收触发| run
   run -->|交付| result
 ```

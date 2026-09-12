@@ -86,9 +86,9 @@ instance 必须跑在一个执行环境之上——这就是 **beeBox runtime**�
 
 ```mermaid
 flowchart TB
-  env["runtime environment\n设计 / 类型"]
-  d1["runtime deployment #1\n可用区 A"]
-  d2["runtime deployment #2\n可用区 B"]
+  env["runtime environment\n实际运行环境 隔离边界"]
+  d1["runtime deployment #1\nruntime v1.0"]
+  d2["runtime deployment #2\nruntime v1.1"]
   i1["instance #1"]
   i2["instance #2"]
   i3["instance #3"]
@@ -99,13 +99,14 @@ flowchart TB
   d2 --> i3
 ```
 
-- **runtime environment** = runtime 的设计 / 类型定义（schema / 模板）
-- **runtime deployment** = environment 的一次具体部署（environment 的实例化）
+- **runtime** = 提供的可执行 runtime（软件 / 引擎，有版本）
+- **runtime environment** = 实际运行环境 + 隔离边界
+- **runtime deployment** = 某个 **runtime 版本**在 environment 的一次具体部署
 - **beeBox instance** = 部署在 runtime deployment 里的应用
-- **3 层关系**：1 environment → 1...N deployment（多节点 / 跨可用区）；1 deployment → 1...N instance（多租户 / 多副本 / 多业务线）
-- 多环境场景：dev / staging / prod 各 1 个 environment
+- **3 层关系**：1 environment → 1...N deployment（多节点 / 跨可用区 / 不同 runtime 版本）；1 deployment → 1...N instance（多租户 / 多副本 / 多业务线）
+- **多 environment 场景**：多个 **runtime environment** 描述不同环境类型（dev / staging / prod / 不同云厂商）——每个 environment 是独立的隔离边界
 - runtime **不属于 beeBox 产品本身**——它是 beeBox 跑在什么之上
-- 升级 runtime deployment **不强制升级 release**（runtime deployment 跟 release 是独立维度）；升级**有兼容边界**——对**不兼容**的老 release **不升级**（老 instance 继续在**老 deployment** 上跑完所有 in-flight task run 后下线），兼容的老 release 正常升级
+- 升级 runtime deployment = 升级到新的 **runtime 版本**；**不强制升级 release**（runtime 跟 release 是独立维度）；升级**有兼容边界**——对**不兼容**的老 release **不升级**（老 instance 继续在**老 deployment** 上跑完所有 in-flight task run 后下线），兼容的老 release 正常升级
 
 #### 1.5.3 产品完成一次履约（task run）
 

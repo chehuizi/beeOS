@@ -107,7 +107,7 @@ flowchart TB
 
 #### 1.2.1 产品生命周期（时间维度）
 
-beeBox 走过 3 个阶段，每个阶段交付一份产物，产物被下一阶段消费：
+beeBox 走过 3 个阶段：**前 2 阶段**（definition / release）是 beeBox 的产物（被设计 / 被发布）；**第 3 阶段**（instance）是 beeBox 的运行实例——产品装上后开始跑，持续接收触发产生 task run。
 
 ```mermaid
 flowchart LR

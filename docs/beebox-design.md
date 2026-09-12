@@ -102,7 +102,7 @@ flowchart TB
 - **runtime environment** = 实际运行环境 + 隔离边界
 - **runtime deployment** = 某个 **runtime 版本**在 environment 的一次具体部署（runtime 隐含在 deployment 里）
 - **beeBox instance** = 部署在 runtime deployment 里的应用
-- **3 层关系**：1 environment → 1...N deployment（多节点 / 跨机器 / 不同 runtime 版本）；1 deployment → 1...N instance（多租户 / 多副本 / 多业务线）
+- **3 层关系**：1 environment → 1...N deployment（多节点 / 跨机器 / 不同 runtime 版本）；1 deployment → 1...N instance（多租户 / 多业务线）
 - **多 environment 场景**：多个 **runtime environment** 描述不同环境类型（dev / staging / prod / 不同云厂商）——每个 environment 是独立的隔离边界
 - runtime **不属于 beeBox 产品本身**——它是 beeBox 跑在什么之上
 - 升级 runtime deployment = 升级到新的 **runtime 版本**；**不强制升级 release**（runtime 跟 release 是独立维度）；升级**有兼容边界**——对**不兼容**的老 release **不升级**（老 instance 继续在**老 deployment** 上跑完所有 in-flight task run 后下线），兼容的老 release 正常升级

@@ -46,14 +46,7 @@ beeBox_definition:
     beelines:
       - id: string
         version: integer
-
-    # 资源：bee / 外部系统
-    bees:
-      - type: string           # bee 类型标识
-        params: object         # 必要参数
-    external_systems:
-      - id: string             # 外部系统接入点
-        interface: string      # 接口描述
+      # 内部 operation 用什么 bee / 外部系统归 beeline 自己的定义管
 
   # ---- 履约结果：交付什么业务结果 ----
   result:
@@ -96,12 +89,9 @@ beeBox_definition:
 | 引用类型 | 必填字段 | 选填字段 | 备注 |
 |---|---|---|---|
 | **beeline 引用** | `id`, `version` | — | beeline 有 id + version（递增序列号）；引用发生在 task 块（task 1:1 绑定 1 条 beeline）|
-| **bee 引用** | `type` | `params` | bee 只有 type 标识（无独立 id / version）|
-| **外部系统引用** | `id`, `interface` | — | 外部系统无 version（按接入点定位）|
 
 引用校验（保存 definition 时）：
-- 所有引用的 `id` / `type` 必须真实存在（目标对象已注册）
-- 有 `version` 的引用（beeline）：`version` 必须存在
+- beeline 引用：`id` + `version` 必须真实存在
 
 ---
 

@@ -172,7 +172,7 @@ beeBox 跑起来后持续接收触发，每次触发产生 1 个 **task run**—
 - task run **不在产品生命周期里**（不是产品演化的某个阶段）
 - task run **不在运行关系里**（不是 instance 跟 runtime 的关系）
 - task run 是 **产品完成一次履约**——instance 内的一次具体执行单位
-- 走完 1 个 task run = 走完 1 条 beeline = 执行完 beeline 包含的所有 operation
+- 走完 1 个 task run = 走完 1 条 beeline = 按 beeline 路线执行对应的 operation 步骤
 
 ### 2.3 版本引用
 
@@ -217,6 +217,6 @@ task run 引用 release（product 不可变，固定引用）：
 
 - **task run 触发**：instance 接收触发（§2.2）→ 产生 1 个 task run
 - **beeline 加载**：task run 走 1 条 beeline（从 §2.3 release 隐含引用）
-- **operation 执行**：task run 跑完 1 条 beeline = 执行完 beeline 包含的所有 operation
+- **operation 执行**：task run 按 beeline 路线执行对应的 operation 步骤
 - **异常处理**：op 异常 → 按 §1.3 持续流动原则暴露（具体机制留待后续）
 - **审计**：每个 task run 记录 §2.4 字段

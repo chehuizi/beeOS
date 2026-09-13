@@ -35,7 +35,7 @@ beeBox_definition:
   # ---- 履约对象：beeBox 接收什么 task ----
   task:                      # 1...N 类 task
     - type: string           # task 类型标识
-      schema_ref: string     # 引用 task 数据结构 schema
+      task_schema: string    # task 的数据结构
       trigger: string        # 触发条件描述
 
   # ---- 履约过程：怎么履约 ----
@@ -60,7 +60,7 @@ beeBox_definition:
   # ---- 履约结果：交付什么业务结果 ----
   result:
     type: string             # 业务结果类型标识
-    schema_ref: string       # 引用业务结果数据结构 schema
+    result_schema: string    # result 的数据结构
     acceptance:              # 验收标准（单次判据）
       - metric: string
         op: enum             # gte / lte / eq / in / match

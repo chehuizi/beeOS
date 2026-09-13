@@ -14,9 +14,9 @@ definition 按**履约生命周期**组织成 4 块：
 
 | 块 | 含义 | 字段 |
 |---|---|---|
-| **履约对象** | beeBox 接收什么 task | `contract.task` |
-| **履约结果** | beeBox 交付什么业务结果 | `contract.result` |
-| **履约度量** | 质量 / 时效 / 成本 度量方式 + 目标值 | `contract.metrics` |
+| **履约对象** | beeBox 接收什么 task | `task` |
+| **履约结果** | beeBox 交付什么业务结果 | `result` |
+| **履约度量** | 质量 / 时效 / 成本 度量方式 + 目标值 | `metrics` |
 | **履约过程** | 怎么履约（beeline 列表 + 资源）| `beelines` / `bees` / `schemas` / `external_systems` |
 
 每块都是 definition 自己的——不需要跨 definition 复用（beeline / bee / schema 本身就用引用机制，复用通过引用实现）。

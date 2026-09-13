@@ -35,9 +35,7 @@ beeBox_definition:
   # ---- 履约对象：beeBox 接收什么 task ----
   task:                      # 1...N 类 task
     - type: string           # task 类型标识
-      schema_ref:            # task 数据结构引用
-        id: string
-        version: integer
+      schema_ref: string     # 引用 task 数据结构 schema
       trigger: string        # 触发条件描述
 
   # ---- 履约过程：怎么履约 ----
@@ -55,7 +53,6 @@ beeBox_definition:
         params: object         # 必要参数
     schemas:
       - id: string             # 物料 schema 标识
-        version: integer
     external_systems:
       - id: string             # 外部系统接入点
         interface: string      # 接口描述
@@ -63,9 +60,7 @@ beeBox_definition:
   # ---- 履约结果：交付什么业务结果 ----
   result:
     type: string             # 业务结果类型标识
-    schema_ref:              # 业务结果数据结构引用
-      id: string
-      version: integer
+    schema_ref: string       # 引用业务结果数据结构 schema
     acceptance:              # 验收标准（单次判据）
       - metric: string
         op: enum             # gte / lte / eq / in / match
@@ -104,13 +99,12 @@ beeBox_definition:
 |---|---|---|---|
 | **beeline 引用** | `id`, `version` | `applies_to` | beeline 有 id + version（递增序列号），引用固定到具体 version |
 | **bee 引用** | `type` | `params` | bee 只有 type 标识（无独立 id / version）|
-| **schema 引用** | `id`, `version` | — | schema 有 id + version（递增序列号）|
+| **schema 引用** | `id` | — | schema 是数据/资源对象（无独立 version）|
 | **外部系统引用** | `id`, `interface` | — | 外部系统无 version（按接入点定位）|
 
 引用校验（保存 definition 时）：
 - 所有引用的 `id` / `type` 必须真实存在（目标对象已注册）
-- 有 `version` 的引用：`version` 必须存在
-- `schema_ref.version` 必须存在
+- 有 `version` 的引用（beeline）：`version` 必须存在
 
 ---
 
@@ -132,5 +126,5 @@ beeBox_definition:
 | `process` | §3.1.2 履约过程 |
 | `result` | §3.1.2 履约结果（对应 §2.1 单次履约）|
 | `metrics` | §3.1.2 履约度量（对应 §2.1 履约指标）|
-| 引用 `id+version` 模式 | §3.1.3 引用机制 |
+| 引用机制（按被引用对象字段形式） | §3.1.3 引用机制 |
 | `version` / 序列号 | §3.1.5 与 release 的关系（definition 修改不影响已发布 release）|

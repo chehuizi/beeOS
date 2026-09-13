@@ -28,18 +28,17 @@ definition 按**履约生命周期**组织成 4 块：
 ```yaml
 beeBox_definition:
   # ---- 基础元信息 ----
-  id: string                 # definition 唯一标识（如 task-fulfillment）
-  version: semver           # definition 版本（语义化版本）
+  id: string                 # definition 唯一标识
+  version: integer           # definition 版本（递增序列号）
   description: string       # 人类可读说明
 
   # ---- 履约对象：beeBox 接收什么 task ----
-  task:
-    types:                   # 1...N 类 task
-      - type: string         # task 类型标识
-        schema_ref:          # task 数据结构引用
-          id: string
-          version: semver
-        trigger: string      # 触发条件描述
+  task:                      # 1...N 类 task
+    - type: string           # task 类型标识
+      schema_ref:            # task 数据结构引用
+        id: string
+        version: semver
+      trigger: string        # 触发条件描述
 
   # ---- 履约过程：怎么履约 ----
   process:
@@ -117,11 +116,11 @@ beeBox_definition:
 
 ## 4. 字段约束
 
-- **必填字段**：`id`, `version`, `task.types`, `result`, `process` 不可省略
+- **必填字段**：`id`, `version`, `task`, `result`, `process` 不可省略
 - **至少 1 条 beeline**：`process.beelines` 至少 1 条
-- **beeline 覆盖**：所有 `task.types` 必须被至少 1 条 beeline 的 `applies_to` 覆盖（不留死区）
+- **beeline 覆盖**：`task` 列表里每条 task 必须被至少 1 条 beeline 的 `applies_to` 覆盖（不留死区）
 - **metric 命名**：`quality` / `latency` / `cost` 三类分别命名，命名空间隔离
-- **version 演进**：definition version 必须遵循 semver——修改已发布引用的字段要 bump major
+- **version 演进**：definition version 是递增序列号——修改 definition 不影响已发布 release（详见 beebox-design.md §3.1.5）
 
 ---
 
@@ -134,4 +133,4 @@ beeBox_definition:
 | `result` | §3.1.2 履约结果（对应 §2.1 单次履约）|
 | `metrics` | §3.1.2 履约度量（对应 §2.1 履约指标）|
 | 引用 `id+version` 模式 | §3.1.3 引用机制 |
-| `version` / semver | §3.1.5 与 release 的关系（definition 修改不影响已发布 release）|
+| `version` / 序列号 | §3.1.5 与 release 的关系（definition 修改不影响已发布 release）|

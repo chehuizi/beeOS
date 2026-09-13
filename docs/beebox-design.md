@@ -92,7 +92,7 @@ flowchart TB
 | 概念 | 范围 | 关系 |
 |---|---|---|
 | **operation** | 1 个不可再分的加工动作（input / output / type 已声明）| 最小执行单元（原子工序）|
-| **beeline** | 1 类任务的标准作业路线 | 1...N 个 operation 的有序序列 |
+| **beeline** | 1 类任务的标准作业路线 | 1...N 个 operation 组成的有序结构（支持顺序 / 并发 / 分支）|
 | **beeBox** | 1 个可独立运营和验收的数字工作 cell | 1...N 条 beeline 组成 |
 | **企业价值流** | 端到端业务流 | 1...N 个 beeBox 串联 |
 
@@ -169,7 +169,7 @@ beeBox 跑起来后持续接收触发，每次触发产生 1 个 **task run**—
 - task run **不在产品生命周期里**（不是产品演化的某个阶段）
 - task run **不在运行关系里**（不是 instance 跟 runtime 的关系）
 - task run 是 **产品完成一次履约**——instance 内的一次具体执行单位
-- 走完 1 个 task run = 走完 1 条 beeline = 跑完 N 个 operation 步骤
+- 走完 1 个 task run = 走完 1 条 beeline = 执行完 beeline 包含的所有 operation
 
 ### 2.3 版本引用
 
@@ -213,6 +213,6 @@ task run 引用 release（product 不可变，固定引用）：
 
 - **task run 触发**：instance 接收触发（§2.2）→ 产生 1 个 task run
 - **beeline 加载**：task run 走 1 条 beeline（从 §2.3 release 隐含引用）
-- **operation 执行**：task run 跑完 1 条 beeline = N 个 operation
+- **operation 执行**：task run 跑完 1 条 beeline = 执行完 beeline 包含的所有 operation
 - **异常处理**：op 异常 → 按 §1.3 持续流动原则暴露（具体机制留待后续）
 - **审计**：每个 task run 记录 §2.4 字段

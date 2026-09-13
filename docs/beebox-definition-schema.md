@@ -36,16 +36,16 @@ beeBox_definition:
   task:                      # 1...N 类 task
     - type: string           # task 类型标识
       task_schema: string    # task 的数据结构
+      beeline_id: string     # 1:1 绑定的 beeline
+      beeline_version: integer  # 绑定的 beeline 的具体 version
       trigger: string        # 触发条件描述
 
   # ---- 履约过程：怎么履约 ----
   process:
-    # 流程：1...N 条 beeline
+    # 流程：1...N 条 beeline（独立维护，可被多 task 引用）
     beelines:
       - id: string
-        version: integer            # 引用 beeline 的具体 version
-        applies_to:                 # 适用哪些 task
-          - task_id: string
+        version: integer
 
     # 资源：bee / 外部系统
     bees:
@@ -95,7 +95,7 @@ beeBox_definition:
 
 | 引用类型 | 必填字段 | 选填字段 | 备注 |
 |---|---|---|---|
-| **beeline 引用** | `id`, `version` | `applies_to` | beeline 有 id + version（递增序列号），引用固定到具体 version |
+| **beeline 引用** | `id`, `version` | — | beeline 有 id + version（递增序列号）；引用发生在 task 块（task 1:1 绑定 1 条 beeline）|
 | **bee 引用** | `type` | `params` | bee 只有 type 标识（无独立 id / version）|
 | **外部系统引用** | `id`, `interface` | — | 外部系统无 version（按接入点定位）|
 
@@ -108,8 +108,8 @@ beeBox_definition:
 ## 4. 字段约束
 
 - **必填字段**：`id`, `version`, `task`, `result`, `process` 不可省略
-- **至少 1 条 beeline**：`process.beelines` 至少 1 条
-- **beeline 覆盖**：`task` 列表里每条 task 必须被至少 1 条 beeline 的 `applies_to` 覆盖（不留死区）
+- **task 必填 beeline**：`task` 列表每条都必填 `beeline_id` + `beeline_version`（1:1 绑定）
+- **beeline 引用存在**：`task.beeline_id` + `beeline_version` 必须在 `process.beelines` 里真实存在
 - **metric 命名**：`quality` / `latency` / `cost` 三类分别命名，命名空间隔离
 - **version 演进**：definition version 是递增序列号——修改 definition 不影响已发布 release（详见 beebox-design.md §3.1.5）
 

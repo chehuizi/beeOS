@@ -214,7 +214,7 @@ definition 是 beeBox 产品的"设计图"——定义 1 个 beeBox 长什么样
 
 - **结构化 schema**——beeBox definition 是结构化描述（JSON / YAML / DB 记录），不是代码、不是配置文件散落
 - **1 个 definition 1 份记录**——definition 是 1 个有版本演进的设计对象（不是 1 次性文件）；支持查看、对比、版本回溯
-- **与代码解耦**——definition 不嵌入在某个代码仓里，是平台/管理面的对象；beeline / bee / schema 各自有自己的仓库，definition 只**引用**它们
+- **与代码解耦**——definition 不嵌入在某个代码仓里，是平台/管理面的对象；beeline / bee / schema 各自独立维护，definition 只**引用**它们
 
 #### 3.1.2 数据结构
 
@@ -260,6 +260,8 @@ definition 修改 **不影响已发布 release**：
 - 修改 definition 后想用上 → 触发新 release（基于新 definition 重新打包）→ 部署到新 instance → 切流
 
 definition 是**演化的设计对象**，release 是**冻结的运行版本**——两者解耦，definition 可频繁改，release 一旦发布不变。
+
+definition 的具体结构化 schema 定义见 [beebox-definition-schema.md](./beebox-definition-schema.md)。
 
 ### 3.2 BeeBox release
 

@@ -37,7 +37,7 @@ beeBox_definition:
     - type: string           # task 类型标识
       schema_ref:            # task 数据结构引用
         id: string
-        version: semver
+        version: integer
       trigger: string        # 触发条件描述
 
   # ---- 履约过程：怎么履约 ----
@@ -45,8 +45,8 @@ beeBox_definition:
     # 流程：1...N 条 beeline
     beelines:
       - id: string
-        version_constraint: semver_range  # 引用约束（如 ^1.0.0）
-        applies_to:                       # 适用哪些 task type
+        version: integer            # 引用 beeline 的具体 version
+        applies_to:                 # 适用哪些 task type
           - task_type_ref: string
 
     # 资源：bee / schema / 外部系统
@@ -55,7 +55,7 @@ beeBox_definition:
         params: object         # 必要参数
     schemas:
       - id: string             # 物料 schema 标识
-        version: semver
+        version: integer
     external_systems:
       - id: string             # 外部系统接入点
         interface: string      # 接口描述
@@ -65,7 +65,7 @@ beeBox_definition:
     type: string             # 业务结果类型标识
     schema_ref:              # 业务结果数据结构引用
       id: string
-      version: semver
+      version: integer
     acceptance:              # 验收标准（单次判据）
       - metric: string
         op: enum             # gte / lte / eq / in / match
@@ -98,18 +98,18 @@ beeBox_definition:
 
 ## 3. 引用机制
 
-所有跨对象引用都遵循 **`{id, version}`** 二元组——definition 不持有被引用对象的实现。
+引用按被引用对象自身的字段形式——被引用对象是什么字段，引用就用什么字段；definition 不持有被引用对象的实现。
 
 | 引用类型 | 必填字段 | 选填字段 | 备注 |
 |---|---|---|---|
-| **beeline 引用** | `id`, `version_constraint` | `applies_to` | version_constraint 支持 semver range（`^1.0.0`、`~1.2.0`）|
-| **bee 引用** | `type` | `params` | bee 自身独立维护 |
-| **schema 引用** | `id`, `version` | — | 固定到具体 version，不支持 range |
-| **外部系统引用** | `id`, `interface` | — | 接入点 + 接口描述 |
+| **beeline 引用** | `id`, `version` | `applies_to` | beeline 有 id + version（递增序列号），引用固定到具体 version |
+| **bee 引用** | `type` | `params` | bee 只有 type 标识（无独立 id / version）|
+| **schema 引用** | `id`, `version` | — | schema 有 id + version（递增序列号）|
+| **外部系统引用** | `id`, `interface` | — | 外部系统无 version（按接入点定位）|
 
 引用校验（保存 definition 时）：
-- 所有引用的 `id` 必须真实存在（目标对象已注册）
-- `version_constraint` 必须能解析到至少 1 个真实 version
+- 所有引用的 `id` / `type` 必须真实存在（目标对象已注册）
+- 有 `version` 的引用：`version` 必须存在
 - `schema_ref.version` 必须存在
 
 ---

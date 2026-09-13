@@ -208,13 +208,13 @@ task run 引用 release（product 不可变，固定引用）：
 
 ### 3.1 BeeBox definition
 
-definition 是 beeBox 产品的"设计图"——定义 1 个 beeBox 长什么样、跑哪些 beeline、每条 beeline 怎么编排、用哪些 bee 工人、需要什么 schema。
+definition 是 beeBox 产品的"设计图"——定义 1 个 beeBox 接收什么 task、每类 task 走哪条 beeline、交付什么业务结果、用什么度量评估。
 
 #### 3.1.1 存储形态
 
 - **结构化 schema**——beeBox definition 是结构化描述（JSON / YAML / DB 记录），不是代码、不是配置文件散落
 - **1 个 definition 1 份记录**——definition 是 1 个有版本演进的设计对象（不是 1 次性文件）；支持查看、对比、版本回溯
-- **与代码解耦**——definition 不嵌入在某个代码仓里，是平台/管理面的对象；beeline / bee / schema 各自独立维护，definition 只**引用**它们
+- **与代码解耦**——definition 不嵌入在某个代码仓里，是平台/管理面的对象；beeline / schema 各自独立维护，definition 只**引用**它们
 
 #### 3.1.2 数据结构
 
@@ -227,7 +227,7 @@ definition 按履约生命周期组织，包含 4 块内容：
 | **履约结果** | 1 个 beeBox 交付什么业务结果（业务定义 + 验收标准 + 例外条款）| 对应 §2.1 单次履约 |
 | **履约度量** | 质量 / 时效 / 成本 各自的度量方式 + 目标值 | 对应 §2.1 履约指标 |
 
-> 1 个 definition **不包含** beeline / bee / schema 的**实现**——只引用它们的标识。
+> 1 个 definition **不包含** beeline / schema 的**实现**——只引用它们的标识。
 
 #### 3.1.3 引用机制
 

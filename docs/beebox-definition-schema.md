@@ -28,7 +28,7 @@ definition 按**履约生命周期**组织成 4 块：
 ```yaml
 beeBox_definition:
   # ---- 基础元信息 ----
-  id: string                 # definition 唯一标识（如 order-fulfillment）
+  id: string                 # definition 唯一标识（如 task-fulfillment）
   version: semver           # definition 版本（语义化版本）
   description: string       # 人类可读说明
 

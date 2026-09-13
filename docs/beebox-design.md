@@ -231,7 +231,7 @@ definition 按履约生命周期组织，包含 4 块内容：
 
 #### 3.1.3 引用机制
 
-definition 跟 beeline / bee / schema / 外部系统的关系是**"引用"**（按被引用对象自身字段形式），不是"内嵌"——"履约过程"块里所有引用都遵循这个机制：
+definition 跟 beeline / schema 的关系是**"引用"**（按被引用对象自身字段形式），不是"内嵌"——"履约过程"块里所有引用都遵循这个机制：
 
 - **beeline 引用**——`beeline_id` + `beeline_version`（递增序列号，绑定到具体 version）；definition 不持有 beeline 的实现；引用发生在 task 块（每类 task 1:1 绑定 1 条 beeline）
 - **task / result 的 schema 引用**——`task_schema` / `result_schema` 引用 schema 资源（schema 是数据/资源对象，按 id 定位）

@@ -204,20 +204,76 @@ task run 引用 release（product 不可变，固定引用）：
 
 ## 3. 实现设计
 
-具体说明 §1 提到的产品组件怎么落地实现。
+具体说明 §1 提到的产品组件怎么落地实现。按 **产品侧 / 运行时 / 履约** 3 块组织：产品侧对应 beeBox 生命周期的 3 阶段（definition → release → instance），运行时对应 runtime 部署层，履约对应 task run 执行层。
 
-### 3.1 产品侧实现
+### 3.1 BeeBox definition
 
-- **definition 存储**：beeBox definition 是结构化 schema 描述（JSON / DB 存储）
-- **release 打包**：definition 经过发布流程变成不可变 artifact（带 beeline_version + 依赖版本）
-- **instance 部署**：release 部署到 runtime deployment → 启动 1 个 instance（运行实体）
+definition 是 beeBox 产品的"设计图"——定义 1 个 beeBox 长什么样、跑哪些 beeline、每条 beeline 怎么编排、用哪些 bee 工人、需要什么物料 schema。
 
-### 3.2 运行侧实现
+#### 3.1.1 存储形态
+
+- **结构化 schema**——beeBox definition 是结构化描述（JSON / YAML / DB 记录），不是代码、不是配置文件散落
+- **1 个 definition 1 份记录**——definition 是 1 个有版本演进的设计对象（不是 1 次性文件）；支持查看、对比、版本回溯
+- **与代码解耦**——definition 不嵌入在某个代码仓里，是平台/管理面的对象；beeline / bee / schema 各自有自己的仓库，definition 只**引用**它们
+
+#### 3.1.2 数据结构
+
+definition 包含 4 块内容：
+
+| 块 | 内容 | 备注 |
+|---|---|---|
+| **业务结果声明** | 1 个 beeBox 围绕哪类业务结果（业务定义 + 验收标准 + 例外条款）| 对应 §2.1 单次履约 |
+| **履约指标定义** | 质量 / 时效 / 成本 各自的度量方式 + 目标值 | 对应 §2.1 履约指标 |
+| **beeline 列表** | 1...N 条 beeline 引用（每条带约束：可触发条件 / 适用场景）| 引用 §1.1.4 beeline |
+| **依赖引用** | bee 类型引用 / 物料 schema 引用 / 外部系统接入点 | 全部用"引用"——松耦合 |
+
+> 1 个 definition **不包含** beeline / bee / schema 的**实现**——只引用它们的标识和版本约束。
+
+#### 3.1.3 引用机制
+
+definition 跟 beeline / bee / schema 的关系是**"引用"**（"标识 + 版本约束"），不是"内嵌"：
+
+- **beeline 引用**——`beeline_id` + `beeline_version` 约束（如 `^1.0.0`）；definition 不持有 beeline 的实现
+- **bee 引用**——`bee_type` + 必要参数；bee 自身独立维护（bee 仓库）
+- **schema 引用**——`schema_id` + `schema_version`；物料校验规则独立维护
+- **引用时点**——definition 引用的是"目标对象在某 version 的状态"；version 变更需要升级 definition（或接受新版本自动联动）
+
+引用而非内嵌的好处：
+- beeline / bee / schema 各自独立版本演进
+- 同一份 beeline 可被多个 definition 引用（复用）
+- definition 自身只描述产品设计，体积小、易对比
+
+#### 3.1.4 编辑与验证
+
+- **编辑方式**——通过管理面 / API 创建 / 修改 definition（不是直接改 JSON 文件）
+- **schema 校验**——definition 自身有 schema（"definition 怎么写"），编辑时实时校验字段、类型、必填项
+- **引用完整性校验**——保存前校验所有引用都真实存在（beeline_id 是否注册 / bee_type 是否可用 / schema_id 是否存在）
+- **履约指标可达性**——校验指标定义里引用的数据源可观测（没有引向不存在的指标）
+
+#### 3.1.5 与 release 的关系
+
+definition 修改 **不影响已发布 release**：
+
+- release 是 definition 在某时刻的**不可变快照**（详见 §3.2）
+- definition 修改后，原 release 仍然按老定义继续运行（in-flight task run 不受新 definition 影响）
+- 修改 definition 后想用上 → 触发新 release（基于新 definition 重新打包）→ 部署到新 instance → 切流
+
+definition 是**演化的设计对象**，release 是**冻结的运行版本**——两者解耦，definition 可频繁改，release 一旦发布不变。
+
+### 3.2 BeeBox release
+
+（待写）
+
+### 3.3 BeeBox instance
+
+（待写）
+
+### 3.4 运行时实现
 
 - **runtime deployment 启动**：在 environment 内启动 1 个 runtime deployment（绑定到某 runtime 版本）
 - **instance 接入**：instance 启动时绑定到 1 个 runtime deployment
 
-### 3.3 履约实现
+### 3.5 履约实现
 
 - **task run 触发**：instance 接收触发（§2.2）→ 产生 1 个 task run
 - **beeline 加载**：task run 走 1 条 beeline（从 §2.3 release 隐含引用）

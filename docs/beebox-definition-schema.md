@@ -44,8 +44,8 @@ beeBox_definition:
     beelines:
       - id: string
         version: integer            # 引用 beeline 的具体 version
-        applies_to:                 # 适用哪些 task type
-          - task_type_ref: string
+        applies_to:                 # 适用哪些 task
+          - task_id: string
 
     # 资源：bee / schema / 外部系统
     bees:

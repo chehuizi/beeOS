@@ -116,7 +116,7 @@ flowchart LR
   rel -->|部署| ins
 ```
 
-- **definition**（产品定义）——业务结果 / 验收标准 / 改善指标 / beeline 列表 / 物料 schema 引用 / bee 引用
+- **definition**（产品定义）——业务结果 / 验收标准 / 改善指标 / beeline 列表 / schema 引用 / bee 引用
 - **release**（业务产品包）——围绕一类业务结果发布的不可变版本，固定引用其全部 beeline_version 和依赖版本
 - **instance**（部署实例）——release 的一个部署，正在跑
 
@@ -208,7 +208,7 @@ task run 引用 release（product 不可变，固定引用）：
 
 ### 3.1 BeeBox definition
 
-definition 是 beeBox 产品的"设计图"——定义 1 个 beeBox 长什么样、跑哪些 beeline、每条 beeline 怎么编排、用哪些 bee 工人、需要什么物料 schema。
+definition 是 beeBox 产品的"设计图"——定义 1 个 beeBox 长什么样、跑哪些 beeline、每条 beeline 怎么编排、用哪些 bee 工人、需要什么 schema。
 
 #### 3.1.1 存储形态
 
@@ -223,25 +223,25 @@ definition 按履约生命周期组织，包含 4 块内容：
 | 块 | 内容 | 备注 |
 |---|---|---|
 | **履约对象** | beeBox 接收什么 task（输入 schema / 适用业务场景）| 1 个 beeBox 可能接收多类 task |
-| **履约过程** | 怎么履约（beeline 列表 + 资源：bee 类型 / 物料 schema / 外部系统接入点）| 全部用"引用"——松耦合 |
+| **履约过程** | 怎么履约（beeline 列表 + 资源：bee 类型 / schema / 外部系统接入点）| 全部用"引用"——松耦合 |
 | **履约结果** | 1 个 beeBox 交付什么业务结果（业务定义 + 验收标准 + 例外条款）| 对应 §2.1 单次履约 |
 | **履约度量** | 质量 / 时效 / 成本 各自的度量方式 + 目标值 | 对应 §2.1 履约指标 |
 
-> 1 个 definition **不包含** beeline / bee / schema 的**实现**——只引用它们的标识和版本约束。
+> 1 个 definition **不包含** beeline / bee / schema 的**实现**——只引用它们的标识。
 
 #### 3.1.3 引用机制
 
-definition 跟 beeline / bee / schema 的关系是**"引用"**（"标识 + 版本约束"），不是"内嵌"——"履约过程"块里所有引用都遵循这个机制：
+definition 跟 beeline / bee / schema / 外部系统的关系是**"引用"**（按被引用对象自身字段形式），不是"内嵌"——"履约过程"块里所有引用都遵循这个机制：
 
-- **beeline 引用**——`beeline_id` + `beeline_version` 约束（如 `^1.0.0`）；definition 不持有 beeline 的实现
-- **bee 引用**——`bee_type` + 必要参数；bee 自身独立维护
-- **schema 引用**——`schema_id` + `schema_version`；物料校验规则独立维护
-- **外部系统引用**——外部服务接入点（标识 + 接口约束）；不持有实现
-- **引用时点**——definition 引用的是"目标对象在某 version 的状态"；version 变更需要升级 definition（或接受新版本自动联动）
+- **beeline 引用**——`beeline_id` + `beeline_version`（递增序列号，绑定到具体 version）；definition 不持有 beeline 的实现
+- **bee 引用**——`bee_type`（bee 是工人角色，无独立 id / version，按 type 寻址）
+- **schema 引用**——`schema_id`（schema 是数据/资源对象，无独立 version，按 id 定位）
+- **外部系统引用**——`system_id` + `interface`（接入点 + 接口描述）
+- **引用时点**——definition 引用的是"目标对象的当前状态"；被引用对象演进时通过新建对象 + 切换 definition 引用
 
 引用而非内嵌的好处：
-- beeline / bee / schema 各自独立版本演进
-- 同一份 beeline 可被多个 definition 引用（复用）
+- beeline / bee / schema 各自独立维护，definition 不需要知道实现细节
+- 同一份 beeline / schema 可被多个 definition 引用（通过 id 定位）
 - definition 自身只描述产品设计，体积小、易对比
 
 #### 3.1.4 编辑与验证

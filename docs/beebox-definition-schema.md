@@ -52,7 +52,7 @@ beeBox_definition:
       - type: string           # bee 类型标识
         params: object         # 必要参数
     schemas:
-      - id: string             # 物料 schema 标识
+      - id: string             # schema 标识
     external_systems:
       - id: string             # 外部系统接入点
         interface: string      # 接口描述

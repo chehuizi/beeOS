@@ -47,12 +47,10 @@ beeBox_definition:
         applies_to:                 # 适用哪些 task
           - task_id: string
 
-    # 资源：bee / schema / 外部系统
+    # 资源：bee / 外部系统
     bees:
       - type: string           # bee 类型标识
         params: object         # 必要参数
-    schemas:
-      - id: string             # schema 标识
     external_systems:
       - id: string             # 外部系统接入点
         interface: string      # 接口描述
@@ -99,7 +97,6 @@ beeBox_definition:
 |---|---|---|---|
 | **beeline 引用** | `id`, `version` | `applies_to` | beeline 有 id + version（递增序列号），引用固定到具体 version |
 | **bee 引用** | `type` | `params` | bee 只有 type 标识（无独立 id / version）|
-| **schema 引用** | `id` | — | schema 是数据/资源对象（无独立 version）|
 | **外部系统引用** | `id`, `interface` | — | 外部系统无 version（按接入点定位）|
 
 引用校验（保存 definition 时）：

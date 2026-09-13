@@ -14,12 +14,12 @@ definition 按**履约生命周期**组织成 4 块：
 
 | 块 | 含义 | 字段 |
 |---|---|---|
-| `contract.task` | 履约对象 | 1 个 beeBox 接收什么 task |
-| `contract.result` | 履约结果 | 1 个 beeBox 交付什么业务结果 |
-| `contract.metrics` | 履约度量 | 质量 / 时效 / 成本度量方式 + 目标值 |
-| `process` | 履约过程 | 怎么履约（beeline 列表 + 资源）|
+| **履约对象** | beeBox 接收什么 task | `contract.task` |
+| **履约结果** | beeBox 交付什么业务结果 | `contract.result` |
+| **履约度量** | 质量 / 时效 / 成本 度量方式 + 目标值 | `contract.metrics` |
+| **履约过程** | 怎么履约（beeline 列表 + 资源）| `beelines` / `bees` / `schemas` / `external_systems` |
 
-`contract` 是对客户的承诺（"履约合同"），`process` 是履约能力（"履约过程"）——两边解耦：同一份 `process` 可被多个 definition 复用（不同的 contract 包装不同的承诺）。
+每块都是 definition 自己的——不需要跨 definition 复用（beeline / bee / schema 本身就用引用机制，复用通过引用实现）。
 
 ---
 
@@ -31,70 +31,67 @@ beeBox_definition:
   id: string                 # definition 唯一标识（如 order-fulfillment）
   version: semver           # definition 版本（语义化版本）
   description: string       # 人类可读说明
-  
-  # ---- 履约合同（对客户的承诺）----
-  contract:
-    # 履约对象：beeBox 接收什么 task
-    task:
-      types:                 # 1...N 类 task
-        - type: string       # task 类型标识
-          schema_ref:        # task 数据结构引用
-            id: string
-            version: semver
-          trigger: string    # 触发条件描述（什么情况下用这个 type）
-    
-    # 履约结果：交付什么业务结果
-    result:
-      type: string           # 业务结果类型标识
-      schema_ref:            # 业务结果数据结构引用
-        id: string
-        version: semver
-      acceptance:            # 验收标准（单次判据）
-        - metric: string
-          op: enum           # gte / lte / eq / in / match
-          value: any
-        ...
-      exceptions:            # 例外条款
-        - condition: string
-          action: enum       # no_deliver / rollback / escalate
-    
-    # 履约度量：质量 / 时效 / 成本 持续统计
-    metrics:
-      quality:               # 履约质量
-        - name: string
-          definition: string
-          target: number     # 目标值
-        ...
-      latency:               # 履约时效
-        - name: string
-          definition: string
-          target: number
-        ...
-      cost:                  # 履约成本
-        - name: string
-          definition: string
-          target: number
-        ...
-  
-  # ---- 履约过程（履约能力）----
-  process:
-    # 流程：1...N 条 beeline
-    beelines:
-      - id: string
-        version_constraint: semver_range  # 引用约束（如 ^1.0.0）
-        applies_to:                       # 适用哪些 task type
-          - task_type_ref: string
-    
-    # 资源：bee / schema / 外部系统
-    bees:
-      - type: string         # bee 类型标识
-        params: object       # 必要参数
-    schemas:
-      - id: string           # 物料 schema 标识
-        version: semver
-    external_systems:
-      - id: string           # 外部系统接入点
-        interface: string    # 接口描述
+
+  # ---- 履约对象：beeBox 接收什么 task ----
+  task:
+    types:                   # 1...N 类 task
+      - type: string         # task 类型标识
+        schema_ref:          # task 数据结构引用
+          id: string
+          version: semver
+        trigger: string      # 触发条件描述
+
+  # ---- 履约结果：交付什么业务结果 ----
+  result:
+    type: string             # 业务结果类型标识
+    schema_ref:              # 业务结果数据结构引用
+      id: string
+      version: semver
+    acceptance:              # 验收标准（单次判据）
+      - metric: string
+        op: enum             # gte / lte / eq / in / match
+        value: any
+      ...
+    exceptions:              # 例外条款
+      - condition: string
+        action: enum         # no_deliver / rollback / escalate
+
+  # ---- 履约度量：质量 / 时效 / 成本 持续统计 ----
+  metrics:
+    quality:                 # 履约质量
+      - name: string
+        definition: string
+        target: number       # 目标值
+      ...
+    latency:                 # 履约时效
+      - name: string
+        definition: string
+        target: number
+      ...
+    cost:                    # 履约成本
+      - name: string
+        definition: string
+        target: number
+      ...
+
+  # ---- 履约过程：怎么履约 ----
+  # 流程：1...N 条 beeline
+  beelines:
+    - id: string
+      version_constraint: semver_range  # 引用约束（如 ^1.0.0）
+      applies_to:                       # 适用哪些 task type
+        - task_type_ref: string
+
+  # 资源：bee / schema / 外部系统
+  bees:
+    - type: string           # bee 类型标识
+      params: object         # 必要参数
+  schemas:
+    - id: string             # 物料 schema 标识
+      version: semver
+  external_systems:
+    - id: string             # 外部系统接入点
+      interface: string      # 接口描述
 ```
 
 ---
@@ -119,11 +116,11 @@ beeBox_definition:
 
 ## 4. 字段约束
 
-- **必填字段**：`id`, `version`, `contract.task.types`, `contract.result`, `process.beelines` 不可省略
-- **至少 1 条 beeline**：`process.beelines` 至少 1 条
-- **beeline 覆盖**：所有 `contract.task.types` 必须被至少 1 条 beeline 的 `applies_to` 覆盖（不留死区）
+- **必填字段**：`id`, `version`, `task.types`, `result`, `beelines` 不可省略
+- **至少 1 条 beeline**：`beelines` 至少 1 条
+- **beeline 覆盖**：所有 `task.types` 必须被至少 1 条 beeline 的 `applies_to` 覆盖（不留死区）
 - **metric 命名**：`quality` / `latency` / `cost` 三类分别命名，命名空间隔离
-- **version 演进**：definition version 必须遵循 semver——修改 `process` / `contract` 中**已发布引用**的字段要 bump major
+- **version 演进**：definition version 必须遵循 semver——修改已发布引用的字段要 bump major
 
 ---
 
@@ -131,10 +128,10 @@ beeBox_definition:
 
 | schema 字段 | design 章节 |
 |---|---|
-| `contract.task` | §3.1.2 履约对象 |
-| `contract.result` | §3.1.2 履约结果（对应 §2.1 单次履约）|
-| `contract.metrics` | §3.1.2 履约度量（对应 §2.1 履约指标）|
-| `process.beelines` | §3.1.2 履约过程 · 流程 |
-| `process.bees` / `schemas` / `external_systems` | §3.1.2 履约过程 · 资源 |
+| `task` | §3.1.2 履约对象 |
+| `result` | §3.1.2 履约结果（对应 §2.1 单次履约）|
+| `metrics` | §3.1.2 履约度量（对应 §2.1 履约指标）|
+| `beelines` | §3.1.2 履约过程 · 流程 |
+| `bees` / `schemas` / `external_systems` | §3.1.2 履约过程 · 资源 |
 | 引用 `id+version` 模式 | §3.1.3 引用机制 |
 | `version` / semver | §3.1.5 与 release 的关系（definition 修改不影响已发布 release）|

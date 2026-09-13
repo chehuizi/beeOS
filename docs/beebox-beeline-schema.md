@@ -4,7 +4,7 @@
 > **日期**：2026-09-13
 > **对应**：[beebox-design.md §1.1.4 beeline](./beebox-design.md#114-边界关系) · [beebox-definition-schema.md](./beebox-definition-schema.md)
 
-beeline 的结构化 schema 定义。**beeline 是 1 类任务的标准作业路线**——由 1...N 个 operation 组成的有序结构（支持顺序 / 并发 / 分支），每个 operation 各自调用 bee / 外部系统完成具体动作。
+beeline 的结构化 schema 定义。**beeline 是 1 类任务的标准作业路线，本质是 1 张有向图**——节点是 operation（由 1...N 个组成），`next` 字段是节点之间的有向边（支持顺序 / 并发 / 分支）；每个 operation 各自调用 bee / 外部系统完成具体动作。
 
 beeline 独立维护，**不归 beeBox definition 管**——definition 只引用 beeline_id + version；operation 内部用谁、怎么编排都是 beeline 自己的事。
 

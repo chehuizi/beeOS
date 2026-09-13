@@ -69,18 +69,15 @@ flowchart TB
 - **持续交付**——不是一次性完成，是持续地、可重复地交付
 - **数字精益工作单元**——精益 cell 的数字版本，装在机器上的、可远程观察的
 - **产品单元**——1 个独立可安装、可运行、可度量、可改善的产品单元
-- **owner 运营**——1 个 beeBox 由 1 个 owner 负责运营（owner 是 beeBox 的运营责任主体）
 
 ### 1.2 产品属性
-
-beeBox 是 owner 视角下的产品单元，4 个属性都是 owner 关心 / 能用上的能力：
 
 | 属性 | 含义 |
 |---|---|
 | **可安装** | 一份包安装出 1 个可工作的 beeBox |
 | **可运行** | 启动后持续接收触发、持续产出业务结果 |
 | **可度量** | 运行时数据可观测、可统计 |
-| **可持续改善** | 运行时数据反哺业务改进（owner 看板 → 调优 → 验证）|
+| **可持续改善** | 运行时数据反哺业务改进（看板 → 调优 → 验证）|
 
 ### 1.3 核心价值
 
@@ -97,7 +94,6 @@ beeBox 是 owner 视角下的产品单元，4 个属性都是 owner 关心 / 能
 | **operation** | 1 个不可再分的加工动作（input / output / type 已声明）| 最小执行单元（原子工序）|
 | **beeline** | 1 类任务的标准作业路线 | 1...N 个 operation 组成的有序结构（支持顺序 / 并发 / 分支）|
 | **beeBox** | 1 个可独立运营和验收的数字工作 cell | 1...N 条 beeline 组成 |
-| **beeBox owner** | 1 个 beeBox 的运营责任主体 | 1 个 beeBox 指定 1 个 owner（1:1）|
 | **企业价值流** | 端到端业务流 | 1...N 个 beeBox 串联 |
 
 例子（电商订单履行）：
@@ -109,7 +105,7 @@ beeBox 是 owner 视角下的产品单元，4 个属性都是 owner 关心 / 能
 
 ### 1.5 产品生命周期
 
-beeBox 走过 3 个阶段，都是 owner 视角下的"产品演化"：**前 2 阶段**（definition / release）是 owner 设计和发布的产物（设计 → 发布）；**第 3 阶段**（instance）是 beeBox 的运行实例——owner 部署后开始跑，持续接收触发产生 task run。
+beeBox 走过 3 个阶段：**前 2 阶段**（definition / release）是 beeBox 的产物（被设计 / 被发布）；**第 3 阶段**（instance）是 beeBox 的运行实例——产品装上后开始跑，持续接收触发产生 task run。
 
 ```mermaid
 flowchart LR
@@ -159,9 +155,7 @@ flowchart TB
 
 ### 2.1 履约合同
 
-每个 beeBox 都带一份"履约合同"——**owner 对客户的承诺**：beeBox 在什么条件下交付什么结果、做到什么程度、不交付 / 退回怎么算。
-
-分 2 个层次：
+每个 beeBox 都带一份"履约合同"，分 2 个层次：
 
 **单次履约**（评价每次 task run）：
 
@@ -177,20 +171,12 @@ flowchart TB
 
 ### 2.2 task run 履约
 
-owner 接收 task 后，beeBox 完成 1 次履约的完整流程：
+beeBox 跑起来后持续接收触发，每次触发产生 1 个 **task run**——产品完成一次履约，交付 1 个具体业务结果。
 
-1. **接收 task**——owner 接收上游（其他 beeBox / 外部系统）发来的 task
-2. **选择 beeline**——owner 根据 task 内容选择 1 条 beeline 履约
-3. **记录履约过程**——按 beeline 路线执行对应的 operation 步骤，逐 op 记录执行过程
-4. **交付履约结果**——走完 beeline 后交付 1 个具体业务结果
-5. **评估履约**——owner 根据 §2.1 履约合同评估履约过程和履约结果是否合格
-
-补充说明：
-
-- 1 个 task run 走完 = 1 条 beeline 走完 = beeline 包含的对应 operation 全部执行完
 - task run **不在产品生命周期里**（不是产品演化的某个阶段）
 - task run **不在运行关系里**（不是 instance 跟 runtime 的关系）
-- task run 是 **1 次履约的完整执行单位**——从 owner 接 task 到评估结束
+- task run 是 **产品完成一次履约**——instance 内的一次具体执行单位
+- 走完 1 个 task run = 走完 1 条 beeline = 按 beeline 路线执行对应的 operation 步骤
 
 ### 2.3 版本引用
 
@@ -204,7 +190,7 @@ task run 引用 release（product 不可变，固定引用）：
 
 ### 2.4 审计字段
 
-每个 task run 必须带 5 个审计字段——供 owner 复盘 / 举证 / 改进用：
+每个 task run 必须带 5 个审计字段：
 
 | 字段 | 含义 |
 |---|---|

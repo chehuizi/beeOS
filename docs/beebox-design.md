@@ -613,13 +613,13 @@ workshop 和 kanban 是 beeOS 平台的 2 个独立入口，但通过 beeBox 对
 ```mermaid
 flowchart TB
   subgraph panel["面板"]
-    ws["workshop<br/>管理面板"]
-    kn["kanban<br/>运行面板"]
+    ws["workshop\n管理面板"]
+    kn["kanban\n运行面板"]
   end
 
   subgraph obj["beeBox 对象"]
-    do["设计层对象<br/>definition / release<br/>beeline / schema / bee"]
-    ro["运行时对象<br/>instance / task run<br/>operation / metric"]
+    do["设计层对象\ndefinition / release\nbeeline / schema / bee"]
+    ro["运行时对象\ninstance / task run\noperation / metric"]
   end
 
   ws -->|"创建 / 编辑"| do

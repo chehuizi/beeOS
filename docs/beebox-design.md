@@ -543,3 +543,96 @@ task run 在 instance 内的完整执行流程。
 - audit 字段在 task run 创建瞬间定型（不可变）
 - 步骤级日志 + 异常信息可后续追加（不影响 audit 字段）
 - audit 用于复盘 / 举证 / 改进（§1.3 持续改善）
+
+---
+
+## 4. workshop 和 kanban 面板
+
+beeOS 平台提供 **2 个面板产品入口**，分别面向不同角色、不同工作场景：
+
+| 面板 | 角色 | 对象层级 |
+|---|---|---|
+| **workshop（管理面板）** | owner / 管理员 | 设计层对象（definition / release / beeline / schema / bee）|
+| **kanban（运行面板）** | 运维 / 观察者 | 运行时对象（instance / task run / operation / deployment / 异常）|
+
+### 4.1 workshop（管理面板）
+
+**角色**：beeBox owner / 平台管理员
+
+**管什么**（设计层对象）：
+
+| 对象 | 典型动作 |
+|---|---|
+| **beeBox definition** | 创建 / 编辑 / 版本演进 / 校验 / 引用完整性检查 |
+| **beeBox release** | 打包 / 发布 / 查看历史 / 校验和验证 |
+| **beeline** | 注册 / 编辑有向图（operations / next 链）/ 校验无环 |
+| **schema** | 注册 / 编辑字段定义（业务字段 / 嵌套引用）|
+| **bee（type）** | 注册 worker 类型 / 配置参数 |
+| **queen** | 指定每个 beeBox 的责任主体 |
+
+**典型场景**：
+- owner 创建 1 个新 beeBox → 编辑 definition → 注册 / 引用 beeline / schema
+- owner 修改 definition → 打包新 release → 准备部署
+- 平台管理员注册新的 beeline / schema / bee（供 beeBox 引用）
+
+**关键特点**：
+- 设计层操作，**不直接影响运行时**（改 definition 不影响已发布 release）
+- 提供 schema 校验 / 引用完整性校验（编辑时实时反馈）
+- 提供版本对比 / 回溯（definition / release 演进历史）
+
+### 4.2 kanban（运行面板）
+
+**角色**：运维 / 平台观察者 / queen（查看自己 beeBox 的运行）
+
+**管什么**（运行时对象）：
+
+| 对象 | 典型动作 |
+|---|---|
+| **runtime environment / deployment** | 注册 environment / 创建 deployment / 监控 deployment 状态 |
+| **beeBox instance** | 查看 instance 列表 / 状态（运行中 / 排空 / 已停止）/ 健康检查 |
+| **task run** | 查看实时 / 历史 task run / 跟踪每个 task run 的状态 / 审计字段 |
+| **operation 执行** | 查看 op 执行过程（步骤级日志）/ 失败原因 / 重试记录 |
+| **异常 / 告警** | 查看异常列表 / 异常详情 / 触发告警（持续暴露，§1.3） |
+| **履约指标** | 查看质量 / 时效 / 成本度量（§2.1 履约指标）|
+
+**典型场景**：
+- 运维查看 instance 列表，发现 1 个 instance 排空中（等切流完成）
+- 运维跟踪 1 个 task run，发现 op 失败，定位到 beeline 哪一步
+- owner 在 kanban 看板上看自己 beeBox 的运行数据（持续流动、持续改善的看板数据来源）
+- 平台告警：某 instance task run 异常率超阈值
+
+**关键特点**：
+- 只读 + 运维操作（启动 / 停止 instance / 切流等），**不编辑设计层对象**
+- 实时性 + 历史回溯（实时看 instance + 回溯历史 task run）
+- 跟 §1.3 持续流动对应——kanban 是"看板 / 拉动 / 瓶颈暴露"的实现载体
+
+### 4.3 两面板的协作
+
+workshop 和 kanban 是 beeOS 平台的 2 个独立入口，但通过 beeBox 对象协作：
+
+```
+┌─────────────┐                  ┌─────────────┐
+│  workshop   │  ───创建/编辑───▶│   设计层对象  │
+│  (管理面板)  │                  │  definition  │
+│             │                  │   release   │
+└─────────────┘                  │   beeline   │
+                                  │   schema    │
+                                  │     bee     │
+                                  └──────┬──────┘
+                                         │ 打包/部署
+                                         ▼
+┌─────────────┐                  ┌─────────────┐
+│   kanban    │  ◀──观察/运维─── │   运行时对象  │
+│  (运行面板)  │                  │  instance   │
+│             │                  │  task run   │
+└─────────────┘                  │   metric    │
+                                  └─────────────┘
+```
+
+**典型闭环**：
+
+1. **workshop 优化**——kanban 发现某 op 失败率高 → workshop 修 beeline → 新 release → kanban 看新版本效果
+2. **kanban 调整**——kanban 看到某 instance 异常 → 切流到健康 instance → workshop 不变（设计不变，运维动作）
+3. **queen 自我反馈**——queen 在 kanban 看板看自己 beeBox 的运行数据 → workshop 调 definition
+
+两面板都是 beeOS 平台的产品入口，**没有先后依赖**——owner 优先用 workshop 设计 beeBox；运维优先用 kanban 运维 beeBox；持续改善靠 2 个面板协作完成（§1.3）。

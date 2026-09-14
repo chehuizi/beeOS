@@ -223,10 +223,11 @@ definition 是 beeBox 产品的"设计图"——定义 1 个 beeBox 接收什么
 
 #### 3.1.2 数据结构
 
-definition 按履约生命周期组织，包含 4 块内容：
+definition 包含**基础元信息 + 履约生命周期 4 块**：
 
 | 块 | 内容 | 备注 |
 |---|---|---|
+| **基础元信息** | beeBox 基础标识（id / version / description / **queen**）| queen 是 beeBox 1:1 责任主体 |
 | **履约对象** | beeBox 接收什么 task（输入 schema / 适用业务场景）| 1 个 beeBox 可能接收多类 task；每类 task 1:1 绑定 1 条 beeline |
 | **履约过程** | 怎么履约（每类 task 1:1 绑定 1 条 beeline，beeline 内部资源归 beeline 自己管）| 全部用"引用"——松耦合 |
 | **履约结果** | 1 个 beeBox 交付什么业务结果（业务定义 + 验收标准 + 例外条款）| 对应 §2.1 单次履约 |

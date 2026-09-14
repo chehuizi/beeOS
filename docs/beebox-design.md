@@ -380,8 +380,76 @@ release → instance 的过程：
 
 ### 3.4 运行时实现
 
-- **runtime deployment 启动**：在 environment 内启动 1 个 runtime deployment（绑定到某 runtime 版本）
-- **instance 接入**：instance 启动时绑定到 1 个 runtime deployment
+runtime environment / runtime deployment / instance 3 层的实现细节。
+
+#### 3.4.1 runtime deployment 启动
+
+**启动流程**：
+
+1. **选定 environment**——选 1 个 runtime environment（dev / staging / prod / 不同云厂商）
+2. **选定 runtime 版本**——选 1 个具体 runtime 版本（如 `runtime v1.0.0`）
+3. **创建 deployment**——在 environment 内启动 1 个 deployment（带 `runtime_deployment_id` 标识）
+4. **就绪**——deployment 启动完成后等待 instance 接入
+
+**deployment 标识**：`runtime_deployment_id`（按 environment_id + runtime_version 派生，如 `env_prod__runtime_v1.0.0__deploy_001`）
+
+**deployment 状态**：
+- 启动中（runtime 拉起中）
+- 就绪（可接收 instance 接入）
+- 排空中（不再接收新 instance，老 instance 跑完后清空）
+- 已停止（清空完成，可删除）
+
+#### 3.4.2 instance 接入
+
+**接入流程**：
+
+1. **加载 release**——instance 启动时加载 1 个具体 release（release_id）
+2. **注册到 deployment**——instance 注册到 1 个 deployment，建立连接
+3. **健康检查**——instance 通过 deployment 暴露的健康检查端点确认就绪
+4. **开始接收 task**——进入"运行中"状态
+
+**约束**：
+- 1 个 instance 只能绑定 1 个 deployment（绑定后不能换）
+- 1 个 instance 启动时校验 release 跟 deployment 的兼容性
+- 兼容性失败 → instance 启动失败（不部署）
+
+#### 3.4.3 运行时升级
+
+**升级 runtime 版本 = 创建新 deployment**（不修改老 deployment）：
+
+- 老 deployment 上的老 instance 继续跑老 release，不受影响
+- 新 deployment 准备好后，老 instance 可选择性迁移（见 §3.4.4 兼容性边界）
+- 老 deployment 上的 instance 全跑完后，deployment 可下线
+
+**升级不能"原地升级"**——每次 runtime 版本变化都是创建新 deployment（保持老 deployment 不可变，老 instance 行为可追溯）。
+
+#### 3.4.4 兼容性边界
+
+新 deployment 跟老 release 的兼容性有 2 种处理：
+
+| 兼容性 | 处理 |
+|---|---|
+| **兼容** | 新 deployment 可跑老 release → 老 instance 可迁移到新 deployment（流量随之迁移，instance 继续跑 release）|
+| **不兼容** | 新 deployment 不能跑老 release → 老 instance 继续在老 deployment 上跑完所有 in-flight task run 后下线 |
+
+**兼容性判定**：
+- runtime 版本变更（minor / patch）：通常兼容
+- runtime 大版本变更（major）：可能不兼容
+- 具体判定由 runtime 平台给出（beeBox / release 不关心）
+
+#### 3.4.5 多 environment 场景
+
+1 个 beeOS 平台可管理多个 runtime environment：
+
+| environment | 用途 | 典型例子 |
+|---|---|---|
+| **dev** | 开发联调 | 每个开发者 1 个独立 environment |
+| **staging** | 预发布验证 | 1 个团队共享 |
+| **prod** | 生产服务 | 多区域 / 多云厂商 |
+
+- **隔离边界**——每个 environment 是独立的隔离边界（不同环境之间不共享数据 / 资源）
+- **跨 environment 部署**——同一份 release 可部署到多个 environment（dev 验证完 → staging 验证 → prod 上线）
+- **environment 注册**——platform 管理员注册 environment，标记用途 / 区域 / 云厂商
 
 ### 3.5 履约实现
 

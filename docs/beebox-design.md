@@ -610,23 +610,29 @@ beeOS 平台提供 **2 个面板产品入口**，分别面向不同角色、不�
 
 workshop 和 kanban 是 beeOS 平台的 2 个独立入口，但通过 beeBox 对象协作：
 
-```
-┌─────────────┐                  ┌─────────────┐
-│  workshop   │  ───创建/编辑───▶│   设计层对象  │
-│  (管理面板)  │                  │  definition  │
-│             │                  │   release   │
-└─────────────┘                  │   beeline   │
-                                  │   schema    │
-                                  │     bee     │
-                                  └──────┬──────┘
-                                         │ 打包/部署
-                                         ▼
-┌─────────────┐                  ┌─────────────┐
-│   kanban    │  ◀──观察/运维─── │   运行时对象  │
-│  (运行面板)  │                  │  instance   │
-│             │                  │  task run   │
-└─────────────┘                  │   metric    │
-                                  └─────────────┘
+```mermaid
+flowchart TB
+  subgraph panel["面板"]
+    ws["workshop<br/>管理面板"]
+    kn["kanban<br/>运行面板"]
+  end
+
+  subgraph obj["beeBox 对象"]
+    do["设计层对象<br/>definition / release<br/>beeline / schema / bee"]
+    ro["运行时对象<br/>instance / task run<br/>operation / metric"]
+  end
+
+  ws -->|"创建 / 编辑"| do
+  do -.->|"打包 / 部署"| ro
+  ro -->|"观察 / 运维"| kn
+
+  classDef panelNode fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+  classDef designNode fill:#fef3c7,stroke:#d97706,color:#78350f
+  classDef runtimeNode fill:#dcfce7,stroke:#16a34a,color:#14532d
+
+  class ws,kn panelNode
+  class do designNode
+  class ro runtimeNode
 ```
 
 **典型闭环**：

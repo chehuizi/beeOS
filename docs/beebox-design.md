@@ -263,7 +263,64 @@ definition 的具体结构化 schema 定义见 [beebox-definition-schema.md](./b
 
 ### 3.2 BeeBox release
 
-（待写）
+release 是 beeBox definition 的**不可变快照**——definition 当时的完整状态（task 列表 / result / metrics）+ 所有外部引用固定到具体版本（beeline_version / schema_id）。
+
+#### 3.2.1 release 是什么
+
+- **不可变**——发布后内容不能改；升级 = 发布新 release，不修改老 release
+- **完整快照**——含 definition 全部内容 + 所有引用对象的固定版本（跟 definition 不同，definition 引用是"当前"语义，release 引用是"固定"语义）
+- **独立标识**——每个 release 有 `release_id`（按 definition_id 派生，如 `task-fulfillment@1.2.0`）+ 发布时间戳
+
+#### 3.2.2 打包流程
+
+definition → release 的过程：
+
+1. **校验 definition**——definition 自身 schema 校验 + 所有引用都真实存在（beeline_id / task_schema / result_schema 都在）
+2. **固定所有引用版本**——beeline 引用固定到具体 `beeline_version`（release 不再使用 `^1.0.0` 约束语义，每个 release 绑定具体 version）
+3. **生成不可变 artifact**——definition 内容 + 固定版本引用打包成 1 个 release（带 release_id + 时间戳 + 不可变校验和）
+4. **存储**——release 写入 release 仓库（按 release_id 索引，不允许覆盖）
+
+#### 3.2.3 打包内容
+
+1 份 release 包含：
+
+| 块 | 内容 | 来源 |
+|---|---|---|
+| **元信息** | release_id / definition_id / definition_version / 发布时间戳 / 校验和 | 打包时生成 |
+| **definition 内容** | task 列表 / result / metrics 全部内容 | 从 definition 复制 |
+| **beeline 引用（固定）** | 1...N 条 `{beeline_id, beeline_version}` | 从 definition 复制并固定 version |
+| **schema 引用** | task_schema / result_schema / operation input/output 引用的 schema 完整内容 | 拉取 schema 实际内容嵌入（不只引用）|
+| **依赖清单** | 1 份 release 涉及的所有 beeline_id / schema_id 清单 | 打包时扫描生成（用于审计 / 复盘）|
+
+> release 嵌入 schema 实际内容（不只引用）——保证 release 独立可运行，schema 后续修改不影响老 release。
+
+#### 3.2.4 不可变性
+
+- **写后只读**——release 发布后内容不能修改
+- **校验和验证**——每次读取 release 用校验和验证完整性（防意外篡改）
+- **不允许覆盖**——同 `release_id` 不能发布第二次（强制不可变）
+- **保留历史**——所有 release 永久保留，不删除（升级 = 部署新 release，不是替换老 release）
+
+#### 3.2.5 升级 / 回滚
+
+**升级**（beeBox 行为改进）：
+
+1. 修改 definition → 触发新 release（`@1.3.0`）
+2. 部署新 release 到新 instance（不动老 instance）
+3. 切流——新接收的触发走新 instance，老 instance 继续消化 in-flight task run
+4. 老 instance 跑完所有 in-flight 后下线
+5. 升级完成，新 release 100% 流量
+
+**回滚**（新 release 有问题）：
+
+1. 部署上一个 release（`@1.2.0`）到新 instance
+2. 切流回老 release
+3. 新 release instance 下线
+
+**关键点**：
+- in-flight task run 不受切流影响（在老 instance 跑老 release 直到完成）
+- 升级 / 回滚都是"创建新 instance + 切流"，不是修改老 instance
+- 任意时刻都有 1...N 个 release 跑在 instance 上（升级过渡期）
 
 ### 3.3 BeeBox instance
 

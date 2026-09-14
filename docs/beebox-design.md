@@ -324,7 +324,59 @@ definition → release 的过程：
 
 ### 3.3 BeeBox instance
 
-（待写）
+instance 是 release 的**运行实例**——1 个 release 的 1 次部署，跑在 runtime deployment 里，持续接收 task 产生 task run。
+
+#### 3.3.1 instance 是什么
+
+- **1 个 instance = 1 个 release 的 1 次部署**——instance 跟 release 1:1 绑定（1 个 instance 只跑 1 个 release）
+- **跑在 deployment 里**——instance 不能独立存在，必须跑在 1 个 runtime deployment 里；同 1 个 deployment 可跑 1...N 个 instance
+- **多实例并存**——1 个 release 可部署多个 instance（多环境 / 多租户 / 升级过渡期并存）
+- **状态有生命周期**——启动 → 运行 → 排空 → 停止
+
+#### 3.3.2 部署流程
+
+release → instance 的过程：
+
+1. **选定 release**——按 `release_id` 选 1 个具体 release
+2. **选定 runtime deployment**——instance 跑在哪个 deployment（按兼容性、容量等选择）
+3. **启动 instance**——加载 release 全部内容（definition + 固定引用），绑定到选定的 deployment
+4. **instance 就绪**——开始接收 task，进入"运行中"状态
+
+**关键点**：
+- 1 个 instance 启动后不能换 release（要换 release = 部署新 instance + 切流）
+- 1 个 instance 启动后不能换 deployment（同理）
+
+#### 3.3.3 instance 生命周期
+
+| 状态 | 含义 | 行为 |
+|---|---|---|
+| **启动中** | 加载 release 还没就绪 | 不接收 task |
+| **运行中** | 已就绪，正常接收 task | 接收 task，产生 task run |
+| **排空中** | 停止接收新 task，等待 in-flight 完成 | 拒收新 task，跑完已有 task run |
+| **已停止** | 无 task run，可删除 | 不接收 task，不跑 task run |
+
+状态转换：
+- 启动中 → 运行中（启动完成）
+- 运行中 → 排空中（发起下线 / 升级切流）
+- 排空中 → 已停止（in-flight 全部完成）
+- 运行中 → 已停止（异常情况，强杀）
+
+#### 3.3.4 跟 task run 的关系
+
+- task run 在 instance 内产生（§2.2）—— instance 接收 task → 产生 task run
+- task run 引用 release（不可变绑定，§2.3）—— 当前 instance 跑哪个 release，task run 就引用哪个 release
+- task run 同时引用 instance（执行位置，§2.4 audit 字段 `task_run.beeBox_instance_id`）
+- 升级切流后，老 instance 继续消化 in-flight task run 直到全部完成
+
+#### 3.3.5 跟 runtime 的关系
+
+- instance 跑在 runtime deployment 里（§1.6 运行关系）—— 1 deployment 跑 1...N instance
+- instance 启动时绑定到 1 个 deployment（绑定后不能换）
+- deployment 升级 = 创建新 deployment（不是"升级"老 deployment），老 deployment 上的老 instance 不受影响
+- 兼容性边界：
+  - **兼容**——新 deployment 可跑老 release 的 instance（迁移 instance 到新 deployment）
+  - **不兼容**——老 instance 继续在老 deployment 上跑完 in-flight 后下线
+
 
 ### 3.4 运行时实现
 

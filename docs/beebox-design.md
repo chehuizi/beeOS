@@ -92,8 +92,9 @@ flowchart TB
 | 概念 | 范围 | 关系 |
 |---|---|---|
 | **operation** | 1 个不可再分的加工动作（input / output / type 已声明）| 最小执行单元（原子工序）|
-| **beeline** | 1 类任务的标准作业路线 | 1...N 个 operation 组成的有序结构（支持顺序 / 并发 / 分支）|
+| **beeline** | 1 类任务的标准作业路线 | 1...N 个 operation 组成的有向图（支持顺序 / 并发 / 分支）|
 | **beeBox** | 1 个可独立运营和验收的数字工作 cell | 1...N 条 beeline 组成 |
+| **queen** | 1 个 beeBox 的运营责任主体 | 1 个 beeBox 指定 1 个 queen（1:1）|
 | **企业价值流** | 端到端业务流 | 1...N 个 beeBox 串联 |
 
 例子（电商订单履行）：
@@ -106,6 +107,8 @@ flowchart TB
 ### 1.5 产品生命周期
 
 beeBox 走过 3 个阶段：**前 2 阶段**（definition / release）是 beeBox 的产物（被设计 / 被发布）；**第 3 阶段**（instance）是 beeBox 的运行实例——产品装上后开始跑，持续接收触发产生 task run。
+
+每个 beeBox 由 1 个 queen 负责运营——queen 是 beeBox 的责任主体（决定 beeBox 接收什么 task / 交付什么 result），不是 runtime 实现组件。queen 不在产品生命周期 3 阶段里独立成段（queen 是 beeBox 的属性，beeBox 装上后 queen 自然跟着运行）。
 
 ```mermaid
 flowchart LR
@@ -205,6 +208,8 @@ task run 引用 release（product 不可变，固定引用）：
 ## 3. 实现设计
 
 具体说明 §1 提到的产品组件怎么落地实现。按 **产品侧 / 运行时 / 履约** 3 块组织：产品侧对应 beeBox 生命周期的 3 阶段（definition → release → instance），运行时对应 runtime 部署层，履约对应 task run 执行层。
+
+**queen**（beeBox 1:1 责任主体，§1.4）是 beeBox 的**设计层属性**——1 个 beeBox 指定 1 个 queen（哪个责任主体）。queen 不属于 runtime 实现组件（trigger handler / executor / bee 才是）；queen 只在 §3.1 definition 里作为 beeBox 的属性声明，runtime 平台跟 queen 解耦。
 
 ### 3.1 BeeBox definition
 

@@ -453,8 +453,87 @@ runtime environment / runtime deployment / instance 3 层的实现细节。
 
 ### 3.5 履约实现
 
-- **task run 触发**：instance 接收触发（§2.2）→ 产生 1 个 task run
-- **beeline 加载**：task run 走 1 条 beeline（从 §2.3 release 隐含引用）
-- **operation 执行**：task run 按 beeline 路线执行对应的 operation 步骤
-- **异常处理**：op 异常 → 按 §1.3 持续流动原则暴露（具体机制留待后续）
-- **审计**：每个 task run 记录 §2.4 字段
+task run 在 instance 内的完整执行流程。
+
+#### 3.5.1 task run 触发
+
+**触发来源**：
+- 上游 beeBox（其他 instance 发来的 task，通过 instance 间协议）
+- 外部系统（HTTP / 消息队列 / 定时器等）
+- 平台调度（运维手动触发 / 自动扩缩容触发的预热 task）
+
+**触发流程**：
+
+1. **instance 接收 trigger**——trigger 包含 task 数据（按 task_schema 形状）
+2. **task run 创建**——instance 立即创建 1 个 task run（带 §2.4 全部 audit 字段），task run 不可变记录开始时间 / 入口数据
+3. **进入执行**——task run 派发到 instance 的执行器（执行 beeline 编排）
+
+**关键点**：
+- 触发瞬间 task run 就绑定到 release（不可变，§2.3）—— instance 后续切流不影响这个 task run
+- in-flight task run 受 instance 状态保护（instance 下线前要排空，§3.3.3）
+
+#### 3.5.2 beeline 加载
+
+**加载流程**：
+
+1. **task run 选 beeline**——按 task 的 `beeline_id`（在 definition 里绑定）从 instance 加载的 release 中找到具体 beeline
+2. **校验**——校验 beeline 完整性（operations / next 链 / 无环，参见 `beebox-beeline-schema.md` 字段约束）
+3. **构建执行图**——把 beeline 的有向图加载到 instance 的执行器中（每个 op_id 变成 1 个可执行节点）
+
+**关键点**：
+- beeline 已经在 release 中固定版本（§3.2.3 打包内容），instance 不需要再查外部
+- 加载过程开销小（beeline 已经在内存中，instance 启动时一次性加载完所有 beeline）
+
+#### 3.5.3 operation 执行
+
+**执行流程**（按 beeline 有向图）：
+
+1. **起点 operation**——找到 `input_from: external` 的 op（task 输入作为起点）
+2. **逐 op 执行**——按 next 链推进：
+   - **顺序**——按 next 顺序执行下一个 op
+   - **并发**——同时启动多个 next op（fan-out）
+   - **分支**——按 `when` 条件选 1 个 next op（互斥）
+   - **汇聚**——所有前置 op 完成后才执行当前 op（fan-in）
+3. **op 内动作**——每个 op 调对应的 `bee`（`bee.type` 寻址 worker）或 `external_system` 完成具体加工
+4. **终点**——没有 next 的 op 完成时 task run 结束
+
+**关键点**：
+- task run 跨 op 的状态（input / output 中间数据）保存在 instance 内存或临时存储
+- 每个 op 执行结果记录到 task run 审计字段（步骤级日志）
+
+#### 3.5.4 异常处理
+
+按 §1.3 持续流动原则暴露——不静默吞错，让异常显式可观测。
+
+**异常分类**：
+
+| 异常 | 处理 |
+|---|---|
+| **op 执行失败**（bee 抛错 / 外部系统超时）| 当前 op 标记为失败，按 beeline 编排决定下一步（无 next = task run 失败；分支条件可走错误处理 op）|
+| **beeline 完整性错误**（环 / 引用不存在）| 加载时校验失败 → task run 不创建（启动期错误，不进入执行）|
+| **task 数据不符合 schema**（task_schema 校验失败）| 触发时校验失败 → trigger 拒绝（不创建 task run）|
+
+**暴露方式**：
+- task run 记录每步异常（步骤级 error 信息）
+- §2.4 audit 字段含异常信息
+- 业务侧可通过 task run 查询接口查异常
+- 持续改善靠异常数据驱动（§1.3 持续流动）
+
+#### 3.5.5 审计
+
+每个 task run 记录 §2.4 全部 audit 字段：
+
+| 字段 | 何时记录 |
+|---|---|
+| `task_run.beeBox_release_id` | task run 创建时（绑定 release）|
+| `task_run.beeBox_instance_id` | task run 创建时（绑定 instance）|
+| `task_run.beeLine_id` | beeline 加载时 |
+| `task_run.beeLine_version` | beeline 加载时 |
+| `task_run.runtime_deployment_id` | task run 创建时（绑定 deployment）|
+| 步骤级日志 | 每个 op 执行完成时（input / output / duration / error）|
+| 异常信息 | op 失败时 |
+
+**审计原则**：
+- audit 字段在 task run 创建瞬间定型（不可变）
+- 步骤级日志 + 异常信息可后续追加（不影响 audit 字段）
+- audit 用于复盘 / 举证 / 改进（§1.3 持续改善）

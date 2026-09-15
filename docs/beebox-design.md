@@ -94,7 +94,7 @@ flowchart TB
 | **operation** | 1 个不可再分的加工动作（input / output / type 已声明）| 最小执行单元（原子工序）|
 | **beeline** | 1 类任务的标准作业路线 | 1...N 个 operation 组成的有向图（支持顺序 / 并发 / 分支）|
 | **beeBox** | 1 个可独立运营和验收的数字工作 cell | 1...N 条 beeline 组成 |
-| **queen** | 1 个 beeBox 的运营责任主体 | 1 个 beeBox 指定 1 个 queen（1:1）|
+| **queen** | 1 个 beeBox 的自治运营智能体 | 1 个 beeBox 指定 1 个 queen（1:1）；queen 在履约合同 + 授权策略约束下管理任务流动 / 运行异常 / 持续改善 |
 | **企业价值流** | 端到端业务流 | 1...N 个 beeBox 串联 |
 
 例子（电商订单履行）：
@@ -209,7 +209,7 @@ task run 引用 release（product 不可变，固定引用）：
 
 具体说明 §1 提到的产品组件怎么落地实现。按 **产品侧 / 运行时 / 履约** 3 块组织：产品侧对应 beeBox 生命周期的 3 阶段（definition → release → instance），运行时对应 runtime 部署层，履约对应 task run 执行层。
 
-**queen**（beeBox 1:1 责任主体，§1.4）是 beeBox 的**设计层属性**——1 个 beeBox 指定 1 个 queen（哪个责任主体）。queen 不属于 runtime 实现组件（trigger handler / executor / bee 才是）；queen 只在 §3.1 definition 里作为 beeBox 的属性声明，runtime 平台跟 queen 解耦。
+**queen**（beeBox 1:1 智能体，§1.4）是 beeOS 的**1 类独立对象**——定义见 [beebox-queen-schema.md](./beebox-queen-schema.md)。queen 是 beeBox 的自治运营智能体，在履约合同 + 授权策略约束下管理任务流动 / 运行异常 / 持续改善。queen 不属于 runtime 实现组件，由 runtime 平台的智能体引擎执行。
 
 ### 3.1 BeeBox definition
 

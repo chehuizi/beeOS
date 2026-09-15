@@ -5,6 +5,7 @@
 #   docs/beebox-definition-schema.md — beeBox definition 结构化 schema 规格
 #   docs/beebox-beeline-schema.md    — beeline 结构化 schema 规格
 #   docs/beebox-schema-schema.md     — schema 结构化 schema 规格
+#   docs/beebox-queen-schema.md      — queen 结构化 schema 规格
 #
 # 当前目标：设计稿定稿，零代码
 #
@@ -22,3 +23,4 @@ verify-mermaid:  ## 校验设计稿里的 mermaid 块
 	@python3 scripts/verify_mermaid.py docs/beebox-definition-schema.md
 	@python3 scripts/verify_mermaid.py docs/beebox-beeline-schema.md
 	@python3 scripts/verify_mermaid.py docs/beebox-schema-schema.md
+	@python3 scripts/verify_mermaid.py docs/beebox-queen-schema.md

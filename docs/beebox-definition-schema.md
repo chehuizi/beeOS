@@ -14,7 +14,7 @@ definition 顶层包含**基础元信息**和**履约生命周期 4 块**：
 
 | 块 | 含义 | 字段 |
 |---|---|---|
-| **基础元信息** | beeBox 基础标识 | `id` / `version` / `description` / `queen` |
+| **基础元信息** | beeBox 基础标识 | `id` / `version` / `description` / `queen_id` |
 | **履约对象** | beeBox 接收什么 task | `task` |
 | **履约过程** | 怎么履约（beeline 列表 + 资源）| `process` |
 | **履约结果** | beeBox 交付什么业务结果 | `result` |
@@ -32,7 +32,7 @@ beeBox_definition:
   id: string                 # definition 唯一标识
   version: integer           # definition 版本（递增序列号）
   description: string       # 人类可读说明
-  queen: string              # beeBox 责任主体（1 个 beeBox 1 个 queen）
+  queen_id: string           # 引用 queen 对象（1 个 beeBox 1 个 queen，§1.4）
 
   # ---- 履约对象：beeBox 接收什么 task ----
   task:                      # 1...N 类 task
@@ -99,8 +99,8 @@ beeBox_definition:
 
 ## 4. 字段约束
 
-- **必填字段**：`id`, `version`, `queen`, `task`, `result`, `process` 不可省略
-- **queen 唯一**：1 个 beeBox 1 个 queen（`queen` 是 beeBox 的责任主体）
+- **必填字段**：`id`, `version`, `queen_id`, `task`, `result`, `process` 不可省略
+- **queen 引用存在**：`queen_id` 必须在 queen 仓库里真实存在（参见 `beebox-queen-schema.md`）
 - **task 必填 beeline**：`task` 列表每条都必填 `beeline_id` + `beeline_version`（1:1 绑定）
 - **beeline 引用存在**：`task.beeline_id` + `beeline_version` 必须在 `process.beelines` 里真实存在
 - **metric 命名**：`quality` / `latency` / `cost` 三类分别命名，命名空间隔离
@@ -112,7 +112,7 @@ beeBox_definition:
 
 | schema 字段 | design 章节 |
 |---|---|
-| `queen` | §1.4 边界关系（beeBox 1:1 owner）· §3 实现设计开头说明 |
+| `queen_id` | §1.4 边界关系（beeBox 1:1 queen）· [beebox-queen-schema.md](./beebox-queen-schema.md) |
 | `task` | §3.1.2 履约对象 |
 | `process` | §3.1.2 履约过程 |
 | `result` | §3.1.2 履约结果（对应 §2.1 单次履约）|

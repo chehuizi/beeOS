@@ -27,8 +27,7 @@ flowchart TB
   end
 
   subgraph rt["运行侧"]
-    env["runtime environment\n实际运行环境"]
-    dep["runtime deployment\n某 runtime 版本的部署"]
+    rt_obj["runtime\n把 release 部署成 instance"]
   end
 
   run["task run\n1 次履约"]
@@ -36,8 +35,7 @@ flowchart TB
 
   def -->|发布| rel
   rel -->|部署| ins
-  env -->|1...N| dep
-  dep -->|1...N| ins
+  rt_obj -->|1...N| ins
   ins -->|持续接收触发| run
   run -->|交付| result
   run -.引用.-> rel
@@ -47,16 +45,16 @@ flowchart TB
   classDef fulfill fill:#dcfce7,stroke:#16a34a,color:#14532d
 
   class def,rel,ins product
-  class env,dep runtime
+  class rt_obj runtime
   class run,result fulfill
 ```
 
 **图怎么读**：
 
 - 蓝色 = **产品侧**（definition → release → instance）
-- 橙色 = **运行侧**（environment → deployment → instance）
+- 橙色 = **运行侧**（runtime 1 个对象，把 release 部署成 instance）
 - 绿色 = **履约层**（instance 持续接收触发 → task run → 交付业务结果）
-- **instance 是产品侧和运行侧的交叉点**——既来自 release，又跑在 deployment 里
+- **instance 是产品侧和运行侧的交叉点**——既来自 release，又跑在 runtime 里
 - **task run 引用 release**——instance 跑 task run 时固定引用 release 版本（不可变）
 
 ### 1.1 第一性定义
@@ -127,30 +125,26 @@ flowchart LR
 
 ### 1.6 运行关系
 
-instance 必须跑在一个执行环境之上——这就是 **beeBox runtime**。runtime 拆成 2 层：**runtime environment**（实际运行环境 + 隔离边界）跟 **runtime deployment**（某 runtime 版本在 environment 的一次具体部署）；instance 部署在 deployment 里。
+instance 必须跑在一个执行环境之上——这就是 **beeBox runtime**。**runtime 是 1 类对象**，唯一职责是"把 release 部署成 instance 并持续运行"——environment / deployment / 健康检查 / 升级 / 兼容性判定都是 runtime 的内部能力，不暴露为独立对象。
 
 ```mermaid
 flowchart TB
-  env["runtime environment\n实际运行环境 隔离边界"]
-  d1["runtime deployment #1\nruntime v1.0"]
-  d2["runtime deployment #2\nruntime v1.1"]
+  rt1["runtime #1\ndev 用途"]
+  rt2["runtime #2\nprod 用途"]
   i1["instance #1"]
   i2["instance #2"]
   i3["instance #3"]
-  env --> d1
-  env --> d2
-  d1 --> i1
-  d1 --> i2
-  d2 --> i3
+  rt1 --> i1
+  rt1 --> i2
+  rt2 --> i3
 ```
 
-- **runtime environment** = 实际运行环境 + 隔离边界
-- **runtime deployment** = 某个 **runtime 版本**在 environment 的一次具体部署（runtime 隐含在 deployment 里）
-- **beeBox instance** = 部署在 runtime deployment 里的应用
-- **3 层关系**：1 environment → 1...N deployment；1 deployment → 1...N instance
-- **多 environment 场景**：多个 **runtime environment** 描述不同环境类型（dev / staging / prod / 不同云厂商）——每个 environment 是独立的隔离边界
+- **runtime** = 把 release 部署成 instance 并持续运行的服务（1 类对象）
+- **beeBox instance** = 部署在 runtime 里的应用实例
+- **关系**：1 runtime → 1...N instance（同一 runtime 可跑不同 release 的 instance，也可以跑同一 release 的多副本）
+- **多 runtime 场景**：1 个 beeOS 平台可有 1...N 个 runtime，按用途 / 区域 / 租户划分（dev / staging / prod / 不同云厂商 / 不同区域）——每个 runtime 是独立的隔离边界
 - runtime **不属于 beeBox 产品本身**——它是 beeBox 跑在什么之上
-- 想要新 runtime 版本 = 重新创建 1 个 **新 runtime deployment**（不修改老 deployment；runtime deployment 没有"升级"这一说，每次版本变化都是新创建）；新 deployment 跟老 release **有兼容边界**——对**不兼容**的老 release 不升级（老 instance 继续在**老 deployment** 上跑完所有 in-flight task run 后下线），兼容的老 release 正常升级
+- **runtime 升级 = 创建新 runtime**（runtime 没有"升级"这一说，每次版本 / 配置变化都是新创建）；新 runtime 跟老 release 有兼容判定——不兼容时老 instance 继续在老 runtime 上跑完所有 in-flight task run 后下线，兼容时可迁移
 
 ---
 
@@ -201,7 +195,7 @@ task run 引用 release（product 不可变，固定引用）：
 | `task_run.beeBox_instance_id` | 任务创建时的 instance 标识（执行位置）|
 | `task_run.beeLine_id` | 任务走的是哪条 beeline（beeLine 的标识）|
 | `task_run.beeLine_version` | 任务走的那条 beeline 的版本号（显式记录）|
-| `task_run.runtime_deployment_id` | 任务创建时的 deployment 标识（运行层位置）|
+| `task_run.runtime_id` | 任务创建时的 runtime 标识（运行层位置）|
 
 ---
 
@@ -330,13 +324,13 @@ definition → release 的过程：
 
 ### 3.3 BeeBox instance
 
-instance 是 release 的**运行实例**——1 个 release 的 1 次部署，跑在 runtime deployment 里，持续接收 task 产生 task run。
+instance 是 release 的**运行实例**——1 个 release 的 1 次部署，跑在 runtime 里，持续接收 task 产生 task run。
 
 #### 3.3.1 instance 是什么
 
 - **1 个 instance = 1 个 release 的 1 次部署**——instance 跟 release 1:1 绑定（1 个 instance 只跑 1 个 release）
-- **跑在 deployment 里**——instance 不能独立存在，必须跑在 1 个 runtime deployment 里；同 1 个 deployment 可跑 1...N 个 instance
-- **多实例并存**——1 个 release 可部署多个 instance（多环境 / 多租户 / 升级过渡期并存）
+- **跑在 runtime 里**——instance 不能独立存在，必须跑在 1 个 runtime 里；同 1 个 runtime 可跑 1...N 个 instance
+- **多实例并存**——1 个 release 可部署多个 instance（多 runtime / 多租户 / 升级过渡期并存）
 - **状态有生命周期**——启动 → 运行 → 排空 → 停止
 
 #### 3.3.2 部署流程
@@ -344,13 +338,13 @@ instance 是 release 的**运行实例**——1 个 release 的 1 次部署，�
 release → instance 的过程：
 
 1. **选定 release**——按 `release_id` 选 1 个具体 release
-2. **选定 runtime deployment**——instance 跑在哪个 deployment（按兼容性、容量等选择）
-3. **启动 instance**——加载 release 全部内容（definition + 固定引用），绑定到选定的 deployment
+2. **选定 runtime**——instance 跑在哪个 runtime（按兼容性、容量等选择）
+3. **启动 instance**——加载 release 全部内容（definition + 固定引用），绑定到选定的 runtime
 4. **instance 就绪**——开始接收 task，进入"运行中"状态
 
 **关键点**：
 - 1 个 instance 启动后不能换 release（要换 release = 部署新 instance + 切流）
-- 1 个 instance 启动后不能换 deployment（同理）
+- 1 个 instance 启动后不能换 runtime（同理）
 
 #### 3.3.3 instance 生命周期
 
@@ -376,92 +370,21 @@ release → instance 的过程：
 
 #### 3.3.5 跟 runtime 的关系
 
-- instance 跑在 runtime deployment 里（§1.6 运行关系）—— 1 deployment 跑 1...N instance
-- instance 启动时绑定到 1 个 deployment（绑定后不能换）
-- deployment 升级 = 创建新 deployment（不是"升级"老 deployment），老 deployment 上的老 instance 不受影响
+- instance 跑在 runtime 里（§1.6 运行关系）—— 1 runtime 跑 1...N instance
+- instance 启动时绑定到 1 个 runtime（绑定后不能换）
+- runtime 升级 = 创建新 runtime（不是"升级"老 runtime），老 runtime 上的老 instance 不受影响
 - 兼容性边界：
-  - **兼容**——新 deployment 可跑老 release 的 instance（迁移 instance 到新 deployment）
-  - **不兼容**——老 instance 继续在老 deployment 上跑完 in-flight 后下线
+  - **兼容**——新 runtime 可跑老 release 的 instance（迁移 instance 到新 runtime）
+  - **不兼容**——老 instance 继续在老 runtime 上跑完 in-flight 后下线
+
+runtime 的实现细节（状态机 / 内部组件 / 接口约定）见 [beebox-runtime-design.md](./beebox-runtime-design.md)。
 
 
-### 3.4 运行时实现
-
-runtime environment / runtime deployment / instance 3 层的实现细节。
-
-#### 3.4.1 runtime deployment 启动
-
-**启动流程**：
-
-1. **选定 environment**——选 1 个 runtime environment（dev / staging / prod / 不同云厂商）
-2. **选定 runtime 版本**——选 1 个具体 runtime 版本（如 `runtime v1.0.0`）
-3. **创建 deployment**——在 environment 内启动 1 个 deployment（带 `runtime_deployment_id` 标识）
-4. **就绪**——deployment 启动完成后等待 instance 接入
-
-**deployment 标识**：`runtime_deployment_id`（按 environment_id + runtime_version 派生，如 `env_prod__runtime_v1.0.0__deploy_001`）
-
-**deployment 状态**：
-- 启动中（runtime 拉起中）
-- 就绪（可接收 instance 接入）
-- 排空中（不再接收新 instance，老 instance 跑完后清空）
-- 已停止（清空完成，可删除）
-
-#### 3.4.2 instance 接入
-
-**接入流程**：
-
-1. **加载 release**——instance 启动时加载 1 个具体 release（release_id）
-2. **注册到 deployment**——instance 注册到 1 个 deployment，建立连接
-3. **健康检查**——instance 通过 deployment 暴露的健康检查端点确认就绪
-4. **开始接收 task**——进入"运行中"状态
-
-**约束**：
-- 1 个 instance 只能绑定 1 个 deployment（绑定后不能换）
-- 1 个 instance 启动时校验 release 跟 deployment 的兼容性
-- 兼容性失败 → instance 启动失败（不部署）
-
-#### 3.4.3 运行时升级
-
-**升级 runtime 版本 = 创建新 deployment**（不修改老 deployment）：
-
-- 老 deployment 上的老 instance 继续跑老 release，不受影响
-- 新 deployment 准备好后，老 instance 可选择性迁移（见 §3.4.4 兼容性边界）
-- 老 deployment 上的 instance 全跑完后，deployment 可下线
-
-**升级不能"原地升级"**——每次 runtime 版本变化都是创建新 deployment（保持老 deployment 不可变，老 instance 行为可追溯）。
-
-#### 3.4.4 兼容性边界
-
-新 deployment 跟老 release 的兼容性有 2 种处理：
-
-| 兼容性 | 处理 |
-|---|---|
-| **兼容** | 新 deployment 可跑老 release → 老 instance 可迁移到新 deployment（流量随之迁移，instance 继续跑 release）|
-| **不兼容** | 新 deployment 不能跑老 release → 老 instance 继续在老 deployment 上跑完所有 in-flight task run 后下线 |
-
-**兼容性判定**：
-- runtime 版本变更（minor / patch）：通常兼容
-- runtime 大版本变更（major）：可能不兼容
-- 具体判定由 runtime 平台给出（beeBox / release 不关心）
-
-#### 3.4.5 多 environment 场景
-
-1 个 beeOS 平台可管理多个 runtime environment：
-
-| environment | 用途 | 典型例子 |
-|---|---|---|
-| **dev** | 开发联调 | 每个开发者 1 个独立 environment |
-| **staging** | 预发布验证 | 1 个团队共享 |
-| **prod** | 生产服务 | 多区域 / 多云厂商 |
-
-- **隔离边界**——每个 environment 是独立的隔离边界（不同环境之间不共享数据 / 资源）
-- **跨 environment 部署**——同一份 release 可部署到多个 environment（dev 验证完 → staging 验证 → prod 上线）
-- **environment 注册**——platform 管理员注册 environment，标记用途 / 区域 / 云厂商
-
-### 3.5 履约实现
+### 3.4 履约实现
 
 task run 在 instance 内的完整执行流程。
 
-#### 3.5.1 task run 触发
+#### 3.4.1 task run 触发
 
 **触发来源**：
 - 上游 beeBox（其他 instance 发来的 task，通过 instance 间协议）
@@ -478,7 +401,7 @@ task run 在 instance 内的完整执行流程。
 - 触发瞬间 task run 就绑定到 release（不可变，§2.3）—— instance 后续切流不影响这个 task run
 - in-flight task run 受 instance 状态保护（instance 下线前要排空，§3.3.3）
 
-#### 3.5.2 beeline 加载
+#### 3.4.2 beeline 加载
 
 **加载流程**：
 
@@ -490,7 +413,7 @@ task run 在 instance 内的完整执行流程。
 - beeline 已经在 release 中固定版本（§3.2.3 打包内容），instance 不需要再查外部
 - 加载过程开销小（beeline 已经在内存中，instance 启动时一次性加载完所有 beeline）
 
-#### 3.5.3 operation 执行
+#### 3.4.3 operation 执行
 
 **执行流程**（按 beeline 有向图）：
 
@@ -507,7 +430,7 @@ task run 在 instance 内的完整执行流程。
 - task run 跨 op 的状态（input / output 中间数据）保存在 instance 内存或临时存储
 - 每个 op 执行结果记录到 task run 审计字段（步骤级日志）
 
-#### 3.5.4 异常处理
+#### 3.4.4 异常处理
 
 按 §1.3 持续流动原则暴露——不静默吞错，让异常显式可观测。
 
@@ -525,7 +448,7 @@ task run 在 instance 内的完整执行流程。
 - 业务侧可通过 task run 查询接口查异常
 - 持续改善靠异常数据驱动（§1.3 持续流动）
 
-#### 3.5.5 审计
+#### 3.4.5 审计
 
 每个 task run 记录 §2.4 全部 audit 字段：
 
@@ -535,7 +458,7 @@ task run 在 instance 内的完整执行流程。
 | `task_run.beeBox_instance_id` | task run 创建时（绑定 instance）|
 | `task_run.beeLine_id` | beeline 加载时 |
 | `task_run.beeLine_version` | beeline 加载时 |
-| `task_run.runtime_deployment_id` | task run 创建时（绑定 deployment）|
+| `task_run.runtime_id` | task run 创建时（绑定 runtime）|
 | 步骤级日志 | 每个 op 执行完成时（input / output / duration / error）|
 | 异常信息 | op 失败时 |
 
@@ -553,7 +476,7 @@ beeOS 平台提供 **2 个面板产品入口**，分别面向不同角色、不�
 | 面板 | 角色 | 对象层级 |
 |---|---|---|
 | **workshop（管理面板）** | owner / 管理员 | 设计层对象（definition / release / beeline / schema / bee）|
-| **kanban（运行面板）** | 运维 / 观察者 | 运行时对象（instance / task run / operation / deployment / 异常）|
+| **kanban（运行面板）** | 运维 / 观察者 | 运行时对象（instance / task run / operation / runtime / 异常）|
 
 ### 4.1 workshop（管理面板）
 
@@ -588,7 +511,7 @@ beeOS 平台提供 **2 个面板产品入口**，分别面向不同角色、不�
 
 | 对象 | 典型动作 |
 |---|---|
-| **runtime environment / deployment** | 注册 environment / 创建 deployment / 监控 deployment 状态 |
+| **runtime** | 注册 runtime / 查看 runtime 状态 / 启动 / 排空 / 删除 |
 | **beeBox instance** | 查看 instance 列表 / 状态（运行中 / 排空 / 已停止）/ 健康检查 |
 | **task run** | 查看实时 / 历史 task run / 跟踪每个 task run 的状态 / 审计字段 |
 | **operation 执行** | 查看 op 执行过程（步骤级日志）/ 失败原因 / 重试记录 |

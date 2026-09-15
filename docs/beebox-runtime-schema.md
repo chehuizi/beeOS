@@ -115,13 +115,13 @@ runtime 除了自身对象，还有 5 类**内部组件**——runtime 平台运
 | **trigger handler** | 接收 task（HTTP endpoint / MQ topic / RPC handler / 平台调度）|
 | **executor** | 按 beeline 编排跑 task run |
 | **worker pool** | bee 类型的 worker 实例池 |
-| **queen engine** | 执行 queen 智能体（合同约束 + 授权 + 自治规则）|
+| **queen engine** | 执行 beeBox definition 顶层 `queen` 配置（合同约束 + 授权 + 自治规则）|
 | **monitor / audit** | 运行时数据收集 + audit 字段记录 |
 
 **关键点**：
 - 内部组件是**平台能力**，不跟 runtime 一起声明——runtime 平台自带，不需要 platform 管理员配置
 - 内部组件的**配置参数**（worker pool 大小、trigger handler 监听端口等）放在 `config` 里（具体形式由 runtime 平台决定）
-- 业务侧（beeBox / beeline / queen）只跟内部组件**交互**，不声明内部组件
+- 业务侧（beeBox / beeline）只跟内部组件**交互**，不声明内部组件
 
 ---
 

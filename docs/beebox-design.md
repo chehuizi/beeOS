@@ -92,7 +92,7 @@ flowchart TB
 | **operation** | 1 个不可再分的加工动作（input / output / type 已声明）| 最小执行单元（原子工序）|
 | **beeline** | 1 类任务的标准作业路线 | 1...N 个 operation 组成的有向图（支持顺序 / 并发 / 分支）|
 | **beeBox** | 1 个可独立运营和验收的数字工作 cell | 1...N 条 beeline 组成 |
-| **queen** | 1 个 beeBox 的自治运营智能体 | 1 个 beeBox 指定 1 个 queen（1:1）；queen 在履约合同 + 授权策略约束下管理任务流动 / 运行异常 / 持续改善 |
+| **queen** | beeBox 的自治运营智能体（definition 顶层字段）| 1 个 beeBox 含 1 份 queen 配置；queen 在履约合同 + 授权策略约束下管理任务流动 / 运行异常 / 持续改善（由 runtime 平台的 queen engine 执行）|
 | **企业价值流** | 端到端业务流 | 1...N 个 beeBox 串联 |
 
 例子（电商订单履行）：
@@ -106,7 +106,7 @@ flowchart TB
 
 beeBox 走过 3 个阶段：**前 2 阶段**（definition / release）是 beeBox 的产物（被设计 / 被发布）；**第 3 阶段**（instance）是 beeBox 的运行实例——产品装上后开始跑，持续接收触发产生 task run。
 
-每个 beeBox 由 1 个 queen 负责运营——queen 是 beeBox 的责任主体（决定 beeBox 接收什么 task / 交付什么 result），不是 runtime 实现组件。queen 不在产品生命周期 3 阶段里独立成段（queen 是 beeBox 的属性，beeBox 装上后 queen 自然跟着运行）。
+每个 beeBox 由 1 份 queen 配置负责运营——queen 是 definition 顶层字段（决定 beeBox 接收什么 task / 交付什么 result），不是 runtime 实现组件。queen 不在产品生命周期 3 阶段里独立成段（queen 跟着 definition 走，definition 改了 queen 跟着改，release 打包时 queen 配置嵌入 release）。
 
 ```mermaid
 flowchart LR
@@ -203,7 +203,7 @@ task run 引用 release（product 不可变，固定引用）：
 
 具体说明 §1 提到的产品组件怎么落地实现。按 **产品侧 / 运行时 / 履约** 3 块组织：产品侧对应 beeBox 生命周期的 3 阶段（definition → release → instance），运行时对应 runtime 部署层，履约对应 task run 执行层。
 
-**queen**（beeBox 1:1 智能体，§1.4）是 beeOS 的**1 类独立对象**——定义见 [beebox-queen-schema.md](./beebox-queen-schema.md)。queen 是 beeBox 的自治运营智能体，在履约合同 + 授权策略约束下管理任务流动 / 运行异常 / 持续改善。queen 不属于 runtime 实现组件，由 runtime 平台的智能体引擎执行。
+**queen**（beeBox 1:1 智能体，§1.4）是 **definition 顶层字段**——不再独立成对象。queen 是 beeBox 的自治运营智能体，在履约合同 + 授权策略约束下管理任务流动 / 运行异常 / 持续改善。queen 不属于 runtime 实现组件，由 runtime 平台的智能体引擎（queen engine，加载 release 里的 definition 时同步加载 queen 字段）执行。queen 字段结构见 [beebox-definition-schema.md §queen 字段](./beebox-definition-schema.md#queen-字段)。
 
 ### 3.1 BeeBox definition
 
@@ -217,17 +217,18 @@ definition 是 beeBox 产品的"设计图"——定义 1 个 beeBox 接收什么
 
 #### 3.1.2 数据结构
 
-definition 包含**基础元信息 + 履约生命周期 4 块**：
+definition 包含**基础元信息 + 履约生命周期 4 块 + queen 配置**：
 
 | 块 | 内容 | 备注 |
 |---|---|---|
-| **基础元信息** | beeBox 基础标识（id / version / description / **queen**）| queen 是 beeBox 1:1 责任主体 |
+| **基础元信息** | beeBox 基础标识（id / version / description）| 标识 beeBox 自身 |
 | **履约对象** | beeBox 接收什么 task（输入 schema / 适用业务场景）| 1 个 beeBox 可能接收多类 task；每类 task 1:1 绑定 1 条 beeline |
 | **履约过程** | 怎么履约（每类 task 1:1 绑定 1 条 beeline，beeline 内部资源归 beeline 自己管）| 全部用"引用"——松耦合 |
 | **履约结果** | 1 个 beeBox 交付什么业务结果（业务定义 + 验收标准 + 例外条款）| 对应 §2.1 单次履约 |
 | **履约度量** | 质量 / 时效 / 成本 各自的度量方式 + 目标值 | 对应 §2.1 履约指标 |
+| **queen** | beeBox 的自治运营配置（authorization / rules）| 跟着 definition 走，由 runtime 平台的 queen engine 执行 |
 
-> 1 个 definition **不包含** beeline / schema 的**实现**——只引用它们的标识。
+> 1 个 definition **不包含** beeline / schema 的**实现**——只引用它们的标识。queen 配置是 definition 自身内容（不引用外部对象）。
 
 #### 3.1.3 引用机制
 
@@ -494,7 +495,6 @@ beeOS 平台提供 **2 个面板产品入口**，分别面向不同角色、不�
 | **beeline** | 注册 / 编辑有向图（operations / next 链）/ 校验无环 |
 | **schema** | 注册 / 编辑字段定义（业务字段 / 嵌套引用）|
 | **bee（type）** | 注册 worker 类型 / 配置参数 |
-| **queen** | 指定每个 beeBox 的责任主体 |
 
 **典型场景**：
 - owner 创建 1 个新 beeBox → 编辑 definition → 注册 / 引用 beeline / schema
@@ -508,7 +508,7 @@ beeOS 平台提供 **2 个面板产品入口**，分别面向不同角色、不�
 
 ### 4.2 kanban（运行面板）
 
-**角色**：运维 / 平台观察者 / queen（查看自己 beeBox 的运行）
+**角色**：运维 / 平台观察者 / beeBox owner（查看自己 beeBox 的运行）
 
 **管什么**（运行时对象）：
 
@@ -565,6 +565,6 @@ flowchart TB
 
 1. **workshop 优化**——kanban 发现某 op 失败率高 → workshop 修 beeline → 新 release → kanban 看新版本效果
 2. **kanban 调整**——kanban 看到某 instance 异常 → 切流到健康 instance → workshop 不变（设计不变，运维动作）
-3. **queen 自我反馈**——queen 在 kanban 看板看自己 beeBox 的运行数据 → workshop 调 definition
+3. **owner 看板反馈**——owner 在 kanban 看板看自己 beeBox 的运行数据（queen engine 同步产出建议）→ workshop 调 definition
 
 两面板都是 beeOS 平台的产品入口，**没有先后依赖**——owner 优先用 workshop 设计 beeBox；运维优先用 kanban 运维 beeBox；持续改善靠 2 个面板协作完成（§1.3）。

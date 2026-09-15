@@ -4,7 +4,7 @@
 > **日期**：2026-09-15
 > **对应**：[beebox-design.md §1.6 运行关系](./beebox-design.md#16-运行关系) · §3.3 instance · §3.5 履约实现 · [beebox-runtime-schema.md](./beebox-runtime-schema.md)
 
-runtime 平台的整体设计规格。**runtime 平台是 beeOS 平台的基础设施层**——提供 beeBox / beeline / queen / bee 等业务对象"跑起来"所需的运行时能力。
+runtime 平台的整体设计规格。**runtime 平台是 beeOS 平台的基础设施层**——提供 beeBox / beeline / schema / bee 等业务对象"跑起来"所需的运行时能力。
 
 ---
 
@@ -14,7 +14,7 @@ runtime 平台对外只暴露 1 类对象：**runtime**——其唯一职责是"
 
 | 层级 | 内容 | 设计文件 |
 |---|---|---|
-| **业务层（beeOS 平台）** | beeBox / beeline / schema / queen / bee 等业务对象 + workshop / kanban 面板 | `beebox-design.md` + 各 schema 文件 |
+| **业务层（beeOS 平台）** | beeBox / beeline / schema / bee 等业务对象 + workshop / kanban 面板 | `beebox-design.md` + 各 schema 文件 |
 | **基础设施层（runtime 平台）** | runtime 对象 + 5 类内部组件（trigger handler / executor / worker pool / queen engine / monitor / audit）| `beebox-runtime-design.md` + `beebox-runtime-schema.md` |
 
 **runtime 平台跟 beeOS 平台是 2 个独立产品**——runtime 升级不影响 beeOS 平台业务对象（runtime 兼容性边界，§5）。
@@ -30,13 +30,13 @@ runtime 平台除了 `runtime` 这 1 类对象，还有 5 类**内部组件**—
 | **trigger handler** | 接收 task（HTTP endpoint / MQ topic / RPC handler / 平台调度）|
 | **executor** | 按 beeline 编排跑 task run（顺序 / 并发 / 分支 / 汇聚）|
 | **worker pool** | bee 类型的 worker 实例池（executor 调 worker 干活）|
-| **queen engine** | 执行 queen 智能体（合同约束检查 + 授权策略执行 + 自治规则运行）|
+| **queen engine** | 执行 beeBox definition 顶层 `queen` 配置（合同约束检查 + 授权策略执行 + 自治规则运行）|
 | **monitor / audit** | 运行时数据收集 + audit 字段记录与查询接口 |
 
 **关键点**：
 - 内部组件是**平台能力**，不需要 platform 管理员配置——runtime 平台自带
 - 内部组件的**配置参数**（worker pool 大小、trigger handler 监听端口等）放在 runtime 对象的 `config` 字段（具体形式由 runtime 平台决定）
-- 业务侧（beeBox / beeline / queen）只跟内部组件**交互**，不声明内部组件
+- 业务侧（beeBox / beeline）只跟内部组件**交互**，不声明内部组件
 
 ---
 
@@ -53,7 +53,7 @@ flowchart TB
     th["trigger handler\n接收 task"]
     ex["executor\n按 beeline 跑 task run"]
     wp["worker pool\nbee 实例池"]
-    qe["queen engine\n执行 queen 智能体"]
+    qe["queen engine\n执行 definition queen 配置"]
     mn["monitor / audit\n运行时数据"]
   end
 
@@ -133,7 +133,7 @@ runtime 平台给 beeOS 平台提供：
 | **instance 启动 / 状态 / 停止** | 在 runtime 内启动 instance；查询 / 停止 instance |
 | **task run 触发 / 状态** | instance 接收 task 触发；查询 task run 状态（实时 + 历史）|
 | **audit 查询** | 查询 task run audit 字段（[beebox-design.md §2.4](./beebox-design.md#24-审计字段)）|
-| **queen 引擎入口** | queen 决策通过 runtime 平台的智能体引擎执行 |
+| **queen 引擎入口** | runtime 平台加载 release 时同步加载 definition 顶层 `queen` 配置，由 queen engine 执行 |
 
 **关键点**：
 - runtime 平台接口是 beeOS 平台跟 runtime 平台交互的边界

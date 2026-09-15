@@ -110,6 +110,50 @@ definition 只对**独立维护的对象**做引用——beeline / schema / bee 
 - beeline 引用：`id` + `version` 必须真实存在
 - schema 引用：`schema_id` 必须真实存在
 
+### 业务 schema 形状
+
+schema 是 1 类业务化字段定义对象（按 id 定位，**无 version**）——`task_schema` / `result_schema` 字段都引用 schema_id。
+
+```yaml
+schema:                  # 业务 schema 形状
+  id: string              # schema 唯一标识
+  description: string     # 人类可读说明
+  fields:                 # 1...N 个字段
+    - name: string
+      type: string        # type 取值见下
+      required: boolean   # 默认 true
+      description: string # 可选
+```
+
+**type 取值**（4 类）：
+
+| 类型 | 写法 | 备注 |
+|---|---|---|
+| **基础类型** | `string` / `number` / `boolean` / `integer` | 直接用类型名 |
+| **对象类型** | `object` | 复杂结构用 `properties` 嵌套描述 |
+| **数组类型** | `array` | `items` 描述元素 |
+| **schema 引用** | `ref:<schema_id>` | 避免重复定义 |
+
+**示例**（订单请求）：
+
+```yaml
+- id: schema_order_request
+  description: 订单请求
+  fields:
+    - name: order_id
+      type: string
+      required: true
+    - name: amount
+      type: number
+      required: true
+    - name: items
+      type: array
+      items:
+        type: ref:schema_order_item
+    - name: shipping_address
+      type: ref:schema_address
+```
+
 ---
 
 ## 4. 字段约束

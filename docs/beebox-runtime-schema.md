@@ -4,7 +4,7 @@
 > **日期**：2026-09-15
 > **对应**：[beebox-runtime-design.md](./beebox-runtime-design.md) · [beebox-design.md §1.6 运行关系](./beebox-design.md#16-运行关系) · §3.3 instance
 
-BeeBox runtime 的结构化 schema 定义。**runtime 的职责 = 把 release 部署成 instance 并持续运行**——这是用户视角的单一职责，environment / deployment / 健康检查 / 升级 / 兼容性判定都是 runtime 的内部能力，不暴露为独立对象。
+BeeBox runtime 的结构化 schema 定义。**runtime 的职责 = 把 release 部署成 instance 并持续运行**——这是用户视角的单一职责，environment / deployment / 升级 / 兼容性校验都是 runtime 的内部能力，不暴露为独立对象。
 
 ---
 
@@ -82,18 +82,25 @@ runtime:
 
 ## 5. 升级 / 兼容性
 
-runtime 升级 = 创建新 runtime（修改任何不可变字段 = 创建新 runtime）：
+**核心不变量**：
+- **runtime 不可变**——运行中的 runtime 不能升级（runtime_version / config / region / cloud_provider 等不可变字段任何变化 = 创建新 runtime）
+- **instance 跟 runtime 1:1 绑定**——instance 启动后绑定 runtime 不能换，要换只能重新部署
 
-| 操作 | 做法 |
+runtime 升级 = 创建新 runtime + 在新 runtime 上重新部署 instance + 切流：
+
+| 步骤 | 动作 |
 |---|---|
-| **runtime 版本升级** | 创建新 runtime（带新 `runtime_version`）|
-| **runtime 配置变更** | 创建新 runtime（不允许原地修改老 runtime）|
-| **runtime 环境变更** | 创建新 runtime（不允许原地修改老 runtime）|
+| 1 | 创建新 runtime（runtime_version / config 变更）|
+| 2 | 在新 runtime 上启动新 instance（绑同一 release）|
+| 3 | instance 启动时校验 release 跟 runtime 兼容性——不兼容则启动失败 |
+| 4 | 切流：新接收的触发走新 instance，老 instance 继续消化 in-flight |
+| 5 | 老 instance 跑完 in-flight 后下线 |
+| 6 | 老 runtime 删除 |
 
 **关键点**：
 - 老 runtime 永不变——instance 在老 runtime 上跑 release 直到 in-flight 全部完成
-- 兼容性边界由 runtime 平台内部给出（runtime 决定哪个 release 兼容哪个 runtime_version）
-- 兼容 → 老 instance 可迁移到新 runtime；不兼容 → 老 instance 在老 runtime 上跑完后下线
+- 兼容性由 runtime 平台内部给出（runtime 决定哪个 release 兼容哪个 runtime_version）
+- **没有"instance 迁移"**——instance 不能从老 runtime 搬到新 runtime，要换只能重新部署
 
 详见 [beebox-runtime-design.md §5 升级 / 兼容性](./beebox-runtime-design.md#5-升级--兼容性)。
 

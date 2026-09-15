@@ -98,22 +98,28 @@ runtime 生命周期 4 个状态：
 
 ## 5. 升级 / 兼容性
 
-runtime 升级 = 创建新 runtime（修改任何不可变字段 = 创建新 runtime）：
+**核心不变量**：
+- **runtime 不可变**——运行中的 runtime 不能升级（runtime_version / config / region / cloud_provider 等不可变字段任何变化都 = 创建新 runtime）
+- **instance 跟 runtime 1:1 绑定**——instance 启动后绑定 runtime 不能换，要换只能重新部署
 
-- 新 runtime 启动后，老 instance 可选择性迁移
-- 老 runtime 上的 instance 全跑完后，老 runtime 可下线
+**升级流程**：
+
+1. **创建新 runtime**——runtime_version / config 变更（保留原 id 还是新建，看平台设计）
+2. **在新 runtime 上启动新 instance**——绑同一 release；instance 启动时校验 release 跟 runtime 兼容性
+3. **切流**——新接收的触发走新 instance，老 instance 继续消化 in-flight task run
+4. **老 instance 跑完 in-flight 后下线**——自然排空
+5. **老 runtime 删除**
+
+**兼容性**：
+
+- 兼容性判定由 runtime 平台内部给出（runtime_version / config 变更时判断老 release 能不能跑）
+- 校验时机是 **instance 启动时**——新 runtime 上启动新 instance，校验 release 跟 runtime 兼容性
+- 校验失败 → instance 启动失败（不是 runtime 升级失败；可以重新部署老 release 到新 runtime 看是否兼容）
+- 没有"instance 迁移"——instance 不能从老 runtime 搬到新 runtime，要换只能重新部署
 
 **关键点**：
 - runtime 平台升级**不修改老 runtime**——老 instance 行为可追溯
-- 兼容性判定由 runtime 平台内部给出（runtime_version 变更时判断）
-- 兼容边界：
-
-| 兼容性 | 处理 |
-|---|---|
-| **兼容** | 新 runtime 可跑老 release → 老 instance 可迁移到新 runtime（流量随之迁移，instance 继续跑 release）|
-| **不兼容** | 新 runtime 不能跑老 release → 老 instance 继续在老 runtime 上跑完所有 in-flight task run 后下线 |
-
-**升级不能"原地升级"**——每次 runtime_version / config 变化都是创建新 runtime（保持老 runtime 不可变，老 instance 行为可追溯）。
+- 升级不能"原地升级"——保持老 runtime 不可变
 
 ---
 
@@ -143,11 +149,11 @@ runtime 平台给 beeOS 平台提供：
 | **职责** | 业务对象 + 面板 | 把 release 部署成 instance 并持续运行 |
 | **演进** | 业务对象演进（definition / release / beeline 等）| 平台版本演进（runtime_version 升级）|
 | **使用方** | owner / 运维（通过 workshop / kanban）| beeOS 平台自身 |
-| **演进影响** | 业务侧改进（产品演进）| 底层兼容性（业务对象迁移）|
+| **演进影响** | 业务侧改进（产品演进）| 底层兼容性（release 可不可在新 runtime 上跑）|
 
 **关键点**：
-- runtime 平台**独立于** beeOS 平台演进（runtime 可以升级 / 降级，beeOS 业务对象可选择迁移）
-- 同一份 release 可以跑在不同 runtime_version 的 runtime 上（兼容性边界由 runtime 平台给出）
+- runtime 平台**独立于** beeOS 平台演进（runtime 可以升级 / 降级，beeOS 业务对象在新 runtime 上重新部署）
+- 同一份 release 可以跑在不同 runtime_version 的 runtime 上（兼容性由 runtime 平台在 instance 启动时判定）
 - beeOS 平台通过 runtime 平台的 API 交互（runtime 注册 / instance 启动 / task run 触发 / audit 查询）
 
 ---

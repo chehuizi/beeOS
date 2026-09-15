@@ -125,7 +125,7 @@ flowchart LR
 
 ### 1.6 运行关系
 
-instance 必须跑在一个执行环境之上——这就是 **beeBox runtime**。**runtime 是 1 类对象**，唯一职责是"把 release 部署成 instance 并持续运行"——environment / deployment / 健康检查 / 升级 / 兼容性判定都是 runtime 的内部能力，不暴露为独立对象。
+instance 必须跑在一个执行环境之上——这就是 **beeBox runtime**。**runtime 是 1 类对象**，唯一职责是"把 release 部署成 instance 并持续运行"——environment / deployment / 升级 / 兼容性校验都是 runtime 的内部能力，不暴露为独立对象。
 
 ```mermaid
 flowchart TB
@@ -144,7 +144,7 @@ flowchart TB
 - **关系**：1 runtime → 1...N instance（同一 runtime 可跑不同 release 的 instance，也可以跑同一 release 的多副本）
 - **多 runtime 场景**：1 个 beeOS 平台可有 1...N 个 runtime，按用途 / 区域 / 租户划分（dev / staging / prod / 不同云厂商 / 不同区域）——每个 runtime 是独立的隔离边界
 - runtime **不属于 beeBox 产品本身**——它是 beeBox 跑在什么之上
-- **runtime 升级 = 创建新 runtime**（runtime 没有"升级"这一说，每次版本 / 配置变化都是新创建）；新 runtime 跟老 release 有兼容判定——不兼容时老 instance 继续在老 runtime 上跑完所有 in-flight task run 后下线，兼容时可迁移
+- **runtime 升级 = 创建新 runtime + 在新 runtime 上重新部署 instance + 切流**（runtime 不可变——运行中的 runtime 不能升级配置 / 版本；instance 启动后绑定 runtime 不能换，要换只能重新部署）
 
 ---
 
@@ -371,11 +371,14 @@ release → instance 的过程：
 #### 3.3.5 跟 runtime 的关系
 
 - instance 跑在 runtime 里（§1.6 运行关系）—— 1 runtime 跑 1...N instance
-- instance 启动时绑定到 1 个 runtime（绑定后不能换）
-- runtime 升级 = 创建新 runtime（不是"升级"老 runtime），老 runtime 上的老 instance 不受影响
-- 兼容性边界：
-  - **兼容**——新 runtime 可跑老 release 的 instance（迁移 instance 到新 runtime）
-  - **不兼容**——老 instance 继续在老 runtime 上跑完 in-flight 后下线
+- instance 启动时绑定到 1 个 runtime（绑定后不能换——要换 runtime 只能重新部署 instance）
+- **runtime 不可变**——运行中的 runtime 不能升级配置 / 版本；runtime_version / config 任何变化都 = 创建新 runtime
+- **runtime 升级 = 创建新 runtime + 在新 runtime 上重新部署 instance + 切流**（详见 [beebox-runtime-design.md §5](./beebox-runtime-design.md#5-升级--兼容性)）：
+  1. 创建新 runtime（runtime_version / config 变更）
+  2. 在新 runtime 上启动新 instance（绑定同一 release，启动时校验兼容性）
+  3. 切流：新接收的触发走新 instance，老 instance 继续消化 in-flight task run
+  4. 老 instance 跑完所有 in-flight 后下线
+  5. 老 runtime 删除
 
 runtime 的实现细节（状态机 / 内部组件 / 接口约定）见 [beebox-runtime-design.md](./beebox-runtime-design.md)。
 

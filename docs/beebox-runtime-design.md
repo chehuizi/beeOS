@@ -2,7 +2,7 @@
 
 > **状态**：v0.1 草稿 · 修订中
 > **日期**：2026-09-15
-> **对应**：[beebox-design.md §1.6 运行关系](./beebox-design.md#16-运行关系) · §3.3 instance · §3.5 履约实现 · [beebox-runtime-schema.md](./beebox-runtime-schema.md)
+> **对应**：[beebox-design.md §1.6 运行关系](./beebox-design.md#16-运行关系) · §3.3 instance · §3.4 履约实现 · [beebox-runtime-schema.md](./beebox-runtime-schema.md)
 
 runtime 平台的整体设计规格。**runtime 平台是 beeOS 平台的基础设施层**——提供 beeBox / beeline / schema / bee 等业务对象"跑起来"所需的运行时能力。
 
@@ -71,9 +71,8 @@ flowchart TB
 ```
 
 **图怎么读**：
-- 蓝色 = **runtime 平台对外对象**（runtime）—— 唯一被声明的资源
-- 黄色 = **runtime 平台内部组件**（trigger / executor / worker / queen engine / monitor）—— 平台自带，不声明
-- 绿色 = **触发源**——外部进 runtime 的入口
+- 触发源 subgraph = **外部进 runtime 的入口**（上游 beeBox / 外部系统 / 平台调度）
+- runtime 平台 subgraph = **runtime + 5 类内部组件**——`runtime` 是对外对象（唯一被声明的资源），其他 5 类（trigger handler / executor / worker pool / queen engine / monitor / audit）是平台自带内部组件
 
 ---
 
@@ -163,10 +162,10 @@ runtime 平台给 beeOS 平台提供：
 | runtime 章节 | 对应 |
 |---|---|
 | §1 runtime 是什么 | beebox-design.md §1.6 运行关系 · §3.3 instance |
-| §2 内部组件（trigger / executor / worker / queen engine / monitor / audit） | beebox-design.md §3.5 履约实现 |
+| §2 内部组件（trigger / executor / worker / queen engine / monitor / audit） | beebox-design.md §3.4 履约实现 |
 | §4 状态 | [beebox-runtime-schema.md §4 字段约束](./beebox-runtime-schema.md#4-字段约束) |
 | §5 升级 / 兼容性 | beebox-design.md §3.3.5 跟 runtime 的关系 |
-| §6 接口约定 | beebox-design.md §3.5 履约实现（task run 触发 / audit 查询） |
+| §6 接口约定 | beebox-design.md §3.4 履约实现（task run 触发 / audit 查询） |
 
 | runtime 对象 / 组件 | schema 文件 |
 |---|---|

@@ -2,7 +2,7 @@
 
 > **状态**：v0.1 草稿 · 修订中
 > **日期**：2026-09-13
-> **对应**：[beebox-design.md §1.1.4 beeline](./beebox-design.md#114-边界关系) · [beebox-definition-schema.md](./beebox-definition-schema.md)
+> **对应**：[beebox-design.md §1.4 边界关系](./beebox-design.md#14-边界关系) · [beebox-definition-schema.md](./beebox-definition-schema.md)
 
 beeline 的结构化 schema 定义。**beeline 是 1 类任务的标准作业路线，本质是 1 张有向图**——节点是 operation（由 1...N 个组成），`next` 字段是节点之间的有向边（支持顺序 / 并发 / 分支）；每个 operation 各自调用 bee / 外部系统完成具体动作。
 
@@ -116,8 +116,8 @@ operations:
 
 | beeline 字段 | design 章节 |
 |---|---|
-| `id` / `version` | §1.1.4 beeline 概念 |
-| `operations[].next` | §1.1.4 beeline "1...N 个 operation 组成的有序结构（支持顺序 / 并发 / 分支）" |
-| `operations[].bee` | §1.1.4 operation "input / output / type 已声明" |
+| `id` / `version` | §1.4 beeline 概念 |
+| `operations[].next` | §1.4 beeline "1...N 个 operation 组成的有向图（支持顺序 / 并发 / 分支）" |
+| `operations[].bee` | §1.4 operation "input / output / type 已声明" |
 | `operations[].external_system` | beeline 内部实现细节（无对应设计稿章节，beeline 自己管）|
 | `next` 编排 | 跟 §2.2 task run "按 beeline 路线执行对应的 operation 步骤" 对应 |

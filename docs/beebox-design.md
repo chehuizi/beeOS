@@ -203,7 +203,7 @@ task run 引用 release（product 不可变，固定引用）：
 
 具体说明 §1 提到的产品组件怎么落地实现。按 **产品侧 / 运行时 / 履约** 3 块组织：产品侧对应 beeBox 生命周期的 3 阶段（definition → release → instance），运行时对应 runtime 部署层，履约对应 task run 执行层。
 
-**queen**（beeBox 1:1 智能体，§1.4）是 **definition 顶层字段**——不再独立成对象。queen 是 beeBox 的自治运营智能体，在履约合同 + 授权策略约束下管理任务流动 / 运行异常 / 持续改善。queen 不属于 runtime 实现组件，由 runtime 平台的智能体引擎（queen engine，加载 release 里的 definition 时同步加载 queen 字段）执行。queen 字段结构见 [beebox-definition-schema.md §queen 字段](./beebox-definition-schema.md#queen-字段)。
+**queen**（beeBox 1:1 智能体，§1.4）是 **definition 顶层字段**——不再独立成对象。queen 是 beeBox 的自治运营智能体，在履约合同 + 授权策略约束下管理任务流动 / 运行异常 / 持续改善。queen 不属于 runtime 实现组件，由 runtime 平台的智能体引擎（queen engine，加载 release 里的 definition 时同步加载 queen 字段）执行。queen 字段结构见 [beebox-definition-schema.md](./beebox-definition-schema.md)。
 
 ### 3.1 BeeBox definition
 
@@ -494,12 +494,12 @@ beeOS 平台提供 **2 个面板产品入口**，分别面向不同角色、不�
 | **beeBox release** | 打包 / 发布 / 查看历史 / 校验和验证 |
 | **beeline** | 注册 / 编辑有向图（operations / next 链）/ 校验无环 |
 | **schema** | 注册 / 编辑字段定义（业务字段 / 嵌套引用）|
-| **bee（type）** | 注册 worker 类型 / 配置参数 |
+| **bee（type）** | 查看可用的 worker 类型（bee 注册归 runtime 平台）|
 
 **典型场景**：
 - owner 创建 1 个新 beeBox → 编辑 definition → 注册 / 引用 beeline / schema
 - owner 修改 definition → 打包新 release → 准备部署
-- 平台管理员注册新的 beeline / schema / bee（供 beeBox 引用）
+- 平台管理员注册新的 beeline / schema（供 beeBox 引用）；bee（worker 类型）在 runtime 平台注册
 
 **关键特点**：
 - 设计层操作，**不直接影响运行时**（改 definition 不影响已发布 release）
@@ -545,7 +545,7 @@ flowchart TB
 
   subgraph obj["beeBox 对象"]
     do["设计层对象\ndefinition / release\nbeeline / schema / bee"]
-    ro["运行时对象\ninstance / task run\noperation / metric"]
+    ro["运行时对象\nruntime / instance / task run\noperation / metric"]
   end
 
   ws -->|"创建 / 编辑"| do

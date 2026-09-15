@@ -131,7 +131,7 @@ runtime 除了自身对象，还有 5 类**内部组件**——runtime 平台运
 |---|---|
 | `runtime` 顶层（4 块） | [beebox-runtime-design.md §1 runtime 是什么](./beebox-runtime-design.md#1-runtime-是什么) |
 | `type` / `region` / `cloud_provider` | [beebox-design.md §1.6 运行关系](./beebox-design.md#16-运行关系) · 多 runtime 场景 |
-| `runtime_version` / `config` | [beebox-runtime-design.md §3 配置](./beebox-runtime-design.md#3-配置) |
+| `runtime_version` / `config` | [beebox-runtime-design.md §1 runtime 是什么](./beebox-runtime-design.md#1-runtime-是什么) |
 | `status` 状态机 | [beebox-runtime-design.md §4 状态](./beebox-runtime-design.md#4-状态) |
-| 内部组件（trigger / executor / worker / queen engine / monitor / audit） | [beebox-runtime-design.md §2 内部组件](./beebox-runtime-design.md#2-内部组件) · [beebox-design.md §3.5 履约实现](./beebox-design.md#35-履约实现) |
+| 内部组件（trigger / executor / worker / queen engine / monitor / audit） | [beebox-runtime-design.md §2 内部组件](./beebox-runtime-design.md#2-内部组件) · [beebox-design.md §3.4 履约实现](./beebox-design.md#34-履约实现) |
 | 升级 / 兼容性 | [beebox-runtime-design.md §5 升级 / 兼容性](./beebox-runtime-design.md#5-升级--兼容性) · [beebox-design.md §3.3.5 跟 runtime 的关系](./beebox-design.md#335-跟-runtime-的关系) |

@@ -260,6 +260,8 @@ task run（1 次履约事实的运行记录）
 - task run 按绑定的 beeline 编排跑 operation 步骤（beeline / operation 是机制层实现，不是核心关系）
 
 > **关键点**：task run 跟 beeline / operation 不是同一层级——beeline 是实现履约的"程序路径"，task run 是"履约事件本身"。核心关系是 beeBox defines Business Fulfillment occurs as Task Run，beeline 只是实现 Task Run 的机制。
+>
+> **业务验收 ≠ 执行完成**：Task Run 完成后还要经过 Acceptance 阶段（§3.4.6）——验收通过 = Business Fulfillment 成功；验收失败（result 不符合 contract）= Fulfillment 拒绝。两者不能混为一谈。
 
 ### 2.3 版本引用
 
@@ -636,6 +638,74 @@ task run 在 instance 内的完整执行流程。
 - audit 字段在 task run 创建瞬间定型（不可变）
 - 步骤级日志 + 异常信息可后续追加（不影响 audit 字段）
 - audit 用于复盘 / 举证 / 改进（§1.3 持续改善）
+
+#### 3.4.6 Acceptance 阶段（业务验收 ≠ 执行完成）
+
+**关键区分**：
+
+> **Task Run 完成 ≠ Business Fulfillment 成功**
+>
+> 例子：Beeline 完整跑完，所有 operation 都成功，但 result 数据不符合业务验收标准
+> → TaskRun 状态 = COMPLETED，Fulfillment 状态 = REJECTED
+
+**任务 run 完成后进入 Acceptance 阶段**——独立的履约层阶段，不再属于执行层（§3.4.3 / §3.4.4）。
+
+**Acceptance 状态机**（新增 4 个状态）：
+
+| 状态 | 含义 |
+|---|---|
+| **AWAITING_ACCEPTANCE** | task run 完成后进入，等待业务验收判定 |
+| **ACCEPTED** | 验收通过——Business Fulfillment 成功（produce 业务结果）|
+| **REJECTED** | 验收不通过——Business Fulfillment 失败（contract 被违反）|
+| **COMPENSATING_ACCEPTANCE** | 验收触发补偿——执行反向操作后回到 AWAITING_ACCEPTANCE |
+
+**Acceptance 流程**：
+
+1. **触发**——task run 进入 COMPLETED 状态后自动转入 AWAITING_ACCEPTANCE
+2. **执行 acceptance 规则**——按 definition.result.acceptance 列表逐条判定 result 数据
+3. **判定结果**：
+   - **全部通过** → ACCEPTED（业务履约成功）
+   - **任一失败** → 按 contract.exceptions 决定：no_deliver / rollback / escalate
+   - **rollback** → COMPENSATING_ACCEPTANCE（执行反向 op）→ AWAITING_ACCEPTANCE
+   - **escalate** → 触发 queen 接管（人工 / 自动决策）
+4. **记录**——§2.4 task_run.acceptance 字段记录判定结果
+
+**关键点**：
+
+- 业务验收是**独立阶段**，不是 task run 状态机的延续
+- 验收失败 ≠ 执行失败——Beeline 可能完美执行，但 result 不符合业务期望
+- 验收触发补偿 ≠ 异常补偿——补偿的目标不同（异常补偿撤销已完成的错误；验收补偿撤销不符合业务的执行）
+
+#### 3.4.7 Queen 自治边界（bounded autonomy）
+
+**Queen 是 bounded autonomy**——在 contract + authorization policy 约束下管理履约变量，但不是"拥有生产环境权限的 Agent"。
+
+**Queen 可以改变什么**（履约变量 / runtime 调度）：
+
+| Queen 操作 | 含义 |
+|---|---|
+| **调整并发量** | 改变 instance 并发 task run 的数量 |
+| **选择 procedure** | 同一 task 类型的多个 beeline 之间选择（可选 procedure）|
+| **retry 决策** | 决定 op 重试次数 / 间隔 / 放弃阈值 |
+| **route 决策** | 决定 task run 走哪个 instance / runtime |
+| **escalate** | 验收失败时把决策权交给人工 |
+| **pause** | 临时暂停 beeBox 接收新 task（按合同条件触发）|
+
+**Queen 不能改变什么**（合同 / 政策 / 验收 / release）：
+
+| 不可变项 | 原因 |
+|---|---|
+| **修改 contract** | contract 是 beeBox 责任边界，queen 是边界内的决策者，不能改边界本身 |
+| **修改 acceptance** | 验收标准是 contract 的一部分，queen 不能放宽 / 收紧验收 |
+| **修改 release** | release 是不可变 artifact，queen 不能 hot-patch 跑 release 的 instance |
+| **修改 policy** | policy 是 beeBox 自己的 queen 授权策略，queen 不能自授权 |
+
+**关键区分**：
+
+> Queen = "在履约合同内做运维决策的智能体"，不是"无限制的运维 Agent"。
+> Queen 的权力来自 beeBox owner 的定义 + 授权，queen 永远不会越权（不能改 contract / acceptance / release / policy）。
+
+**审计**：Queen 每次决策都记录到 task run.policy_decision 字段（§2.4 12 字段之一），决策可追溯、可复盘。
 
 ---
 

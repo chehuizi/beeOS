@@ -95,6 +95,11 @@ beeBox_definition:
       task_routing: object        # 任务流动规则（路由策略 / WIP 限制 / backpressure）
       exception_handling: object  # 运行异常规则（检测条件 / 处理动作）
       continuous_improvement: object  # 持续改善规则（监控指标 / 改进触发 / 改进动作）
+
+  # Queen 自治边界（不可配置、queen 默认遵守）：
+  # 可以：调整并发量 / 选择 procedure / retry 决策 / route 决策 / escalate / pause
+  # 不能：修改 contract / 修改 acceptance / 修改 release / 修改 policy
+  # 详见 design.md §3.4.7
 ```
 
 ### schema type 取值（4 类）

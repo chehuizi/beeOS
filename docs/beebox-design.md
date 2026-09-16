@@ -271,17 +271,41 @@ task run 引用 release（product 不可变，固定引用）：
 - **回滚语义** = 部署上一个 release 到新 instance + 切流回老版本；in-flight task run 不受影响
 - **beeline 升级** = 升级 beeline_version + 产生新 release（beeline 升级必然带动 release 升级）
 
-### 2.4 审计字段
+### 2.4 task run 履约记录
 
-每个 task run 必须带 5 个审计字段：
+Task Run 不是"workflow execution"——而是 **1 次 Business Fulfillment 的 execution record**（履约事实的运行记录）。它要能回答关于这次履约的所有业务问题。
+
+**Task Run 字段（12 个问题）**：
+
+| 问题 | 字段 |
+|---|---|
+| **Who requested this fulfillment?** | `originator`（触发源：上游 beeBox id / 外部系统 / 平台调度）|
+| **What business intent was being fulfilled?** | `intent`（task type + task 输入 payload，引用 definition.task_schema）|
+| **Under which contract?** | `contract_ref`（definition_id + version + result_schema_id）|
+| **Under which policy?** | `policy_decision`（queen 决策：authorization active + rules 应用 trace）|
+| **Which release performed it?** | `beeBox_release_id`（任务创建时的 release 标识）|
+| **Which procedure was selected?** | `beeLine_id` + `beeLine_version`（任务走的是哪条 beeline + version）|
+| **What result was produced?** | `result`（业务结果数据，引用 result_schema）|
+| **Was the result accepted?** | `acceptance`（验收判定：pass / fail + 触发的 acceptance 规则）|
+| **What evidence proves it?** | `evidence`（执行日志：operation step 列表 + 输入输出 + 状态变更）|
+| **What did it cost?** | `cost`（成本度量：资源消耗 / 单位成本）|
+| **How long did it take?** | `latency`（时长度量：等待时长 / 执行时长 / 总时长）|
+| **What exceptions occurred?** | `exceptions`（例外条款触发记录：condition + action + 时间）|
+
+**辅助字段**：
 
 | 字段 | 含义 |
 |---|---|
-| `task_run.beeBox_release_id` | 任务创建时的 release 标识 |
-| `task_run.beeBox_instance_id` | 任务创建时的 instance 标识（执行位置）|
-| `task_run.beeLine_id` | 任务走的是哪条 beeline（beeLine 的标识）|
-| `task_run.beeLine_version` | 任务走的那条 beeline 的版本号（显式记录）|
-| `task_run.runtime_id` | 任务创建时的 runtime 标识（运行层位置）|
+| `task_run_id` | task run 唯一标识（持久化 object id）|
+| `beeBox_instance_id` | 任务创建时的 instance 标识（执行位置）|
+| `runtime_id` | 任务创建时的 runtime 标识（运行层位置）|
+| `created_at` / `started_at` / `finished_at` | 时间戳 |
+
+**关键点**：
+
+- Task Run 是**持久化对象（durable object）**——不依赖 instance 内存，instance 重启后 task run 状态可恢复
+- Task run 创建瞬间**固化 12 个字段的核心部分**（originator / intent / contract_ref / beeBox_release_id / beeLine_id+version / runtime_id），后续字段随执行实时更新
+- 12 个问题覆盖了 1 次完整履约事实的业务层 + 执行层信息——可以独立审计任何 1 次 task run
 
 ---
 
@@ -491,21 +515,34 @@ runtime 的实现细节（状态机 / 内部组件 / 接口约定）见 [beebox-
 
 task run 在 instance 内的完整执行流程。
 
-#### 3.4.1 task run 触发
+#### 3.4.1 task run 触发 + durable object
 
-**触发来源**：
-- 上游 beeBox（其他 instance 发来的 task，通过 instance 间协议）
-- 外部系统（HTTP / 消息队列 / 定时器等）
-- 平台调度（运维手动触发 / 自动扩缩容触发的预热 task）
+**Task Run 是 durable object**——持久化对象，不依赖 instance 内存：
+
+| 持久化字段 | 含义 |
+|---|---|
+| `task_run_id` | task run 唯一标识（持久化 object id）|
+| `identity` | originator / intent / contract_ref / release_id / beeline_id+version / runtime_id（创建瞬间固化）|
+| `status` | 履约状态（见下方状态机）|
+| `current_op` | 当前执行的 operation（推进）|
+| `inputs` / `outputs` | 各 operation 的输入输出（按 op_id 索引）|
+| `checkpoints` | operation 完成时的 checkpoint（支持 resume）|
+| `event_log` | 事件流（trigger / op_start / op_finish / exception / accept 等）|
+
+**为什么是 durable object**：
+- instance 重启 → task run 状态不丢，可以 resume
+- runtime 切换 → task run 持续（在新 runtime 找到对应 instance 即可）
+- audit / 排错 → 任何 task run 的 12 个问题都能查
 
 **触发流程**：
 
-1. **instance 接收 trigger**——trigger 包含 task 数据（按 task_schema 形状）
-2. **task run 创建**——instance 立即创建 1 个 task run（带 §2.4 全部 audit 字段），task run 不可变记录开始时间 / 入口数据
-3. **进入执行**——task run 派发到 instance 的执行器（执行 beeline 编排）
+1. **instance 接收 trigger**——trigger 包含 task 数据（按 task_schema 形状）+ originator（请求方）
+2. **task run 创建（持久化）**——立即在 runtime 的持久层创建 1 个 durable task run object，固化 identity（originator / intent / contract_ref / release_id / beeline_id+version / runtime_id / instance_id）
+3. **进入执行**——task run 派发到 instance 的执行器，开始按 beeline 编排执行；event_log 写入 `task_triggered`
 
 **关键点**：
 - 触发瞬间 task run 就绑定到 release（不可变，§2.3）—— instance 后续切流不影响这个 task run
+- instance 重启 / 升级不影响 task run 状态（durable object 持久化保证）
 - in-flight task run 受 instance 状态保护（instance 下线前要排空，§3.3.3）
 
 #### 3.4.2 beeline 加载
@@ -537,23 +574,49 @@ task run 在 instance 内的完整执行流程。
 - task run 跨 op 的状态（input / output 中间数据）保存在 instance 内存或临时存储
 - 每个 op 执行结果记录到 task run 审计字段（步骤级日志）
 
-#### 3.4.4 异常处理
+#### 3.4.4 异常处理 + task run 状态机
 
 按 §1.3 持续流动原则暴露——不静默吞错，让异常显式可观测。
 
-**异常分类**：
+**Task Run 状态机**（履约层状态，不只是 execution 状态）：
 
-| 异常 | 处理 |
+| 状态 | 含义 |
 |---|---|
-| **op 执行失败**（bee 抛错 / 外部系统超时）| 当前 op 标记为失败，按 beeline 编排决定下一步（无 next = task run 失败；分支条件可走错误处理 op）|
-| **beeline 完整性错误**（环 / 引用不存在）| 加载时校验失败 → task run 不创建（启动期错误，不进入执行）|
-| **task 数据不符合 schema**（task_schema 校验失败）| 触发时校验失败 → trigger 拒绝（不创建 task run）|
+| **triggered** | task run 创建，等待进入执行 |
+| **running** | 正在按 beeline 执行 operation |
+| **RETRYING** | op 失败后重试中（带重试次数上限 + 重试策略）|
+| **PARTIALLY_COMPLETED** | 部分 operation 完成（如分支一边失败，一边成功）|
+| **WAITING_EXTERNAL** | 等待外部系统响应（外部 API 调用 / 异步回调）|
+| **COMPENSATING** | 触发补偿动作（执行反向 op 撤销已完成操作）|
+| **REJECTED** | 显式拒绝（合同例外条款触发，决定不交付）|
+| **COMPLETED** | 正常完成（验收通过）|
+| **FAILED** | 失败（验收不通过 / 重试耗尽 / 拒绝后无补偿）|
+
+**异常处理动作**：
+
+| 异常类型 | 状态转换 | 处理动作 |
+|---|---|---|
+| **op 临时失败**（网络抖动 / 外部超时）| → RETRYING | runtime 重试 op（按 op idempotency 策略：required / optional / forbidden）|
+| **op 永久失败**（业务规则不满足）| → FAILED | 当前 op 标记失败，按 beeline 编排决定下一步（无 next = task run 失败；分支条件可走错误处理 op）|
+| **外部异步等待**（需要外部回调）| → WAITING_EXTERNAL | task run 持久化等待，runtime 注册回调；回调到达后恢复执行 |
+| **需要补偿**（已完成部分要撤销）| → COMPENSATING | 执行反向 op（每个 op 可声明 compensate_bee）|
+| **合同例外触发**（验收规则 fail 且 actions=rollback/no_deliver）| → REJECTED / COMPENSATING | 按 contract.exceptions.actions 执行（no_deliver / rollback / escalate）|
+| **beeline 完整性错误**（环 / 引用不存在）| 启动期错误 | task run 不创建（不进入执行）|
+| **task 数据不符合 schema** | 触发期错误 | trigger 拒绝（不创建 task run）|
+
+**重试 vs 补偿策略**：
+
+- **retry**——op idempotency.mode = required / optional：runtime 可重试
+- **compensate**——op 失败但合同要求 rollback：执行反向 op（state reversal）
+- **resume**——WAITING_EXTERNAL 后回调到达：从 checkpoint 继续
+- **reject**——合同例外触发 no_deliver：标记 REJECTED，不交付
+- **dead-letter**——重试耗尽 / 补偿失败：标记 FAILED，queen 接管（人工 / 自动改善）
 
 **暴露方式**：
-- task run 记录每步异常（步骤级 error 信息）
-- §2.4 audit 字段含异常信息
-- 业务侧可通过 task run 查询接口查异常
-- 持续改善靠异常数据驱动（§1.3 持续流动）
+- task run 持久化 event_log（含 status 转换 + 异常原因）
+- §2.4 12 字段记录完整履约事实
+- kanban（§4.2）展示实时异常
+- 持续改善靠异常数据驱动（§1.3 持续流动 / queen.rules.continuous_improvement）
 
 #### 3.4.5 审计
 

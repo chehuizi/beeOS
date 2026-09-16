@@ -206,23 +206,33 @@ flowchart TB
 
 #### Business Fulfillment 的语义结构
 
-**1 次 Business Fulfillment** = **业务意图** + **履约合同** + **履约政策** + **履约程序**——这 4 个维度共同定义了一次完整的业务履约：
+**1 次 Business Fulfillment** 由 6 个**语义层级**组成——每个层级回答 1 个清晰的问题：
 
 ```
-Business Fulfillment
-  ├── Intent（业务意图）—— 这次履约要做什么
-  ├── Contract（履约合同）—— 交付什么 + 验收标准 + 例外条款（§2.1 单次履约）
-  ├── Policy（履约政策）—— queen 授权策略（任务流动 / 异常处理 / 持续改善）
-  └── Procedure（履约程序）—— 业务履约的程序路径
-       └── 1 条 BeeLine（procedure 的具体实现，机制层）
-            └── 1...N 个 Operation（执行步骤）
+Contract       → What must be fulfilled（什么必须被履约）
+Policy         → Under what constraints（在什么约束下履约）
+BeeLine        → How it may be fulfilled（如何被履约）
+TaskRun        → One actual fulfillment（一次实际的履约）
+Result         → What was actually produced（实际产出了什么）
+Acceptance     → Whether the contract was satisfied（合同是否被满足）
 ```
 
 **关键区分**：
 
-- **Business Fulfillment ≠ BeeLine**——BeeLine 只是 fulfillment 的 Procedure 实现，fulfillment 还包含 Intent / Contract / Policy 3 个维度
-- **TaskRun ≠ BeeLine Execution**——TaskRun 是"1 次 Business Fulfillment 实际发生的运行记录"，按 BeeLine（procedure）跑 operation 步骤
-- **BeeLine 是机制层**——beeBox 改了 procedure 不影响 beeBox 的业务责任边界（Intent / Contract / Policy 不变）
+> **BeeLine describes how a fulfillment may be performed. It does not define what fulfillment is.**
+>
+> BeeLine 描述的是"履约如何被执行"，不定义"什么是履约"。这是 BeeLine 跟其他概念的本质区别——其他 5 个概念都是"履约"本身的维度（合同 / 政策 / 履约事件 / 实际产出 / 是否被满足），只有 BeeLine 是"履约的实现方式"。
+
+**映射到设计稿**：
+
+| 语义层级 | 设计对象 | 来源 |
+|---|---|---|
+| Contract | `result.acceptance` / `result.exceptions`（验收标准 + 例外条款）| definition.result |
+| Policy | `queen.authorization` / `queen.rules`（queen 授权 + 自治规则）| definition.queen |
+| BeeLine | `task[].beeline_id` + `beeline_version`（履约程序的具体编排）| definition.task + 独立 beeline 仓库 |
+| TaskRun | task run 实例（runtime 内执行）| runtime |
+| Result | task run 输出的 result 数据（业务结果）| runtime / audit |
+| Acceptance | task run 的验收判断（result 数据是否符合 acceptance 字段）| runtime |
 
 ### 2.2 task run 履约
 

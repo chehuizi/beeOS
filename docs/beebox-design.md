@@ -594,7 +594,7 @@ flowchart TB
   end
 
   subgraph obj["beeBox 对象"]
-    do["设计层对象\ndefinition / release\nbeeline / schema / bee"]
+    do["设计层对象\ndefinition [含 schemas / queen]\nrelease / beeline / bee [type]"]
     ro["运行时对象\nruntime / instance / task run\noperation / metric"]
   end
 

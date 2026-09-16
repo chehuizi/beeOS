@@ -206,12 +206,30 @@ flowchart TB
 
 ### 2.2 task run 履约
 
-beeBox 跑起来后持续接收触发，每次触发产生 1 个 **task run**——产品完成一次履约，交付 1 个具体业务结果。
+**核心关系**（业务事实）：
+
+```
+beeBox
+  │ defines（定义 1 类业务履约）
+  ▼
+Business Fulfillment（1 次业务履约）
+  │ occurs as（实际发生）
+  ▼
+task run（1 次履约事实的运行记录）
+```
+
+- **beeBox = 责任边界**——1 个 beeBox 定义 1 类业务履约的责任
+- **Business Fulfillment = 业务事实**——1 次具体的业务履约（合同 + 政策约束下完成业务意图）
+- **task run = 履约事实的运行记录**——1 次 Business Fulfillment 实际发生的执行实例 + 审计痕迹
+
+**机制实现**（task run 怎么跑起来）：
 
 - task run **不在产品生命周期里**（不是产品演化的某个阶段）
 - task run **不在运行关系里**（不是 instance 跟 runtime 的关系）
-- task run 是 **产品完成一次履约**——instance 内的一次具体执行单位
-- 走完 1 个 task run = 走完 1 条 beeline = 按 beeline 路线执行对应的 operation 步骤
+- task run 是 **instance 内的一次具体执行单位**——beeBox 跑起来后每次接收触发产生 1 个 task run
+- task run 按绑定的 beeline 编排跑 operation 步骤（beeline / operation 是机制层实现，不是核心关系）
+
+> **关键点**：task run 跟 beeline / operation 不是同一层级——beeline 是实现履约的"程序路径"，task run 是"履约事件本身"。核心关系是 beeBox defines Business Fulfillment occurs as Task Run，beeline 只是实现 Task Run 的机制。
 
 ### 2.3 版本引用
 

@@ -30,6 +30,11 @@ beeline:
         - op_id: string
           when: string      # 条件表达式（可选，无 = 无条件顺序）
 
+      # 幂等性（可选，默认 optional）
+      idempotency:          # 同一 task run 重复执行该 op 是否安全
+        mode: enum          # required / optional / forbidden
+        key: string         # 幂等键路径（如 "order.id"，从 input 里取；重复 key 直接复用结果）
+
       # operation 内部资源（可选）
       bee:                  # operation 用的 bee
         type: string
@@ -108,6 +113,11 @@ operations:
 - **无环**：operation 之间的 `next` 链不能形成环（必须是有向无环图）
 - **input_from 合法**：`external` 或 op_id（必须在 operations 列表里）
 - **每 op 至少 1 资源**：`bee` / `external_system` 至少填 1 个（否则 operation 没东西可调）
+- **idempotency 合法**：`mode` 只能是 `required` / `optional` / `forbidden` 之一；`mode=required` 时必填 `key`（key 路径必须能从 input 中取到）
+- **幂等性语义**：
+  - `required` —— 重复执行同 task run 必须产生同结果（runtime 用 key 去重，重复执行直接复用结果）
+  - `optional` —— 不强制幂等，runtime 允许重试（默认）
+  - `forbidden` —— 明确禁止重试（如通知类 op 重复执行会重复发邮件）
 - **beeline 引用一致性**：beeline_id 唯一（不重复注册）
 
 ---
@@ -116,8 +126,9 @@ operations:
 
 | beeline 字段 | design 章节 |
 |---|---|
-| `id` / `version` | §1.4 beeline 概念 |
+| `id` / `version` | §1.4 beeline 概念（procedure） |
 | `operations[].next` | §1.4 beeline "1...N 个 operation 组成的有向图（支持顺序 / 并发 / 分支）" |
 | `operations[].bee` | §1.4 operation "input / output / type 已声明" |
 | `operations[].external_system` | beeline 内部实现细节（无对应设计稿章节，beeline 自己管）|
+| `operations[].idempotency` | operation 幂等性（required/optional/forbidden）—— 用于 retry / 重入安全 |
 | `next` 编排 | 跟 §2.2 task run "按 beeline 路线执行对应的 operation 步骤" 对应 |

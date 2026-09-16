@@ -2,7 +2,7 @@
 
 > **状态**：v0.1 草稿 · 修订中
 > **日期**：2026-09-13
-> **对应**：[beebox-design.md §3.1 BeeBox definition](./beebox-design.md#31-beebox-definition)
+> **对应**：[beebox-design.md §3.1 BeeBox definition](./beebox-design.md#31-beeBox-definition)
 
 beeBox definition 的结构化 schema 定义。**这是接口规格，不是设计稿**——讲"字段长什么样、怎么校验、怎么引用"，不讲"为什么这样设计"。设计原理见 `beebox-design.md` §3.1。
 
@@ -10,18 +10,21 @@ beeBox definition 的结构化 schema 定义。**这是接口规格，不是设�
 
 ## 1. 顶层结构
 
-definition 顶层包含**基础元信息 + 履约生命周期 4 块 + queen 配置**：
+definition 顶层包含**基础元信息 + 数据形状 + 履约生命周期 4 块 + queen 配置**：
 
 | 块 | 含义 | 字段 |
 |---|---|---|
 | **基础元信息** | beeBox 基础标识 | `id` / `version` / `description` |
+| **数据形状** | definition 自带的 schema 列表（task / result / operation input/output 都引用这里）| `schemas` |
 | **履约对象** | beeBox 接收什么 task | `task` |
 | **履约过程** | 怎么履约（beeline 引用）| `process` |
 | **履约结果** | beeBox 交付什么业务结果 | `result` |
 | **履约度量** | 质量 / 时效 / 成本 度量方式 + 目标值 | `metrics` |
-| **queen** | beeBox 的自治运营配置（authorization / rules）| `queen` |
+| **queen** | beeBox 的自治运营配置 | `queen` |
 
-beeline 本身就用引用机制——beeline 是独立维护的对象，definition 通过 `beeline_id` + `version` 引用。queen 不再是独立对象，是 definition 自身内容（跟着 definition 走、跟着 release 打包）。
+**queen / schemas 都是 definition 自身内容**——不引用外部对象，跟着 definition 走、跟着 release 打包。
+
+beeline 是独立维护的对象（id + version），definition 通过 `beeline_id` + `beeline_version` 引用。
 
 ---
 
@@ -34,10 +37,20 @@ beeBox_definition:
   version: integer           # definition 版本（递增序列号）
   description: string       # 人类可读说明
 
+  # ---- 数据形状：definition 自带的 schema 列表 ----
+  schemas:                  # 0...N 个 schema（按 id 定位，无 version）
+    - id: string             # schema 唯一标识（在 definition 内唯一）
+      description: string    # 人类可读说明
+      fields:                # 1...N 个字段
+        - name: string
+          type: string        # type 取值见下
+          required: boolean   # 默认 true
+          description: string # 可选
+
   # ---- 履约对象：beeBox 接收什么 task ----
   task:                      # 1...N 类 task
     - type: string           # task 类型标识
-      task_schema: string    # task 的数据结构
+      task_schema: string    # 引用 schemas 块内的 schema id
       beeline_id: string     # 1:1 绑定的 beeline
       beeline_version: integer  # 绑定的 beeline 的具体 version
       trigger: string        # 触发条件描述
@@ -53,7 +66,7 @@ beeBox_definition:
   # ---- 履约结果：交付什么业务结果 ----
   result:
     type: string             # 业务结果类型标识
-    result_schema: string    # result 的数据结构
+    result_schema: string    # 引用 schemas 块内的 schema id
     acceptance:              # 验收标准（单次判据）
       - metric: string
         op: enum             # gte / lte / eq / in / match
@@ -78,7 +91,6 @@ beeBox_definition:
     cost:                    # 履约成本
       - name: string
         definition: string
-        target: number
       ...
 
   # ---- queen 配置：beeBox 的自治运营智能体 ----
@@ -93,48 +105,16 @@ beeBox_definition:
       continuous_improvement: object  # 持续改善规则（监控指标 / 改进触发 / 改进动作）
 ```
 
----
-
-## 3. 引用机制
-
-definition 只对**独立维护的对象**做引用——beeline / schema / bee 等。引用按被引用对象自身的字段形式——被引用对象是什么字段，引用就用什么字段；definition 不持有被引用对象的实现。
-
-| 引用类型 | 必填字段 | 选填字段 | 备注 |
-|---|---|---|---|
-| **beeline 引用** | `id`, `version` | — | beeline 有 id + version（递增序列号）；引用发生在 task 块（task 1:1 绑定 1 条 beeline）|
-| **schema 引用** | `schema_id` | — | schema 是按 id 定位的数据/资源对象；task_schema / result_schema / operation input/output 引用 |
-
-**queen 是 definition 自身内容**——不引用外部对象，跟着 definition 走、跟着 release 打包。
-
-引用校验（保存 definition 时）：
-- beeline 引用：`id` + `version` 必须真实存在
-- schema 引用：`schema_id` 必须真实存在
-
-### 业务 schema 形状
-
-schema 是 1 类业务化字段定义对象（按 id 定位，**无 version**）——`task_schema` / `result_schema` 字段都引用 schema_id。
-
-```yaml
-schema:                  # 业务 schema 形状
-  id: string              # schema 唯一标识
-  description: string     # 人类可读说明
-  fields:                 # 1...N 个字段
-    - name: string
-      type: string        # type 取值见下
-      required: boolean   # 默认 true
-      description: string # 可选
-```
-
-**type 取值**（4 类）：
+### schema type 取值（4 类）
 
 | 类型 | 写法 | 备注 |
 |---|---|---|
 | **基础类型** | `string` / `number` / `boolean` / `integer` | 直接用类型名 |
 | **对象类型** | `object` | 复杂结构用 `properties` 嵌套描述 |
 | **数组类型** | `array` | `items` 描述元素 |
-| **schema 引用** | `ref:<schema_id>` | 避免重复定义 |
+| **schema 引用** | `ref:<schema_id>` | 引用本 definition 的 schemas 块内的 schema id |
 
-**示例**（订单请求）：
+### 示例（订单请求）
 
 ```yaml
 - id: schema_order_request
@@ -156,9 +136,27 @@ schema:                  # 业务 schema 形状
 
 ---
 
+## 3. 引用机制
+
+definition 只对**独立维护的对象**做引用——beeline 等。引用按被引用对象自身的字段形式——被引用对象是什么字段，引用就用什么字段；definition 不持有被引用对象的实现。
+
+| 引用类型 | 必填字段 | 选填字段 | 备注 |
+|---|---|---|---|
+| **beeline 引用** | `id`, `version` | — | beeline 有 id + version（递增序列号）；引用发生在 task 块（task 1:1 绑定 1 条 beeline）|
+
+**queen / schemas 是 definition 自身内容**——不引用外部对象，跟着 definition 走、跟着 release 打包。
+
+引用校验（保存 definition 时）：
+- beeline 引用：`id` + `version` 必须真实存在
+- schema 引用：definition 内 schemas 块的所有引用（task_schema / result_schema / schema 内 ref）必须指向 schemas 块内真实存在的 schema id
+
+---
+
 ## 4. 字段约束
 
-- **必填字段**：`id`, `version`, `task`, `result`, `process` 不可省略（`queen` 也必填，授权策略不可缺省）
+- **必填字段**：`id`, `version`, `task`, `result`, `process`, `queen` 不可省略（`schemas` 可选；引用 task_schema / result_schema 时必填 schemas）
+- **schemas id 唯一**：definition 内 schemas 列表的 id 唯一
+- **schema 引用存在**：`task_schema` / `result_schema` / schema 内 `ref:` 引用必须指向本 definition schemas 块内真实存在的 schema id
 - **task 必填 beeline**：`task` 列表每条都必填 `beeline_id` + `beeline_version`（1:1 绑定）
 - **beeline 引用存在**：`task.beeline_id` + `beeline_version` 必须在 `process.beelines` 里真实存在
 - **authorization 合法**：每类授权只能是 `allow` / `observe_only` / `off` 之一
@@ -172,6 +170,7 @@ schema:                  # 业务 schema 形状
 
 | schema 字段 | design 章节 |
 |---|---|
+| `schemas` | §3.1.2 数据形状（definition 自带 schema 列表）|
 | `task` | §3.1.2 履约对象 |
 | `process` | §3.1.2 履约过程 |
 | `result` | §3.1.2 履约结果（对应 §2.1 单次履约）|

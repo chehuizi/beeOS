@@ -1,20 +1,31 @@
-# beeBox 设计 v0.1
+# beeOS / beeBox 设计 v0.1
 
 > **状态**：v0.1 草稿 · 修订中
 > **日期**：2026-09-13
-> **定位**：beeBox = 持续交付一类明确业务结果的数字精益工作单元
+> **定位**：beeOS = 业务履约操作系统（Business Fulfillment Operating System），beeBox = bounded 业务履约单元（bounded Business Fulfillment Unit）
 
 ---
 
-## 0. 一句话
+## 0. 架构宣言
 
-beeBox 是持续交付一类明确业务结果的数字精益工作单元。
+beeOS is a Business Fulfillment Operating System.
+
+Its fundamental unit is the beeBox: a bounded Business Fulfillment Unit.
+
+A Business Fulfillment executes a business intent under an explicit contract and policy, and produces a verifiable business result.
+
+> **beeBox 不是 workflow 容器**——而是 1 个有明确业务责任边界的履约单元；beeline / operation / runtime / queen 都是为了让这个履约单元成立而存在的**机制**，不是核心概念。
 
 ---
 
 ## 1. 产品定位和领域模型
 
 beeBox 跟所有产品一样有**两件事**：**生命周期**（怎么从设计走到部署）和**运行关系**（产品跑在什么之上）。两件事落到产品上，beeBox 跑起来后每次接收触发产生 1 个 task run——产品完成一次履约，交付 1 个具体业务结果。
+
+**产品架构层级**：
+
+- **核心层**：Business Fulfillment（业务履约）+ beeBox（bounded 履约单元）—— 业务的基本事实
+- **机制层**：release / beeline / operation / runtime / task run / queen—— 让核心层能成立的具体实现
 
 **总览图**（概念流转）：
 
@@ -87,13 +98,29 @@ flowchart TB
 
 ### 1.4 边界关系
 
+beeBox 的所有概念分**核心层**和**机制层**——核心层是 beeOS 真正在管理的业务事实，机制层是让核心层能成立的具体实现。
+
+**核心层**（业务事实）：
+
 | 概念 | 范围 | 关系 |
 |---|---|---|
-| **operation** | 1 个不可再分的加工动作（input / output / type 已声明）| 最小执行单元（原子工序）|
-| **beeline** | 1 类任务的标准作业路线 | 1...N 个 operation 组成的有向图（支持顺序 / 并发 / 分支）|
-| **beeBox** | 1 个可独立运营和验收的数字工作 cell | 1...N 条 beeline 组成 |
-| **queen** | beeBox 的自治运营智能体（definition 顶层字段）| 1 个 beeBox 含 1 份 queen 配置；queen 在履约合同 + 授权策略约束下管理任务流动 / 运行异常 / 持续改善（由 runtime 平台的 queen engine 执行）|
+| **Business Fulfillment** | 1 次业务履约 | 在合同 + 政策约束下执行 1 个业务意图，交付 1 个可验证的业务结果 |
+| **beeBox** | 1 个有明确业务责任边界的履约单元 | 1 个 beeBox = 1 个 bounded 履约单元（bounded business responsibility / contract / capabilities / policies / lifecycle / metrics / ownership）|
 | **企业价值流** | 端到端业务流 | 1...N 个 beeBox 串联 |
+
+**机制层**（让核心层能成立的具体实现）：
+
+| 概念 | 范围 | 角色 |
+|---|---|---|
+| **beeline** | 1 类任务的标准作业路线 | procedure（履约的步骤定义）—— 1...N 个 operation 组成的有向图（支持顺序 / 并发 / 分支）|
+| **operation** | 1 个不可再分的加工动作（input / output / type 已声明）| execution step（履约中的具体执行）|
+| **release** | beeBox 设计产物的不可变快照 | versioning（beeBox 的版本载体）|
+| **task run** | 1 次履约的执行实例 | fulfillment instance（履约的 1 次发生）|
+| **schema** | definition 自带的数据形状定义 | data contract（履约数据的形状）|
+| **runtime** | 把 release 部署成 instance 的服务 | execution environment（履约的运行基础）|
+| **queen** | beeBox 的自治运营智能体（definition 顶层字段）| autonomous control（履约的智能决策）|
+
+> **核心层是 beeOS 业务的基本事实**；机制层是为核心层服务的实现，机制变了不影响核心语义。
 
 例子（电商订单履行）：
 
@@ -281,19 +308,31 @@ definition → release 的过程：
 3. **生成不可变 artifact**——definition 内容 + 固定版本引用打包成 1 个 release（带 release_id + 时间戳 + 不可变校验和）
 4. **存储**——release 写入 release 仓库（按 release_id 索引，不允许覆盖）
 
-#### 3.2.3 打包内容
+#### 3.2.3 打包内容（dependency closure）
 
-1 份 release 包含：
+release 是 beeBox 的**完整 dependency closure**——保证 release 独立可运行，外部对象（beeline / schema）后续修改不影响老 release。
 
-| 块 | 内容 | 来源 |
-|---|---|---|
-| **元信息** | release_id / definition_id / definition_version / 发布时间戳 / 校验和 | 打包时生成 |
-| **definition 内容** | task 列表 / result / metrics 全部内容 | 从 definition 复制 |
-| **beeline 引用（固定）** | 1...N 条 `{beeline_id, beeline_version}` | 从 definition 复制并固定 version |
-| **schema 引用** | task_schema / result_schema / operation input/output 引用的 schema 完整内容 | 拉取 schema 实际内容嵌入（不只引用）|
-| **依赖清单** | 1 份 release 涉及的所有 beeline_id / schema_id 清单 | 打包时扫描生成（用于审计 / 复盘）|
+1 份 release 由 **manifest + artifacts** 两部分组成：
 
-> release 嵌入 schema 实际内容（不只引用）——保证 release 独立可运行，schema 后续修改不影响老 release。
+**manifest**（依赖清单 + 元信息，引用型）：
+
+| 字段 | 含义 |
+|---|---|
+| `release_id` | release 唯一标识（按 definition_id 派生，如 `task-fulfillment@1.2.0`）|
+| `definition_id` / `definition_version` | release 基于哪个 definition |
+| `beeline_refs` | 1...N 条 `{beeline_id, beeline_version}`（被引用型，按 version 固定）|
+| `digest` | 整个 release 的不可变校验和（防意外篡改）|
+| `created_at` | 发布时间戳 |
+
+**artifacts**（实物载荷，内容型）：
+
+| 字段 | 含义 |
+|---|---|
+| `definition` | definition 全部内容（task / process / result / metrics / schemas / queen 配置）—— **schemas 跟着嵌入**（不只引用 schema id）|
+
+> **关键点**：schema 已经内嵌在 definition 里（§1.4 机制层），所以 release 直接包含 definition 全部内容 = schema 跟着嵌入；beeline 因为独立维护（含 version），release 只固定 version 引用，不嵌入 beeline 内容。
+> 
+> **效果**：release 是自包含的——装上后能独立运行，不需要再访问外部 beeline / schema 仓库；老 release 行为永远固定，不被外部对象后续修改影响。
 
 #### 3.2.4 不可变性
 

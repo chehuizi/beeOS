@@ -10,16 +10,17 @@ beeBox definition 的结构化 schema 定义。**这是接口规格，不是设�
 
 ## 1. 顶层结构
 
-definition 顶层包含**基础元信息 + 数据形状 + 履约生命周期 4 块 + queen 配置**：
+definition 顶层包含**基础元信息 + 数据形状 + 履约生命周期 5 块（按 Fulfillment 4 维度 + 度量）**：
 
-| 块 | 含义 | 字段 |
-|---|---|---|
-| **基础元信息** | beeBox 基础标识 | `id` / `version` / `description` |
-| **数据形状** | definition 自带的 schema 列表（task / result / operation input/output 都引用这里）| `schemas` |
-| **履约对象** | beeBox 接收什么 task（每类 task 1:1 绑定 1 条 beeline 作为 procedure 实现）| `task` |
-| **履约合同** | beeBox 交付什么业务结果（业务定义 + 验收标准 + 例外条款）| `result` |
-| **履约度量** | 质量 / 时效 / 成本 度量方式 + 目标值 | `metrics` |
-| **queen** | beeBox 的自治运营配置 | `queen` |
+| 块 | Fulfillment 维度 | 含义 | 字段 |
+|---|---|---|---|
+| **基础元信息** | — | beeBox 基础标识 | `id` / `version` / `description` |
+| **数据形状** | — | definition 自带的 schema 列表 | `schemas` |
+| **履约意图** | Intent | beeBox 接收什么 task | `task` |
+| **履约合同** | Contract | beeBox 交付什么业务结果（业务定义 + 验收标准 + 例外条款）| `result` |
+| **履约政策** | Policy | beeBox 的 queen 自治运营配置（authorization / rules）| `queen` |
+| **履约程序** | Procedure | 每类 task 1:1 绑定 1 条 beeline 作为 procedure 实现 | `task[].beeline_id` + `beeline_version`（task 块内）|
+| **履约度量** | Metrics | 质量 / 时效 / 成本 度量方式 + 目标值 | `metrics` |
 
 **queen / schemas 都是 definition 自身内容**——不引用外部对象，跟着 definition 走、跟着 release 打包。
 
@@ -46,15 +47,15 @@ beeBox_definition:
           required: boolean   # 默认 true
           description: string # 可选
 
-  # ---- 履约对象：beeBox 接收什么 task ----
+  # ---- 履约意图（Intent）：beeBox 接收什么 task ----
   task:                      # 1...N 类 task
     - type: string           # task 类型标识
       task_schema: string    # 引用 schemas 块内的 schema id
-      beeline_id: string     # 1:1 绑定的 beeline（beeline 是 procedure 的实现，不是履约本身）
+      beeline_id: string     # 1:1 绑定的 beeline（履约程序 Procedure 的实现）
       beeline_version: integer  # 绑定的 beeline 的具体 version
       trigger: string        # 触发条件描述
 
-  # ---- 履约结果：交付什么业务结果 ----
+  # ---- 履约合同（Contract）：交付什么业务结果 ----
   result:
     type: string             # 业务结果类型标识
     result_schema: string    # 引用 schemas 块内的 schema id
@@ -67,7 +68,7 @@ beeBox_definition:
       - condition: string
         action: enum         # no_deliver / rollback / escalate
 
-  # ---- 履约度量：质量 / 时效 / 成本 持续统计 ----
+  # ---- 履约度量（Metrics）：质量 / 时效 / 成本 持续统计 ----
   metrics:
     quality:                 # 履约质量
       - name: string
@@ -84,8 +85,8 @@ beeBox_definition:
         definition: string
       ...
 
-  # ---- queen 配置：beeBox 的自治运营智能体 ----
-  queen:                     # beeBox 1:1 自治运营配置（由 runtime 平台 queen engine 执行）
+  # ---- 履约政策（Policy）：beeBox 的 queen 自治运营配置 ----
+  queen:                     # 履约政策——由 runtime 平台 queen engine 执行
     authorization:           # 授权策略（每类自治能力允许档位）
       task_routing: enum          # 任务流动：allow / observe_only / off
       exception_handling: enum    # 运行异常：allow / observe_only / off
@@ -148,8 +149,8 @@ definition 只对**独立维护的对象**做引用——beeline 等。引用按
 - **必填字段**：`id`, `version`, `task`, `result`, `queen` 不可省略（`schemas` 可选；引用 task_schema / result_schema 时必填 schemas）
 - **schemas id 唯一**：definition 内 schemas 列表的 id 唯一
 - **schema 引用存在**：`task_schema` / `result_schema` / schema 内 `ref:` 引用必须指向本 definition schemas 块内真实存在的 schema id
-- **task 必填 beeline**：`task` 列表每条都必填 `beeline_id` + `beeline_version`（1:1 绑定）
-- **beeline 引用存在**：`task.beeline_id` + `beeline_version` 必须在 `process.beelines` 里真实存在
+- **task 必填 beeline**：`task` 列表每条都必填 `beeline_id` + `beeline_version`（1:1 绑定履约程序 Procedure）
+- **beeline 引用存在**：`task.beeline_id` + `beeline_version` 必须在 beeline 仓库里真实存在
 - **authorization 合法**：每类授权只能是 `allow` / `observe_only` / `off` 之一
 - **queen rules 可选**：每类 rules 字段可选（不填 = 该类无具体规则，按平台默认行为）
 - **metric 命名**：`quality` / `latency` / `cost` 三类分别命名，命名空间隔离
@@ -159,13 +160,13 @@ definition 只对**独立维护的对象**做引用——beeline 等。引用按
 
 ## 5. 跟设计稿的对照
 
-| schema 字段 | design 章节 |
-|---|---|
-| `schemas` | §3.1.2 数据形状（definition 自带 schema 列表）|
-| `task` | §3.1.2 履约对象 |
-| `process` | §3.1.2 履约过程 |
-| `result` | §3.1.2 履约结果（对应 §2.1 单次履约）|
-| `metrics` | §3.1.2 履约度量（对应 §2.1 履约指标）|
-| `queen` | §3.1.2 queen 配置（beeBox 1:1 自治运营智能体） |
-| 引用机制（按被引用对象字段形式） | §3.1.3 引用机制 |
-| `version` / 序列号 | §3.1.5 与 release 的关系（definition 修改不影响已发布 release）|
+| schema 字段 | Fulfillment 维度 | design 章节 |
+|---|---|---|
+| `schemas` | — | §3.1.2 数据形状（definition 自带 schema 列表）|
+| `task` | Intent | §3.1.2 履约意图 |
+| `result` | Contract | §3.1.2 履约合同（对应 §2.1 单次履约）|
+| `queen` | Policy | §3.1.2 履约政策 |
+| `task[].beeline_id` / `beeline_version` | Procedure | §3.1.2 履约程序（beeline 是 procedure 实现）|
+| `metrics` | Metrics | §3.1.2 履约度量（对应 §2.1 履约指标）|
+| 引用机制（按被引用对象字段形式） | — | §3.1.3 引用机制 |
+| `version` / 序列号 | — | §3.1.5 与 release 的关系（definition 修改不影响已发布 release）|

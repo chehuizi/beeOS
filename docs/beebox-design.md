@@ -293,24 +293,27 @@ definition 是 beeBox 产品的"设计图"——定义 1 个 beeBox 接收什么
 
 #### 3.1.2 数据结构
 
-definition 包含**基础元信息 + 数据形状 + 履约生命周期 4 块 + queen 配置**：
+definition 包含**基础元信息 + 数据形状 + 履约生命周期 5 块（按 Fulfillment 4 维度 + 度量）**：
 
-| 块 | 内容 | 备注 |
-|---|---|---|
-| **基础元信息** | beeBox 基础标识（id / version / description）| 标识 beeBox 自身 |
-| **数据形状** | definition 自带的 schema 列表（task / result / operation input/output 都引用这里）| 跟着 definition 走 |
-| **履约对象** | beeBox 接收什么 task（输入 schema / 适用业务场景）| 1 个 beeBox 可能接收多类 task；每类 task 1:1 绑定 1 条 beeline 作为 procedure 实现 |
-| **履约结果** | 1 个 beeBox 交付什么业务结果（业务定义 + 验收标准 + 例外条款）| 对应 §2.1 单次履约 |
-| **履约度量** | 质量 / 时效 / 成本 各自的度量方式 + 目标值 | 对应 §2.1 履约指标 |
-| **queen** | beeBox 的自治运营配置（authorization / rules）| 跟着 definition 走，由 runtime 平台的 queen engine 执行 |
+| 块 | Fulfillment 维度 | 内容 | 备注 |
+|---|---|---|---|
+| **基础元信息** | — | beeBox 基础标识（id / version / description）| 标识 beeBox 自身 |
+| **数据形状** | — | definition 自带的 schema 列表（task / result / operation input/output 都引用这里）| 跟着 definition 走 |
+| **履约意图** | Intent | beeBox 接收什么 task（输入 schema / 适用业务场景）| 1 个 beeBox 可能接收多类 task |
+| **履约合同** | Contract | 1 个 beeBox 交付什么业务结果（业务定义 + 验收标准 + 例外条款）| 对应 §2.1 单次履约 |
+| **履约政策** | Policy | beeBox 的 queen 自治运营配置（authorization / rules）| 由 runtime 平台的 queen engine 执行 |
+| **履约程序** | Procedure | 每类 task 1:1 绑定 1 条 beeline 作为 procedure 实现 | 引用 beeline_id + version，不含 beeline 实现 |
+| **履约度量** | Metrics | 质量 / 时效 / 成本 各自的度量方式 + 目标值 | 对应 §2.1 履约指标 |
 
+> 5 块（4 + 1）按 Fulfillment 的 4 维度组织——业务意图 → 履约合同 → 履约政策 → 履约程序 → 履约度量，跟 §2.1 / §0 完全对齐。
+> 
 > 1 个 definition **不包含** beeline 的**实现**——只引用 beeline_id + version。queen / schemas 是 definition 自身内容（不引用外部对象）。
 >
 > **beeline 不是履约本身**——beeline 是履约程序路径（procedure）的具体实现，不是 Business Fulfillment 本身；Business Fulfillment = Intent + Contract + Policy + Procedure（详见 §2.1）。
 
 #### 3.1.3 引用机制
 
-definition 跟 beeline / schema 的关系是**"引用"**（按被引用对象自身字段形式），不是"内嵌"——"履约过程"块里所有引用都遵循这个机制：
+definition 跟 beeline / schema 的关系是**"引用"**（按被引用对象自身字段形式），不是"内嵌"——beeline 引用发生在 task 块（履约程序维度），schema 引用发生在 task_schema / result_schema / schema 内 ref：
 
 - **beeline 引用**——`beeline_id` + `beeline_version`（递增序列号，绑定到具体 version）；definition 不持有 beeline 的实现；引用发生在 task 块（每类 task 1:1 绑定 1 条 beeline 作为 procedure 实现）
 - **task / result 的 schema 引用**——`task_schema` / `result_schema` 引用 schema 资源（schema 是数据/资源对象，按 id 定位）

@@ -12,9 +12,11 @@ beeOS is a Business Fulfillment Operating System.
 
 Its fundamental unit is the beeBox: a bounded Business Fulfillment Unit.
 
-A Business Fulfillment executes a business intent under an explicit contract and policy, and produces a verifiable business result.
+A Business Fulfillment fulfills a business intent under an explicit contract and policy, producing a verifiable business result.
 
 > **beeBox 不是 workflow 容器**——而是 1 个有明确业务责任边界的履约单元；beeline / operation / runtime / queen 都是为了让这个履约单元成立而存在的**机制**，不是核心概念。
+>
+> **fulfill vs execute**：履约单元的核心语义是"业务目标是否被实现"（fulfill），不是"怎么执行"（execute）；beeBox 围绕 fulfill 设计，不是围绕 execute 设计。
 
 ---
 

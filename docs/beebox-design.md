@@ -204,6 +204,26 @@ flowchart TB
 - **履约时效**（交付时长 / 等待时长 / 端到端时长）
 - **履约成本**（资源消耗 / 单位成本 / 浪费率）
 
+#### Business Fulfillment 的语义结构
+
+**1 次 Business Fulfillment** = **业务意图** + **履约合同** + **履约政策** + **履约程序**——这 4 个维度共同定义了一次完整的业务履约：
+
+```
+Business Fulfillment
+  ├── Intent（业务意图）—— 这次履约要做什么
+  ├── Contract（履约合同）—— 交付什么 + 验收标准 + 例外条款（§2.1 单次履约）
+  ├── Policy（履约政策）—— queen 授权策略（任务流动 / 异常处理 / 持续改善）
+  └── Procedure（履约程序）—— 业务履约的程序路径
+       └── 1 条 BeeLine（procedure 的具体实现，机制层）
+            └── 1...N 个 Operation（执行步骤）
+```
+
+**关键区分**：
+
+- **Business Fulfillment ≠ BeeLine**——BeeLine 只是 fulfillment 的 Procedure 实现，fulfillment 还包含 Intent / Contract / Policy 3 个维度
+- **TaskRun ≠ BeeLine Execution**——TaskRun 是"1 次 Business Fulfillment 实际发生的运行记录"，按 BeeLine（procedure）跑 operation 步骤
+- **BeeLine 是机制层**——beeBox 改了 procedure 不影响 beeBox 的业务责任边界（Intent / Contract / Policy 不变）
+
 ### 2.2 task run 履约
 
 **核心关系**（业务事实）：
@@ -273,24 +293,26 @@ definition 是 beeBox 产品的"设计图"——定义 1 个 beeBox 接收什么
 
 #### 3.1.2 数据结构
 
-definition 包含**基础元信息 + 履约生命周期 4 块 + queen 配置**：
+definition 包含**基础元信息 + 数据形状 + 履约生命周期 4 块 + queen 配置**：
 
 | 块 | 内容 | 备注 |
 |---|---|---|
 | **基础元信息** | beeBox 基础标识（id / version / description）| 标识 beeBox 自身 |
-| **履约对象** | beeBox 接收什么 task（输入 schema / 适用业务场景）| 1 个 beeBox 可能接收多类 task；每类 task 1:1 绑定 1 条 beeline |
-| **履约过程** | 怎么履约（每类 task 1:1 绑定 1 条 beeline，beeline 内部资源归 beeline 自己管）| 全部用"引用"——松耦合 |
+| **数据形状** | definition 自带的 schema 列表（task / result / operation input/output 都引用这里）| 跟着 definition 走 |
+| **履约对象** | beeBox 接收什么 task（输入 schema / 适用业务场景）| 1 个 beeBox 可能接收多类 task；每类 task 1:1 绑定 1 条 beeline 作为 procedure 实现 |
 | **履约结果** | 1 个 beeBox 交付什么业务结果（业务定义 + 验收标准 + 例外条款）| 对应 §2.1 单次履约 |
 | **履约度量** | 质量 / 时效 / 成本 各自的度量方式 + 目标值 | 对应 §2.1 履约指标 |
 | **queen** | beeBox 的自治运营配置（authorization / rules）| 跟着 definition 走，由 runtime 平台的 queen engine 执行 |
 
-> 1 个 definition **不包含** beeline / schema 的**实现**——只引用它们的标识。queen 配置是 definition 自身内容（不引用外部对象）。
+> 1 个 definition **不包含** beeline 的**实现**——只引用 beeline_id + version。queen / schemas 是 definition 自身内容（不引用外部对象）。
+>
+> **beeline 不是履约本身**——beeline 是履约程序路径（procedure）的具体实现，不是 Business Fulfillment 本身；Business Fulfillment = Intent + Contract + Policy + Procedure（详见 §2.1）。
 
 #### 3.1.3 引用机制
 
 definition 跟 beeline / schema 的关系是**"引用"**（按被引用对象自身字段形式），不是"内嵌"——"履约过程"块里所有引用都遵循这个机制：
 
-- **beeline 引用**——`beeline_id` + `beeline_version`（递增序列号，绑定到具体 version）；definition 不持有 beeline 的实现；引用发生在 task 块（每类 task 1:1 绑定 1 条 beeline）
+- **beeline 引用**——`beeline_id` + `beeline_version`（递增序列号，绑定到具体 version）；definition 不持有 beeline 的实现；引用发生在 task 块（每类 task 1:1 绑定 1 条 beeline 作为 procedure 实现）
 - **task / result 的 schema 引用**——`task_schema` / `result_schema` 引用 schema 资源（schema 是数据/资源对象，按 id 定位）
 - **引用时点**——definition 引用的是"目标对象的当前状态"；被引用对象演进时通过新建对象 + 切换 definition 引用
 

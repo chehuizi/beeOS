@@ -16,9 +16,8 @@ definition 顶层包含**基础元信息 + 数据形状 + 履约生命周期 4 �
 |---|---|---|
 | **基础元信息** | beeBox 基础标识 | `id` / `version` / `description` |
 | **数据形状** | definition 自带的 schema 列表（task / result / operation input/output 都引用这里）| `schemas` |
-| **履约对象** | beeBox 接收什么 task | `task` |
-| **履约过程** | 怎么履约（beeline 引用）| `process` |
-| **履约结果** | beeBox 交付什么业务结果 | `result` |
+| **履约对象** | beeBox 接收什么 task（每类 task 1:1 绑定 1 条 beeline 作为 procedure 实现）| `task` |
+| **履约合同** | beeBox 交付什么业务结果（业务定义 + 验收标准 + 例外条款）| `result` |
 | **履约度量** | 质量 / 时效 / 成本 度量方式 + 目标值 | `metrics` |
 | **queen** | beeBox 的自治运营配置 | `queen` |
 
@@ -51,17 +50,9 @@ beeBox_definition:
   task:                      # 1...N 类 task
     - type: string           # task 类型标识
       task_schema: string    # 引用 schemas 块内的 schema id
-      beeline_id: string     # 1:1 绑定的 beeline
+      beeline_id: string     # 1:1 绑定的 beeline（beeline 是 procedure 的实现，不是履约本身）
       beeline_version: integer  # 绑定的 beeline 的具体 version
       trigger: string        # 触发条件描述
-
-  # ---- 履约过程：怎么履约 ----
-  process:
-    # 流程：1...N 条 beeline（独立维护，可被多 task 引用）
-    beelines:
-      - id: string
-        version: integer
-      # 内部 operation 用什么 bee / 外部系统归 beeline 自己的定义管
 
   # ---- 履约结果：交付什么业务结果 ----
   result:
@@ -154,7 +145,7 @@ definition 只对**独立维护的对象**做引用——beeline 等。引用按
 
 ## 4. 字段约束
 
-- **必填字段**：`id`, `version`, `task`, `result`, `process`, `queen` 不可省略（`schemas` 可选；引用 task_schema / result_schema 时必填 schemas）
+- **必填字段**：`id`, `version`, `task`, `result`, `queen` 不可省略（`schemas` 可选；引用 task_schema / result_schema 时必填 schemas）
 - **schemas id 唯一**：definition 内 schemas 列表的 id 唯一
 - **schema 引用存在**：`task_schema` / `result_schema` / schema 内 `ref:` 引用必须指向本 definition schemas 块内真实存在的 schema id
 - **task 必填 beeline**：`task` 列表每条都必填 `beeline_id` + `beeline_version`（1:1 绑定）

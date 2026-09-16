@@ -70,16 +70,25 @@ flowchart TB
 
 ### 1.1 第一性定义
 
-> **beeBox 是持续交付一类明确业务结果的数字精益工作单元。**
+> **beeBox 是 1 个 bounded Business Fulfillment Unit——一个有明确业务责任边界的履约单元。**
 
-拆开看 4 个关键词：
+beeBox 不是 workflow 容器，而是 1 个**履约单元**（unit of fulfillment）——围绕"执行 1 次业务履约（Business Fulfillment）"这件事，把所有相关的责任 / 合同 / 能力 / 政策 / 生命周期 / 度量 / 所有权都圈定在一个明确边界内，让这个履约单元可以**被独立设计 / 部署 / 运行 / 验收 / 度量 / 持续改善**。
 
-- **业务结果**——可被验收的产出（不是任务、不是流程、不是操作）；beeBox 围绕"一类"（一组同类的）业务结果构建——可以持续重复跑出 N 个具体的业务结果
-- **持续交付**——不是一次性完成，是持续地、可重复地交付
-- **数字精益工作单元**——精益 cell 的数字版本，装在机器上的、可远程观察的
-- **产品单元**——1 个独立可安装、可运行、可度量、可改善的产品单元
+**bounded 的含义**——beeBox 的"边界"不是简单的容器边界，而是业务责任边界：
+
+- **bounded business responsibility**——1 个 beeBox 负责 1 类业务履约，职责清晰
+- **bounded contract**——1 个 beeBox 有 1 份明确的履约合同（业务结果 + 验收标准 + 例外条款）
+- **bounded capabilities**——1 个 beeBox 自带履约所需的 schemas / beelines / queen 配置
+- **bounded policies**——1 个 beeBox 有 1 份 queen 授权策略（任务流动 / 异常处理 / 持续改善）
+- **bounded lifecycle**——1 个 beeBox 走过 definition → release → instance 的独立生命周期
+- **bounded metrics**——1 个 beeBox 有 1 份自己的度量（质量 / 时效 / 成本）
+- **bounded ownership**——1 个 beeBox 由 1 个 owner 负责运营（beeBox owner）
+
+> 多个 beeBox 串联 = 企业价值流（§1.4 核心层）。
 
 ### 1.2 产品属性
+
+1 个 beeBox 履约单元的产品属性（让 §1.1 的"履约单元"在产品视角可操作）：
 
 | 属性 | 含义 |
 |---|---|

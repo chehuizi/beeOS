@@ -6,6 +6,7 @@
 #   docs/beebox-beeline-schema.md    — beeline 结构化 schema 规格
 #   docs/beebox-runtime-design.md    — runtime 平台设计
 #   docs/beebox-runtime-schema.md    — runtime 资源对象 schema 规格
+#   docs/beeos-gtm.md                — beeOS 商业定位 / GTM（产品语言 + 三层产品 + Catalog + Certification + 飞轮 + 起步策略）
 #
 # 当前目标：设计稿定稿，零代码
 #

@@ -18,6 +18,37 @@ A Business Fulfillment fulfills a business intent under an explicit contract and
 >
 > **fulfill vs execute**：履约单元的核心语义是"业务目标是否被实现"（fulfill），不是"怎么执行"（execute）；beeBox 围绕 fulfill 设计，不是围绕 execute 设计。
 
+## 0.5 产品语言与商业叙事
+
+beeOS 是**技术 / 品牌名称**，"履约盒子"（fulfillment box）是**产品语言**——两者指代同一类对象（beeBox），只是面向不同读者。
+
+**对客户怎么说**（不是编排器，是履约盒子）：
+
+> "这是一个**订单异常处理履约盒子**。接进去以后，它负责把订单异常从发现一直处理到闭环。"
+>
+> 客户看到的是：**订单异常 → 履约盒子 → 已解决订单**——里面用了 AI Agent / LLM / API / RPA / Workflow / 人 / ERP / CRM 都变成实现细节。
+>
+> **客户买的是业务结果，不是编排器**。
+
+**商业叙事（一句）**：
+
+> **beeOS 不卖 AI，不卖 Workflow。beeOS 交付成熟的履约盒子。**
+>
+> 一个履约盒子，承接一项明确的业务责任，并以可验证的业务结果完成履约。
+
+**三层产品层次**：
+
+| 层 | 内容 | 谁买 / 谁用 |
+|---|---|---|
+| **履约盒子**（beeBox）| 客户真正购买的东西——"帮我完成 X" | 企业客户 |
+| **履约盒子市场**（Catalog）| 成熟盒子的集合，按行业 / 业务价值流分类 | 企业客户挑选 + 安装 + 配置 |
+| **beeOS 基础设施**（platform）| 背后提供 Contract / Policy / Queen / BeeLine / Runtime / Evidence / Metrics 能力 | beeOS 团队 |
+
+**关键点**：
+- "beeOS 是平台，beeBox 是产品，履约结果是价值"——这三个层次分开后，创业叙事清晰
+- 客户甚至可以不知道 beeOS 内部细节——只用履约盒子
+- 详细 GTM（Catalog 设计 / 成熟度 Certification / 商业飞轮 / 单行业起步策略）见 [docs/beeos-gtm.md](./beeos-gtm.md)
+
 ---
 
 ## 1. 产品定位和领域模型

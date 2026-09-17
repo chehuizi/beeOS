@@ -10,7 +10,9 @@ beeBox definition 的结构化 schema 定义。**这是接口规格，不是设�
 
 ## 1. 顶层结构
 
-definition 顶层包含**基础元信息 + 数据形状 + 履约生命周期 5 块（按 Fulfillment 4 维度 + 度量）**：
+definition 顶层包含**基础元信息 + 数据形状 + Fulfillment 5 维度 + 度量 + 机制层**：
+
+**Fulfillment 5 维度**（definition 顶层块，定义 1 类业务履约）：
 
 | 块 | Fulfillment 维度 | 含义 | 字段 |
 |---|---|---|---|
@@ -19,8 +21,13 @@ definition 顶层包含**基础元信息 + 数据形状 + 履约生命周期 5 �
 | **履约意图** | Intent | beeBox 接收什么 task | `task` |
 | **履约合同** | Contract | beeBox 交付什么业务结果（业务定义 + 验收标准 + 例外条款）| `result` |
 | **履约政策** | Policy | beeBox 的 queen 自治运营配置（authorization / rules）| `queen` |
-| **履约程序** | Procedure | 每类 task 1:1 绑定 1 条 beeline 作为 procedure 实现 | `task[].beeline_id` + `beeline_version`（task 块内）|
 | **履约度量** | Metrics | 质量 / 时效 / 成本 度量方式 + 目标值 | `metrics` |
+
+**机制层**（不属于 Fulfillment 维度，是实现 Fulfillment 的方式）：
+
+| 块 | 角色 | 含义 | 字段 |
+|---|---|---|---|
+| **履约程序** | Procedure（机制层）| 每类 task 1:1 绑定 1 条 beeline 作为 procedure 实现 | `task[].beeline_id` + `beeline_version`（task 块内）|
 
 **queen / schemas 都是 definition 自身内容**——不引用外部对象，跟着 definition 走、跟着 release 打包。
 
@@ -171,7 +178,7 @@ definition 只对**独立维护的对象**做引用——beeline 等。引用按
 | `task` | Intent | §3.1.2 履约意图 |
 | `result` | Contract | §3.1.2 履约合同（对应 §2.1 单次履约）|
 | `queen` | Policy | §3.1.2 履约政策 |
-| `task[].beeline_id` / `beeline_version` | Procedure | §3.1.2 履约程序（beeline 是 procedure 实现）|
 | `metrics` | Metrics | §3.1.2 履约度量（对应 §2.1 履约指标）|
+| `task[].beeline_id` / `beeline_version` | Procedure（机制层）| §3.1.2 履约程序（beeline 是 procedure 实现）|
 | 引用机制（按被引用对象字段形式） | — | §3.1.3 引用机制 |
 | `version` / 序列号 | — | §3.1.5 与 release 的关系（definition 修改不影响已发布 release）|

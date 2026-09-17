@@ -237,33 +237,49 @@ flowchart TB
 
 #### Business Fulfillment 的语义结构
 
-**1 次 Business Fulfillment** 由 6 个**语义层级**组成——每个层级回答 1 个清晰的问题：
+**1 次 Business Fulfillment 的 5 个组成维度**（不是 6 个）——Procedure / BeeLine **不属于 Fulfillment 的组成**，它是实现 Fulfillment 的机制层：
 
 ```
-Contract       → What must be fulfilled（什么必须被履约）
-Policy         → Under what constraints（在什么约束下履约）
-BeeLine        → How it may be fulfilled（如何被履约）
-TaskRun        → One actual fulfillment（一次实际的履约）
-Result         → What was actually produced（实际产出了什么）
-Acceptance     → Whether the contract was satisfied（合同是否被满足）
+Business Fulfillment
+=
+business intent   —— 这次履约要做什么
++
+contract          —— 什么必须被履约
++
+policy            —— 在什么约束下履约
++
+verifiable result —— 实际产出了什么
++
+acceptance        —— 合同是否被满足
+```
+
+```
+Procedure / BeeLine
+=
+one possible way to realize the fulfillment
 ```
 
 **关键区分**：
 
 > **BeeLine describes how a fulfillment may be performed. It does not define what fulfillment is.**
 >
-> BeeLine 描述的是"履约如何被执行"，不定义"什么是履约"。这是 BeeLine 跟其他概念的本质区别——其他 5 个概念都是"履约"本身的维度（合同 / 政策 / 履约事件 / 实际产出 / 是否被满足），只有 BeeLine 是"履约的实现方式"。
+> 之前的写法 "Business Fulfillment = Intent + Contract + Policy + Procedure" 是错的——Procedure 是机制层（实现方式），不是 Fulfillment 的内部组成。修正后：Fulfillment 由 5 个业务维度组成（intent / contract / policy / result / acceptance），BeeLine 是独立维度（机制层）。
 
 **映射到设计稿**：
 
-| 语义层级 | 设计对象 | 来源 |
+| Fulfillment 组成 | 设计对象 | 来源 |
 |---|---|---|
-| Contract | `result.acceptance` / `result.exceptions`（验收标准 + 例外条款）| definition.result |
-| Policy | `queen.authorization` / `queen.rules`（queen 授权 + 自治规则）| definition.queen |
-| BeeLine | `task[].beeline_id` + `beeline_version`（履约程序的具体编排）| definition.task + 独立 beeline 仓库 |
-| TaskRun | task run 实例（runtime 内执行）| runtime |
-| Result | task run 输出的 result 数据（业务结果）| runtime / audit |
-| Acceptance | task run 的验收判断（result 数据是否符合 acceptance 字段）| runtime |
+| **business intent** | `task`（每类 task 1:1 绑定 beeline 作为 procedure 实现）| definition.task |
+| **contract** | `result.acceptance` + `result.exceptions` | definition.result |
+| **policy** | `queen.authorization` + `queen.rules` | definition.queen |
+| **verifiable result** | task run 的 result 数据 + 12 字段履约事实 | runtime / audit |
+| **acceptance** | task run 的验收判断（§3.4.6 独立阶段）| runtime |
+| **metrics**（评价维度）| `metrics.quality` / `metrics.latency` / `metrics.cost` | definition.metrics |
+
+| 机制层 | 设计对象 | 来源 |
+|---|---|---|
+| **procedure / BeeLine** | `task[].beeline_id` + `beeline_version`（独立 beeline 仓库）| 独立 beeline 仓库 |
+| **TaskRun** | task run 实例 + 状态机（§3.4.4）+ Acceptance 阶段（§3.4.6）| runtime |
 
 ### 2.2 task run 履约
 
@@ -360,7 +376,9 @@ definition 是 beeBox 产品的"设计图"——定义 1 个 beeBox 接收什么
 
 #### 3.1.2 数据结构
 
-definition 包含**基础元信息 + 数据形状 + 履约生命周期 5 块（按 Fulfillment 4 维度 + 度量）**：
+definition 包含**基础元信息 + 数据形状 + Fulfillment 5 维度 + 度量 + 机制层**：
+
+**Fulfillment 5 维度**（definition 顶层块，定义 1 类业务履约）：
 
 | 块 | Fulfillment 维度 | 内容 | 备注 |
 |---|---|---|---|
@@ -369,14 +387,21 @@ definition 包含**基础元信息 + 数据形状 + 履约生命周期 5 块（�
 | **履约意图** | Intent | beeBox 接收什么 task（输入 schema / 适用业务场景）| 1 个 beeBox 可能接收多类 task |
 | **履约合同** | Contract | 1 个 beeBox 交付什么业务结果（业务定义 + 验收标准 + 例外条款）| 对应 §2.1 单次履约 |
 | **履约政策** | Policy | beeBox 的 queen 自治运营配置（authorization / rules）| 由 runtime 平台的 queen engine 执行 |
-| **履约程序** | Procedure | 每类 task 1:1 绑定 1 条 beeline 作为 procedure 实现 | 引用 beeline_id + version，不含 beeline 实现 |
 | **履约度量** | Metrics | 质量 / 时效 / 成本 各自的度量方式 + 目标值 | 对应 §2.1 履约指标 |
 
-> 5 块（4 + 1）按 Fulfillment 的 4 维度组织——业务意图 → 履约合同 → 履约政策 → 履约程序 → 履约度量，跟 §2.1 / §0 完全对齐。
-> 
+**机制层**（不属于 Fulfillment 维度，是实现 Fulfillment 的方式）：
+
+| 块 | 角色 | 内容 | 备注 |
+|---|---|---|---|
+| **履约程序** | Procedure（机制层） | 每类 task 1:1 绑定 1 条 beeline 作为 procedure 实现 | 引用 beeline_id + version；beeline 独立维护 |
+
+> 5 块（Fulfillment 5 维度）跟 §2.1 / §0 完全对齐——Business Fulfillment = Intent + Contract + Policy + Verifiable Result + Acceptance。
+>
+> 机制层（履约程序）**不属于 Fulfillment 维度**——procedure 是实现 Fulfillment 的一种方式（机制层），1 个 Fulfillment 可以有多种 procedure 实现。
+>
 > 1 个 definition **不包含** beeline 的**实现**——只引用 beeline_id + version。queen / schemas 是 definition 自身内容（不引用外部对象）。
 >
-> **beeline 不是履约本身**——beeline 是履约程序路径（procedure）的具体实现，不是 Business Fulfillment 本身；Business Fulfillment = Intent + Contract + Policy + Procedure（详见 §2.1）。
+> **beeline 不是履约本身**——beeline 是履约程序路径（procedure）的具体实现，不是 Business Fulfillment 的组成维度；详见 §2.1。
 
 #### 3.1.3 引用机制
 

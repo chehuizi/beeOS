@@ -21,6 +21,7 @@ flowchart TB
     Repo --> Docs[docs/ design]
     Repo --> Core[core/ kernel]
     Repo --> Boxes[boxes/ products]
+    Repo --> Beelines[beelines/ procedures]
     Repo --> Runtime[runtime/ executor]
     Repo --> Tests[tests/ verification]
 
@@ -33,8 +34,11 @@ flowchart TB
     Docs --> D7[examples/order-exception-box]
 
     Core --> C1[models.py Definition shapes]
+    Core --> C2[beeline_models.py Beeline shapes]
     Boxes --> B1[inventory_shortage Order Exception Box]
+    Beelines --> BL1[inventory_shortage procedure v12]
     Tests --> T1[test_definition.py]
+    Tests --> T2[test_beeline.py]
 ```
 
 ## 布局说明
@@ -42,7 +46,7 @@ flowchart TB
 - **`docs/`** — 设计稿（5 文件 schema + GTM + 示例盒子）
   - `beebox-design.md` — 主设计稿（架构宣言 / 核心契约 / 执行语义 / 实现设计）
   - `beebox-definition-schema.md` — beeBox Definition 数据形状
-  - `beebox-beeline-schema.md` — BeeLine / Operation 数据形状
+  - `beebox-beeline-schema.md` — beeline / Operation 数据形状
   - `beebox-runtime-design.md` — Runtime 设计
   - `beebox-runtime-schema.md` — Runtime 数据形状
   - `beeos-gtm.md` — 商业定位 / Catalog / Certification / 飞轮
@@ -51,23 +55,21 @@ flowchart TB
 - **`core/`** — 基础设施内核
   - `models.py` — Definition / Schema / Field / Task / Result / Acceptance /
     Exception / Queen / Metrics 顶层数据结构（pydantic）
+  - `beeline_models.py` — beeline / Operation / NextRef / Idempotency / Bee /
+    ExternalSystem（含 DAG 校验）
 
 - **`boxes/`** — 业务履约盒子（产品层）
   - `inventory_shortage/` — 第一只盒子：订单异常履约
-  - 每只盒子包含：`__init__.py` / `schemas.py` / `definition.py`
+  - 每只盒子包含：`__init__.py` / `schemas.py` / `definition.py` / `README.md`
+
+- **`beelines/`** — 履约作业路线（procedure 实现，独立维护）
+  - `inventory_shortage.py` — beeline_inventory_shortage_v3 v12（8 ops + 4 分支）
 
 - **`runtime/`** — 执行运行时（PoC 0 占位）
 
 - **`tests/`** — 验证
   - `test_definition.py` — Definition 数据结构加载验证
-
-## PoC 0 目标
-
-第一阶段不实现完整 runtime，只把核心数据形状 + 第一只盒子 Definition
-落地成可加载、可验证的 pydantic 模型。
-
-业务语义必须是真的（policy / contract / acceptance 完整定义）；
-基础设施可以是假的（runtime / executor / worker 都是 mock，下一阶段实现）。
+  - `test_beeline.py` — beeline 图结构 + 库存 beeline 集成验证
 
 ## 当前状态
 
@@ -77,11 +79,12 @@ flowchart LR
     Done --> S1[核心数据结构 pydantic]
     Done --> S2[库存不足盒子 schemas]
     Done --> S3[库存不足盒子 definition]
-    Done --> S4[34 个测试通过]
-    Done --> S5[清理 + README]
+    Done --> S4[beeline 数据结构 + DAG 校验]
+    Done --> S5[库存不足 beeline v12 8 ops]
+    Done --> S6[56 个测试通过]
 ```
 
-下一阶段：beeLine / Operation 实现 + Runtime 最小闭环（mock executor）。
+下一阶段：Runtime 最小闭环（进程内 executor + task_run 9 状态机）+ Acceptance 独立阶段。
 
 ## 开发
 
@@ -91,4 +94,7 @@ flowchart LR
 
 # 加载第一只盒子
 .venv/bin/python -c "from boxes.inventory_shortage import get_definition; d = get_definition(); print(d.id, d.version)"
+
+# 加载第一只 beeline
+.venv/bin/python -c "from beelines import get_beeline; b = get_beeline(); print(b.id, b.version, len(b.operations))"
 ```

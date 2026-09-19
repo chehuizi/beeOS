@@ -21,6 +21,8 @@ packages = [
     "core",
     "boxes",
     "boxes.inventory_shortage",
+    "beelines",
+    "beelines.inventory_shortage",
     "runtime",
     "tests",
 ]

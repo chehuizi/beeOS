@@ -26,6 +26,7 @@ packages = [
     "beelines.inventory_shortage",
     "beelines.modeling",
     "runtime",
+    "kanban",
     "tests",
 ]
 

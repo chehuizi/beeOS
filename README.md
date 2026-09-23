@@ -40,10 +40,12 @@ flowchart TB
     Beelines --> BL1[inventory_shortage procedure v12]
     Beelines --> BL2[business_modeling procedure v1]
     Runtime --> R1[executor + TaskRun + Acceptance]
+    Kanban --> K1[CLI 看板]
     Tests --> T1[test_definition.py]
     Tests --> T2[test_beeline.py]
     Tests --> T3[test_runtime.py]
     Tests --> T4[test_modeling_box.py]
+    Tests --> T5[test_kanban.py]
 ```
 
 ## 布局说明
@@ -78,31 +80,35 @@ flowchart TB
   - `mock_runner.py` — Mock operation runner（15 个业务 op handler 跨两条线）
   - `acceptance.py` — Acceptance 评估器（4 状态转移）
   - `queen.py` — Queen escalation hook
+  - `store.py` — TaskRunStore（JSONL 持久化 + 查询）
+
+- **`kanban/`** — 运行面板（PoC 4 落地，最小 CLI 版）
+  - `cli.py` — CLI 看板（python -m kanban.cli）
+  - `__init__.py` — 包入口
 
 - **`tests/`** — 验证
   - `test_definition.py` — Definition 数据结构加载验证
   - `test_beeline.py` — beeline 图结构 + 库存 beeline 集成验证
   - `test_runtime.py` — TaskRun / executor / acceptance 集成验证
   - `test_modeling_box.py` — 业务建模盒 definition + beeline + e2e
+  - `test_kanban.py` — TaskRunStore + CLI 渲染验证
 
 ## 当前状态
 
 ```mermaid
 flowchart LR
     Done[已完成]
-    Done --> S1[Definition 数据结构]
-    Done --> S2[库存不足盒子 schemas + definition]
-    Done --> S3[业务建模盒子 schemas + definition]
-    Done --> S4[beeline 数据结构 + DAG 校验]
-    Done --> S5[库存不足 beeline v12 8 ops]
-    Done --> S6[业务建模 beeline v1 7 ops]
-    Done --> S7[TaskRun 9 状态机 + Acceptance 4 状态]
-    Done --> S8[进程内 executor + mock runner 15 op]
-    Done --> S9[Acceptance 评估器 + Queen hook]
-    Done --> S10[两条产品线 101 测试通过]
+    Done --> S1[Definition + beeline + TaskRun 顶层数据]
+    Done --> S2[订单异常盒子 Operations Line]
+    Done --> S3[业务建模盒子 Software Line]
+    Done --> S4[2 只 beeline + 15 mock op handlers]
+    Done --> S5[进程内 executor + Acceptance 评估器]
+    Done --> S6[TaskRunStore JSONL 持久化]
+    Done --> S7[Kanban CLI 看板]
+    Done --> S8[112 个测试通过]
 ```
 
-下一阶段：RETRYING/WAITING_EXTERNAL 状态机 + 业务系统开发盒（Software Line 第二只）+ mock runner 补 acceptance 字段自动化。
+下一阶段：Kanban Web 版（HTML + 自动刷新）+ executor 自动落盘 + RETRYING 状态机。
 
 ## 开发
 
@@ -138,4 +144,7 @@ tr = create_task_run('pm', 'handle_modeling_request', box.result.result_schema, 
 tr = BeelineExecutor().execute(tr, beeline, input_data)
 print('modeling:', tr.status.value, 'result:', tr.result)
 "
+
+# 跑 Kanban CLI 看板
+.venv/bin/python -m kanban.cli
 ```

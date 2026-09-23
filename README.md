@@ -35,12 +35,15 @@ flowchart TB
 
     Core --> C1[models.py Definition shapes]
     Core --> C2[beeline_models.py Beeline shapes]
-    Boxes --> B1[inventory_shortage Order Exception Box]
+    Boxes --> B1[inventory_shortage Order Exception Box - Operations Line]
+    Boxes --> B2[modeling Business Modeling Box - Software Line]
     Beelines --> BL1[inventory_shortage procedure v12]
+    Beelines --> BL2[business_modeling procedure v1]
     Runtime --> R1[executor + TaskRun + Acceptance]
     Tests --> T1[test_definition.py]
     Tests --> T2[test_beeline.py]
     Tests --> T3[test_runtime.py]
+    Tests --> T4[test_modeling_box.py]
 ```
 
 ## 布局说明
@@ -51,7 +54,7 @@ flowchart TB
   - `beebox-beeline-schema.md` — beeline / Operation 数据形状
   - `beebox-runtime-design.md` — Runtime 设计
   - `beebox-runtime-schema.md` — Runtime 数据形状
-  - `beeos-gtm.md` — 商业定位 / Catalog / Certification / 飞轮
+  - `beeos-gtm.md` — 商业定位 / Catalog（Operations + Software 两条线）/ Certification / 飞轮
   - `examples/order-exception-box.md` — 订单异常履约盒完整示例
 
 - **`core/`** — 基础设施内核
@@ -60,17 +63,19 @@ flowchart TB
   - `beeline_models.py` — beeline / Operation / NextRef / Idempotency / Bee /
     ExternalSystem（含 DAG 校验）
 
-- **`boxes/`** — 业务履约盒子（产品层）
-  - `inventory_shortage/` — 第一只盒子：订单异常履约
-  - 每只盒子包含：`__init__.py` / `schemas.py` / `definition.py` / `README.md`
+- **`boxes/`** — 业务履约盒子（产品层，**两条产品线**）
+  - `inventory_shortage/` — 第一只盒子：订单异常履约（**Operations Line**）
+  - `modeling/` — 第二只盒子：业务建模履约（**Software Line 第一只**）
+  - 每只盒子：`__init__.py` / `schemas.py` / `definition.py` / `README.md`
 
 - **`beelines/`** — 履约作业路线（procedure 实现，独立维护）
   - `inventory_shortage.py` — beeline_inventory_shortage_v3 v12（8 ops + 4 分支）
+  - `modeling.py` — beeline_business_modeling_v1 v1（7 ops 顺序链）
 
 - **`runtime/`** — 执行运行时（PoC 2 落地）
   - `models.py` — TaskRun durable object + 9 状态机 + Acceptance 4 状态
   - `executor.py` — BeelineExecutor（顺序 / 分支 + when 评估）
-  - `mock_runner.py` — Mock operation runner（业务 op 类型映射）
+  - `mock_runner.py` — Mock operation runner（15 个业务 op handler 跨两条线）
   - `acceptance.py` — Acceptance 评估器（4 状态转移）
   - `queen.py` — Queen escalation hook
 
@@ -78,6 +83,7 @@ flowchart TB
   - `test_definition.py` — Definition 数据结构加载验证
   - `test_beeline.py` — beeline 图结构 + 库存 beeline 集成验证
   - `test_runtime.py` — TaskRun / executor / acceptance 集成验证
+  - `test_modeling_box.py` — 业务建模盒 definition + beeline + e2e
 
 ## 当前状态
 
@@ -86,15 +92,17 @@ flowchart LR
     Done[已完成]
     Done --> S1[Definition 数据结构]
     Done --> S2[库存不足盒子 schemas + definition]
-    Done --> S3[beeline 数据结构 + DAG 校验]
-    Done --> S4[库存不足 beeline v12 8 ops]
-    Done --> S5[TaskRun 9 状态机 + Acceptance 4 状态]
-    Done --> S6[进程内 executor + mock runner]
-    Done --> S7[Acceptance 评估器 + Queen hook]
-    Done --> S8[83 个测试通过]
+    Done --> S3[业务建模盒子 schemas + definition]
+    Done --> S4[beeline 数据结构 + DAG 校验]
+    Done --> S5[库存不足 beeline v12 8 ops]
+    Done --> S6[业务建模 beeline v1 7 ops]
+    Done --> S7[TaskRun 9 状态机 + Acceptance 4 状态]
+    Done --> S8[进程内 executor + mock runner 15 op]
+    Done --> S9[Acceptance 评估器 + Queen hook]
+    Done --> S10[两条产品线 101 测试通过]
 ```
 
-下一阶段：mock runner 补 acceptance 字段 + RETRYING/WAITING_EXTERNAL 状态机/
+下一阶段：RETRYING/WAITING_EXTERNAL 状态机 + 业务系统开发盒（Software Line 第二只）+ mock runner 补 acceptance 字段自动化。
 
 ## 开发
 
@@ -102,20 +110,32 @@ flowchart LR
 # Python 3.11+
 .venv/bin/python -m pytest tests/ -v
 
-# 加载第一只盒子
+# 加载运营线盒子
 .venv/bin/python -c "from boxes.inventory_shortage import get_definition; d = get_definition(); print(d.id, d.version)"
 
-# 加载第一只 beeline
-.venv/bin/python -c "from beelines import get_beeline; b = get_beeline(); print(b.id, b.version, len(b.operations))"
+# 加载软件线盒子
+.venv/bin/python -c "from boxes.modeling import get_definition; d = get_definition(); print(d.id, d.version)"
 
-# 端到端冒烟（task run + executor + acceptance）
+# 端到端冒烟（订单异常）
 .venv/bin/python -c "
 from boxes.inventory_shortage import get_definition
-from beelines import get_beeline
+from beelines.inventory_shortage import get_beeline
 from runtime import create_task_run, BeelineExecutor, evaluate_acceptance
 box = get_definition(); beeline = get_beeline()
 tr = create_task_run('o', 'handle_order_exception', box.result.result_schema, f'{box.id}@v{box.version}', beeline.id, beeline.version, 'rt', 'in')
 tr = BeelineExecutor().execute(tr, beeline, {'exception_type': 'inventory_shortage', 'amount': 100})
-print('status:', tr.status.value, 'result:', tr.result)
+print('inventory_shortage:', tr.status.value)
+"
+
+# 端到端冒烟（业务建模）
+.venv/bin/python -c "
+from boxes.modeling import get_definition
+from beelines.modeling import get_beeline
+from runtime import create_task_run, BeelineExecutor, evaluate_acceptance
+box = get_definition(); beeline = get_beeline()
+input_data = {'set_id': 'r1', 'business_goal': 'test', 'requirements': [{'requirement_id': 'req_obj_1', 'description': 'x', 'requirement_type': 'object', 'priority': 'must_have'}]}
+tr = create_task_run('pm', 'handle_modeling_request', box.result.result_schema, f'{box.id}@v{box.version}', beeline.id, beeline.version, 'rt', 'in')
+tr = BeelineExecutor().execute(tr, beeline, input_data)
+print('modeling:', tr.status.value, 'result:', tr.result)
 "
 ```

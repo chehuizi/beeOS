@@ -14,7 +14,7 @@ import pytest
 from pydantic import ValidationError
 
 from boxes.inventory_shortage import get_definition
-from beelines import get_beeline
+from beelines import get_inventory_shortage_beeline
 from core.beeline_models import Beeline, Bee, NextRef, Operation
 from core.models import AcceptanceRule, ExceptionRule, ResultDef
 from runtime import (
@@ -440,7 +440,7 @@ class TestAcceptance:
 class TestEndToEnd:
     def test_inventory_shortage_full_flow(self):
         box = get_definition()
-        beeline = get_beeline()
+        beeline = get_inventory_shortage_beeline()
 
         input_data = {
             "exception_id": "exc_001",
@@ -491,7 +491,7 @@ class TestEndToEnd:
 
     def test_inventory_shortage_event_log_trail(self):
         box = get_definition()
-        beeline = get_beeline()
+        beeline = get_inventory_shortage_beeline()
         task_run = create_task_run(
             "o", "handle_order_exception", box.result.result_schema,
             f"{box.id}@v{box.version}", beeline.id, beeline.version,

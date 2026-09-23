@@ -19,7 +19,7 @@ from core.beeline_models import (
     NextRef,
     Operation,
 )
-from beelines import INVENTORY_SHORTAGE_BEELINE, get_beeline
+from beelines import INVENTORY_SHORTAGE_BEELINE, get_inventory_shortage_beeline
 
 
 # ============================================================
@@ -217,20 +217,20 @@ class TestBeelineValidation:
 
 class TestInventoryShortageBeeline:
     def test_module_exports(self):
-        assert callable(get_beeline)
+        assert callable(get_inventory_shortage_beeline)
         assert isinstance(INVENTORY_SHORTAGE_BEELINE, Beeline)
 
     def test_id_and_version_match_definition_reference(self):
         # 必须与 boxes/inventory_shortage/definition.py 的引用一致
         # task[0].beeline_id == "beeline_inventory_shortage_v3"
         # task[0].beeline_version == 12
-        b = get_beeline()
+        b = get_inventory_shortage_beeline()
         assert b.id == "beeline_inventory_shortage_v3"
         assert b.version == 12
 
     def test_priority_chain_complete(self):
         # queen rules.exception_handling.inventory_shortage_priority 链必须全部出现
-        b = get_beeline()
+        b = get_inventory_shortage_beeline()
         op_ids = {op.op_id for op in b.operations}
         expected = {
             "diagnose_exception",
@@ -245,7 +245,7 @@ class TestInventoryShortageBeeline:
         assert expected.issubset(op_ids)
 
     def test_branches_with_conditions(self):
-        b = get_beeline()
+        b = get_inventory_shortage_beeline()
         # 每个 try_* op 必须有 1 个有 when 的 next（success 分支）+ 1 个无 when 的 next（fallback）
         for op_id in (
             "try_alternative_warehouse",
@@ -261,7 +261,7 @@ class TestInventoryShortageBeeline:
 
     def test_fan_in_at_notify_customer(self):
         # notify_customer 至少 4 个上游（4 个 try_* + calculate_compensation）
-        b = get_beeline()
+        b = get_inventory_shortage_beeline()
         targeted = {nxt.op_id for op in b.operations for nxt in op.next}
         # notify_customer 必须被 ≥ 4 个 op 指向
         upstreams = [op.op_id for op in b.operations
@@ -269,14 +269,14 @@ class TestInventoryShortageBeeline:
         assert len(upstreams) >= 4
 
     def test_terminal_escalate_to_human(self):
-        b = get_beeline()
+        b = get_inventory_shortage_beeline()
         escalate = b.get_operation("escalate_to_human")
         assert escalate is not None
         # 升级人工是终态（无 next）
         assert escalate.next == []
 
     def test_idempotency_strategies(self):
-        b = get_beeline()
+        b = get_inventory_shortage_beeline()
         # notify_customer 必须 forbidden
         notify = b.get_operation("notify_customer")
         assert notify.idempotency.mode == "forbidden"
@@ -293,7 +293,7 @@ class TestInventoryShortageBeeline:
             assert op.idempotency.key == "order_id", f"{op_id} should use order_id key"
 
     def test_entry_diagnose_exception(self):
-        b = get_beeline()
+        b = get_inventory_shortage_beeline()
         # 入口必须只有 1 个，且 input_from=external
         starts = b.get_start_operations()
         assert len(starts) == 1
@@ -302,7 +302,7 @@ class TestInventoryShortageBeeline:
 
     def test_no_cycles(self):
         # 已在 Beeline model_validator 校验，再跑一遍确保数据真实无环
-        b = get_beeline()
+        b = get_inventory_shortage_beeline()
         # 简单 DFS 三色检测：白/灰/黑
         WHITE, GRAY, BLACK = 0, 1, 2
         color = {op.op_id: WHITE for op in b.operations}

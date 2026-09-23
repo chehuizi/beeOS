@@ -121,16 +121,24 @@ class TaskRunStore:
             reverse=True,
         )[:limit]
 
-    def aggregate_metrics(self) -> dict[str, Any]:
-        """聚合统计"""
-        total = len(self._cache)
+    def aggregate_metrics(self, box_id: Optional[str] = None) -> dict[str, Any]:
+        """聚合统计
+
+        Args:
+            box_id: 可选，按 box_id 过滤
+        """
+        records = self._cache
+        if box_id is not None:
+            records = [r for r in records if r["box_id"] == box_id]
+
+        total = len(records)
         if total == 0:
             return {"total": 0}
 
-        completed = [r for r in self._cache if r["status"] == "completed"]
-        failed = [r for r in self._cache if r["status"] == "failed"]
-        accepted = [r for r in self._cache if r["acceptance_status"] == "accepted"]
-        rejected = [r for r in self._cache if r["acceptance_status"] == "rejected"]
+        completed = [r for r in records if r["status"] == "completed"]
+        failed = [r for r in records if r["status"] == "failed"]
+        accepted = [r for r in records if r["acceptance_status"] == "accepted"]
+        rejected = [r for r in records if r["acceptance_status"] == "rejected"]
 
         durations = [r["duration_ms"] for r in completed if r["duration_ms"] > 0]
         avg_duration = sum(durations) / len(durations) if durations else 0

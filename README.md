@@ -40,12 +40,13 @@ flowchart TB
     Beelines --> BL1[inventory_shortage procedure v12]
     Beelines --> BL2[business_modeling procedure v1]
     Runtime --> R1[executor + TaskRun + Acceptance]
-    Kanban --> K1[CLI 看板]
+    Kanban --> K1[CLI + Web 看板]
     Tests --> T1[test_definition.py]
     Tests --> T2[test_beeline.py]
     Tests --> T3[test_runtime.py]
     Tests --> T4[test_modeling_box.py]
     Tests --> T5[test_kanban.py]
+    Tests --> T6[test_web_kanban.py]
 ```
 
 ## 布局说明
@@ -82,8 +83,9 @@ flowchart TB
   - `queen.py` — Queen escalation hook
   - `store.py` — TaskRunStore（JSONL 持久化 + 查询）
 
-- **`kanban/`** — 运行面板（PoC 4 落地，最小 CLI 版）
+- **`kanban/`** — 运行面板（PoC 4 CLI + PoC 5 Web）
   - `cli.py` — CLI 看板（python -m kanban.cli）
+  - `web.py` — Web 看板（python -m kanban.web，HTTP server + HTML + JS）
   - `__init__.py` — 包入口
 
 - **`tests/`** — 验证
@@ -92,6 +94,7 @@ flowchart TB
   - `test_runtime.py` — TaskRun / executor / acceptance 集成验证
   - `test_modeling_box.py` — 业务建模盒 definition + beeline + e2e
   - `test_kanban.py` — TaskRunStore + CLI 渲染验证
+  - `test_web_kanban.py` — Web server + JSON API 验证
 
 ## 当前状态
 
@@ -105,10 +108,11 @@ flowchart LR
     Done --> S5[进程内 executor + Acceptance 评估器]
     Done --> S6[TaskRunStore JSONL 持久化]
     Done --> S7[Kanban CLI 看板]
-    Done --> S8[112 个测试通过]
+    Done --> S8[Kanban Web 看板 HTML + JS 自动刷新]
+    Done --> S9[120 个测试通过]
 ```
 
-下一阶段：Kanban Web 版（HTML + 自动刷新）+ executor 自动落盘 + RETRYING 状态机。
+下一阶段：executor 自动落盘 + RETRYING 状态机 + 业务系统开发盒（Software Line 第二只）。
 
 ## 开发
 
@@ -147,4 +151,7 @@ print('modeling:', tr.status.value, 'result:', tr.result)
 
 # 跑 Kanban CLI 看板
 .venv/bin/python -m kanban.cli
+
+# 跑 Kanban Web 看板（浏览器打开 http://localhost:8765）
+.venv/bin/python -m kanban.web
 ```

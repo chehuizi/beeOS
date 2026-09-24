@@ -90,6 +90,7 @@ class TestDashboardData:
         assert set(data.keys()) == {
             "box_filter",
             "boxes",
+            "box_stats",
             "status_counts",
             "acceptance_counts",
             "metrics",
@@ -132,6 +133,49 @@ class TestDashboardData:
         assert data_mod["metrics"]["total"] == 2
         assert data_mod["box_filter"] == mod_def.id
         assert data_mod["boxes"] == [mod_def.id]
+
+    def test_box_stats_per_box(self, tmp_path: Path):
+        """box_stats 应该有每只 beeBox 的聚合数据（不被 box_filter 影响）"""
+        store = TaskRunStore(path=tmp_path / "x.jsonl")
+        inv_def = get_inv_def()
+        inv_beeline = get_inv_beeline()
+        mod_def = get_mod_def()
+        mod_beeline = get_mod_beeline()
+
+        # 1 inv (accepted)
+        tr = create_task_run(
+            "o", "i", inv_def.result.result_schema, f"{inv_def.id}@v{inv_def.version}",
+            inv_beeline.id, inv_beeline.version, "rt", "in",
+        )
+        BeelineExecutor().execute(tr, inv_beeline, {"exception_type": "inventory_shortage"})
+        store.append(tr, box_id=inv_def.id, acceptance_status="accepted")
+
+        # 1 mod (rejected)
+        tr = create_task_run(
+            "pm", "i", mod_def.result.result_schema, f"{mod_def.id}@v{mod_def.version}",
+            mod_beeline.id, mod_beeline.version, "rt", "in",
+        )
+        BeelineExecutor().execute(tr, mod_beeline, {
+            "set_id": "s1", "business_goal": "x",
+            "requirements": [{"requirement_id": "r1", "description": "x", "requirement_type": "object", "priority": "must_have"}],
+        })
+        store.append(tr, box_id=mod_def.id, acceptance_status="rejected")
+
+        # box_stats 应该有两盒子的聚合数据
+        stats = dashboard_data(store)["box_stats"]
+        assert len(stats) == 2
+
+        inv_stat = next(s for s in stats if s["box_id"] == inv_def.id)
+        assert inv_stat["total"] == 1
+        assert inv_stat["accepted"] == 1
+        assert inv_stat["rejected"] == 0
+        assert inv_stat["acceptance_rate"] == "100.0%"
+
+        mod_stat = next(s for s in stats if s["box_id"] == mod_def.id)
+        assert mod_stat["total"] == 1
+        assert mod_stat["accepted"] == 0
+        assert mod_stat["rejected"] == 1
+        assert mod_stat["acceptance_rate"] == "0.0%"
 
 
 # ============================================================

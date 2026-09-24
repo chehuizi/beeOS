@@ -72,9 +72,35 @@ def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[s
     else:
         boxes = all_boxes
 
+    # Per-box stats（每只 beeBox 的聚合数据，给 3D 渲染用）
+    # 单盒视图时：只过滤出当前盒；多盒视图时：所有盒
+    box_stats = []
+    target_boxes = [box_filter] if box_filter else all_boxes
+    for b in target_boxes:
+        b_records = [r for r in store._cache if r["box_id"] == b]
+        b_total = len(b_records)
+        b_accepted = sum(1 for r in b_records if r["acceptance_status"] == "accepted")
+        b_rejected = sum(1 for r in b_records if r["acceptance_status"] == "rejected")
+        b_rate = f"{b_accepted / b_total * 100:.1f}%" if b_total > 0 else "0.0%"
+        # 额外：最近一次 task_run + 该盒的 beeline / intent
+        latest = next(
+            (r for r in sorted(b_records, key=lambda x: x["created_at"], reverse=True)),
+            None,
+        )
+        box_stats.append({
+            "box_id": b,
+            "total": b_total,
+            "accepted": b_accepted,
+            "rejected": b_rejected,
+            "acceptance_rate": b_rate,
+            "last_run_at": latest["created_at"] if latest else None,
+            "last_run_status": latest["acceptance_status"] if latest else None,
+        })
+
     return {
         "box_filter": box_filter,
         "boxes": boxes,
+        "box_stats": box_stats,
         "status_counts": status_counts,
         "acceptance_counts": acc_counts,
         "metrics": store.aggregate_metrics(box_id=box_filter),
@@ -88,7 +114,7 @@ def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[s
 # ============================================================
 
 
-HTML_PAGE = """<!DOCTYPE html>
+HTML_PAGE = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -96,29 +122,74 @@ HTML_PAGE = """<!DOCTYPE html>
 <style>
   body {{
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    margin: 0; padding: 24px; background: #f8fafc; color: #0f172a;
+    margin: 0; padding: 32px;
+    background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+    color: #0f172a; min-height: 100vh;
   }}
-  h1 {{ margin: 0 0 8px 0; font-size: 22px; }}
-  .subtitle {{ color: #64748b; font-size: 13px; margin-bottom: 24px; }}
-  .section {{ margin-bottom: 24px; }}
+  h1 {{ margin: 0 0 8px 0; font-size: 26px; font-weight: 700; }}
+  .subtitle {{ color: #64748b; font-size: 13px; margin-bottom: 32px; }}
+
+  /* ===== Filter chips ===== */
+  .filter-bar {{ margin-bottom: 32px; }}
+  .filter-bar a {{
+    display: inline-block; padding: 6px 14px; margin-right: 8px;
+    background: white; border: 1px solid #e2e8f0; border-radius: 18px;
+    text-decoration: none; color: #475569; font-size: 13px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    transition: all 0.2s;
+  }}
+  .filter-bar a:hover {{ transform: translateY(-1px); box-shadow: 0 4px 8px rgba(0,0,0,0.1); }}
+  .filter-bar a.active {{
+    background: linear-gradient(135deg, #2563eb, #1d4ed8);
+    color: white; border-color: transparent;
+  }}
+  .refresh-tag {{ float: right; color: #94a3b8; font-size: 11px; }}
+
+  /* ===== 3D beeBox (SVG isometric) ===== */
+  .boxes-scene {{
+    display: flex; flex-wrap: wrap; gap: 60px;
+    margin-bottom: 32px;
+    padding: 32px 16px;
+    justify-content: center;
+  }}
+  /* 单盒视图：盒子放大 */
+  .boxes-scene.single {{
+    padding: 48px 16px 32px;
+  }}
+  .boxes-scene.single .beebox-svg {{
+    width: 440px; height: auto;
+  }}
+  .beebox-svg {{
+    display: block;
+    transition: transform 0.3s ease;
+    cursor: pointer;
+    filter: drop-shadow(0 16px 24px rgba(0,0,0,0.18));
+  }}
+  .beebox-svg:hover {{
+    transform: translateY(-6px) scale(1.02);
+  }}
+  .beebox-svg .front-bg {{ fill: #ffffff; }}
+  .beebox-svg text {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif; }}
+  .beebox-svg .box-name {{ font-size: 13px; font-weight: 700; fill: #0f172a; }}
+  .beebox-svg .box-line {{ font-size: 9px; fill: #64748b; letter-spacing: 0.5px; }}
+  .beebox-svg .stat-label {{ font-size: 9px; fill: #64748b; letter-spacing: 0.3px; }}
+  .beebox-svg .stat-value {{ font-size: 18px; font-weight: 700; }}
+  .beebox-svg .bee-tag {{ font-size: 10px; fill: rgba(255,255,255,0.9); font-weight: 600; letter-spacing: 1px; }}
+  .beebox-svg .last-run {{ font-size: 9px; fill: #64748b; }}
+  .beebox-svg .last-run-val {{ font-size: 11px; font-weight: 600; }}
+
+  /* ===== Section titles + tables ===== */
+  .section {{ margin-bottom: 32px; }}
   .section-title {{
     font-size: 12px; font-weight: 600; color: #64748b;
-    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;
   }}
-  .cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }}
-  .card {{
-    background: white; border: 1px solid #e2e8f0; border-radius: 8px;
-    padding: 16px;
-  }}
-  .card-label {{ font-size: 11px; color: #64748b; text-transform: uppercase; }}
-  .card-value {{ font-size: 24px; font-weight: 600; margin-top: 4px; }}
-  .card-value.accepted {{ color: #16a34a; }}
-  .card-value.rejected {{ color: #dc2626; }}
-  .card-value.completed {{ color: #2563eb; }}
-  .card-value.failed {{ color: #dc2626; }}
+
+  /* ===== Tables ===== */
   table {{
     width: 100%; border-collapse: collapse; background: white;
     border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
   }}
   th, td {{ padding: 8px 12px; text-align: left; font-size: 13px; border-bottom: 1px solid #f1f5f9; }}
   th {{ background: #f1f5f9; font-weight: 600; color: #475569; }}
@@ -128,21 +199,17 @@ HTML_PAGE = """<!DOCTYPE html>
   .acc-accepted {{ color: #16a34a; font-weight: 600; }}
   .acc-rejected {{ color: #dc2626; font-weight: 600; }}
   .acc-pending {{ color: #64748b; }}
-  .empty {{ color: #94a3b8; font-style: italic; padding: 12px; background: white; border: 1px solid #e2e8f0; border-radius: 8px; }}
-  .filter-bar {{ margin-bottom: 16px; }}
-  .filter-bar a {{
-    display: inline-block; padding: 4px 12px; margin-right: 8px;
-    background: white; border: 1px solid #e2e8f0; border-radius: 16px;
-    text-decoration: none; color: #475569; font-size: 12px;
+  .empty {{
+    color: #94a3b8; font-style: italic; padding: 16px;
+    background: white; border: 1px solid #e2e8f0; border-radius: 8px;
+    text-align: center;
   }}
-  .filter-bar a.active {{ background: #2563eb; color: white; border-color: #2563eb; }}
-  .refresh-tag {{ float: right; color: #94a3b8; font-size: 11px; }}
 </style>
 </head>
 <body>
   <h1>beeOS Kanban — Operational Dashboard</h1>
   <div class="subtitle">
-    Running view of beeBox task runs · auto-refresh every 2s
+    3D view of beeBoxes in flight · auto-refresh every 2s
     <span class="refresh-tag" id="last-refresh">never</span>
   </div>
 
@@ -160,15 +227,8 @@ async function fetchData() {{
   return await resp.json();
 }}
 
-function renderCard(label, value, cssClass) {{
-  return `<div class="card">
-    <div class="card-label">${{label}}</div>
-    <div class="card-value ${{cssClass || ''}}">${{value}}</div>
-  </div>`;
-}}
-
 function renderFilters(boxes, current) {{
-  let html = `<a href="/" class="${{current ? '' : 'active'}}">All boxes</a>`;
+  let html = `<a href="/" class="${{current ? '' : 'active'}}">All beeBoxes</a>`;
   for (const b of boxes) {{
     const active = current === b ? 'active' : '';
     html += `<a href="/?box=${{encodeURIComponent(b)}}" class="${{active}}">${{b}}</a>`;
@@ -176,8 +236,92 @@ function renderFilters(boxes, current) {{
   return html;
 }}
 
+function lineOf(boxId) {{
+  if (boxId.includes('modeling') || boxId.includes('development') || boxId.includes('test') || boxId.includes('deploy') || boxId.includes('operation')) return 'software';
+  return 'operations';
+}}
+
+function healthOf(box) {{
+  if (!box || box.total === 0) return 'none';
+  const rate = box.acceptance_rate;
+  const n = parseFloat(rate);
+  if (n >= 80) return 'good';
+  if (n >= 50) return 'warn';
+  return 'bad';
+}}
+
+function renderBeeBox(box, isSingle) {{
+  const line = lineOf(box.box_id);
+  const health = healthOf(box);
+  const safeId = box.box_id.replace(/[^a-zA-Z0-9]/g, '_');
+
+  // 产品线色
+  const colors = line === 'operations'
+    ? {{ top: ['#1e40af', '#3b82f6'], right: ['#1e3a8a', '#2563eb'] }}
+    : {{ top: ['#7c3aed', '#a78bfa'], right: ['#5b21b6', '#7c3aed'] }};
+
+  // 健康度色（仅用于侧条）
+  const healthColor = {{ good: '#16a34a', warn: '#f59e0b', bad: '#dc2626', none: '#cbd5e1' }}[health];
+
+  // 单盒视图：盒子名居中放在前面板
+  const nameY = isSingle ? 130 : 130;
+  const lineY = isSingle ? 155 : 155;
+
+  return `<svg class="beebox-svg" viewBox="0 0 320 220">
+    <defs>
+      <linearGradient id="top-${{safeId}}" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="${{colors.top[0]}}" />
+        <stop offset="100%" stop-color="${{colors.top[1]}}" />
+      </linearGradient>
+      <linearGradient id="right-${{safeId}}" x1="0%" y1="0%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="${{colors.right[0]}}" />
+        <stop offset="100%" stop-color="${{colors.right[1]}}" />
+      </linearGradient>
+      <pattern id="honey-${{safeId}}" x="0" y="0" width="24" height="20" patternUnits="userSpaceOnUse">
+        <polygon points="12,0 24,5 24,15 12,20 0,15 0,5"
+                 fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="1" />
+      </pattern>
+    </defs>
+
+    <!-- Drop shadow -->
+    <ellipse cx="160" cy="215" rx="140" ry="6" fill="rgba(0,0,0,0.18)" />
+
+    <!-- Right face -->
+    <polygon points="280,40 320,0 320,180 280,220"
+             fill="url(#right-${{safeId}})" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" />
+
+    <!-- Top face -->
+    <polygon points="0,40 280,40 320,0 40,0"
+             fill="url(#top-${{safeId}})" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" />
+    <polygon points="0,40 280,40 320,0 40,0"
+             fill="url(#honey-${{safeId}})" />
+
+    <!-- Front face -->
+    <polygon points="0,40 280,40 280,220 0,220"
+             class="front-bg" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" />
+
+    <!-- Health bar (left edge accent) -->
+    <rect x="14" y="60" width="5" height="130" fill="${{healthColor}}" rx="2" />
+
+    <!-- Box name (centered on front face) -->
+    <text x="140" y="${{nameY}}" class="box-name" text-anchor="middle" font-size="15">${{box.box_id}}</text>
+    <text x="140" y="${{lineY}}" class="box-line" text-anchor="middle">${{line.toUpperCase()}} LINE · BEEBOX</text>
+
+    <!-- Bee tag on top face -->
+    <text x="20" y="28" class="bee-tag">🐝 beeBox</text>
+  </svg>`;
+}}
+
+function renderCard(label, value, cssClass) {{
+  return `<div class="card">
+    <div class="card-label">${{label}}</div>
+    <div class="card-value ${{cssClass || ''}}">${{value}}</div>
+  </div>`;
+}}
+
 function render(data) {{
   const box = data.box_filter;
+  const isSingle = !!box;
 
   document.getElementById('filter-bar').innerHTML = renderFilters(data.boxes, box);
   document.getElementById('last-refresh').textContent =
@@ -185,81 +329,21 @@ function render(data) {{
 
   let html = '';
 
-  // Status counts
-  html += `<div class="section"><div class="section-title">Status Counts</div><div class="cards">`;
-  const statusKeys = Object.keys(data.status_counts);
-  if (statusKeys.length === 0) {{
-    html += `<div class="empty">(no task runs)</div>`;
-  }} else {{
-    for (const k of statusKeys.sort()) {{
-      html += renderCard(k, data.status_counts[k], k);
+  // 3D beeBoxes scene（单盒视图 / 多盒视图）
+  if (data.box_stats && data.box_stats.length > 0) {{
+    const sceneClass = isSingle ? 'boxes-scene single' : 'boxes-scene';
+    const title = isSingle
+      ? `beeBox · ${{box}}`
+      : `beeBoxes in Flight (${{data.box_stats.length}})`;
+    html += `<div class="section"><div class="section-title">${{title}}</div>`;
+    html += `<div class="${{sceneClass}}">`;
+    for (const b of data.box_stats) {{
+      html += renderBeeBox(b, isSingle);
     }}
-  }}
-  html += `</div></div>`;
-
-  // Acceptance
-  html += `<div class="section"><div class="section-title">Acceptance Outcomes</div><div class="cards">`;
-  const accKeys = Object.keys(data.acceptance_counts);
-  if (accKeys.length === 0) {{
-    html += `<div class="empty">(no acceptance results)</div>`;
+    html += `</div></div>`;
   }} else {{
-    for (const k of accKeys.sort()) {{
-      html += renderCard(k, data.acceptance_counts[k], k);
-    }}
+    html += `<div class="empty">(no beeBoxes registered)</div>`;
   }}
-  html += `</div></div>`;
-
-  // Aggregate metrics
-  const m = data.metrics;
-  html += `<div class="section"><div class="section-title">Aggregate Metrics</div><div class="cards">`;
-  for (const [k, v] of Object.entries(m)) {{
-    html += renderCard(k, v);
-  }}
-  html += `</div></div>`;
-
-  // Recent task runs
-  html += `<div class="section"><div class="section-title">Recent Task Runs</div>`;
-  if (data.recent.length === 0) {{
-    html += `<div class="empty">(no task runs yet)</div>`;
-  }} else {{
-    html += `<table>
-      <thead><tr>
-        <th>task_run_id</th><th>box</th><th>status</th>
-        <th>acceptance</th><th>duration</th><th>ops</th>
-      </tr></thead><tbody>`;
-    for (const r of data.recent) {{
-      const dur = r.duration_ms > 0 ? r.duration_ms + 'ms' : '<1ms';
-      const acc = r.acceptance_status || 'pending';
-      html += `<tr>
-        <td>${{r.task_run_id.slice(0, 12)}}</td>
-        <td>${{r.box_id}}</td>
-        <td class="status-${{r.status}}">${{r.status}}</td>
-        <td class="acc-${{acc}}">${{acc}}</td>
-        <td>${{dur}}</td>
-        <td>${{r.op_count}}</td>
-      </tr>`;
-    }}
-    html += `</tbody></table>`;
-  }}
-  html += `</div>`;
-
-  // Active exceptions
-  html += `<div class="section"><div class="section-title">Active Exceptions</div>`;
-  if (data.exceptions.length === 0) {{
-    html += `<div class="empty">(no active exceptions)</div>`;
-  }} else {{
-    html += `<table><thead><tr><th>task_run_id</th><th>box</th><th>status</th><th>exceptions</th></tr></thead><tbody>`;
-    for (const r of data.exceptions) {{
-      html += `<tr>
-        <td>${{r.task_run_id.slice(0, 8)}}</td>
-        <td>${{r.box_id}}</td>
-        <td class="status-${{r.status}}">${{r.status}}</td>
-        <td>${{r.exception_count}}</td>
-      </tr>`;
-    }}
-    html += `</tbody></table>`;
-  }}
-  html += `</div>`;
 
   document.getElementById('content').innerHTML = html;
 }}

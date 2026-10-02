@@ -157,3 +157,14 @@ class TaskRunStore:
     def list_boxes(self) -> list[str]:
         """所有出现过的 box_id"""
         return sorted({r["box_id"] for r in self._cache})
+
+    def view(self, box_ids: set[str]) -> "TaskRunStore":
+        """只含指定 box 记录的内存视图（不写文件、不影响原 store）
+
+        用于看板只展示已注册盒子——未注册盒子的历史记录保留在 JSONL
+        审计日志里，只是不显示。
+        """
+        v = TaskRunStore.__new__(TaskRunStore)
+        v.path = self.path
+        v._cache = [r for r in self._cache if r["box_id"] in box_ids]
+        return v

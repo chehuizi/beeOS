@@ -11,8 +11,8 @@ CLI 输出（终端友好的纯文本）：
   ====================================
   
   Boxes Registered
-    - inventory_shortage (Operations Line)
-    - business_modeling (Software Line)
+    - inventory_shortage (Order Fulfillment)
+    - business_modeling (Software Delivery)
   
   Status Counts
     completed:  10
@@ -185,7 +185,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    store = TaskRunStore(path=args.store)
+    from kanban.trigger import registered_box_ids
+
+    # 看板只展示已注册盒子；未注册盒子的历史记录留在审计日志里
+    store = TaskRunStore(path=args.store).view(registered_box_ids())
     print(render_dashboard(store, box_filter=args.box))
     return 0
 

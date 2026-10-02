@@ -197,6 +197,38 @@ class TestTaskRunStore:
 
         assert set(store.list_boxes()) == {inv_def.id, mod_def.id}
 
+    def test_view_filters_unregistered_boxes(self, store: TaskRunStore):
+        """view() 返回只含指定 box 的内存视图；原 store 不受影响"""
+        inv_def = get_inv_def()
+        inv_beeline = get_inv_beeline()
+        mod_def = get_mod_def()
+        mod_beeline = get_mod_beeline()
+
+        tr = create_task_run(
+            "o", "i", inv_def.result.result_schema, f"{inv_def.id}@v{inv_def.version}",
+            inv_beeline.id, inv_beeline.version, "rt", "in",
+        )
+        BeelineExecutor().execute(tr, inv_beeline, {"exception_type": "inventory_shortage"})
+        store.append(tr, box_id=inv_def.id)
+
+        tr = create_task_run(
+            "pm", "i", mod_def.result.result_schema, f"{mod_def.id}@v{mod_def.version}",
+            mod_beeline.id, mod_beeline.version, "rt", "in",
+        )
+        BeelineExecutor().execute(tr, mod_beeline, {
+            "set_id": "s1", "business_goal": "x",
+            "requirements": [{"requirement_id": "r1", "description": "x", "requirement_type": "object", "priority": "must_have"}],
+        })
+        store.append(tr, box_id=mod_def.id)
+
+        v = store.view({mod_def.id})
+        assert v.list_boxes() == [mod_def.id]
+        assert len(v.list_recent()) == 1
+        assert v.aggregate_metrics()["total"] == 1
+        # 原 store 不受影响
+        assert len(store.list_recent()) == 2
+        assert set(store.list_boxes()) == {inv_def.id, mod_def.id}
+
 
 # ============================================================
 # Kanban CLI 渲染

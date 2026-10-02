@@ -83,9 +83,10 @@ flowchart TB
   - `queen.py` — Queen escalation hook
   - `store.py` — TaskRunStore（JSONL 持久化 + 查询）
 
-- **`kanban/`** — 运行面板（PoC 4 CLI + PoC 5 Web）
+- **`kanban/`** — 运行面板（PoC 4 CLI + PoC 5 Web + task 投料口）
   - `cli.py` — CLI 看板（python -m kanban.cli）
-  - `web.py` — Web 看板（python -m kanban.web，HTTP server + HTML + JS）
+  - `web.py` — Web 看板（python -m kanban.web，HTTP server + HTML + JS + POST /api/trigger）
+  - `trigger.py` — task 触发入口（BOX_REGISTRY + trigger_task：校验 → 执行 → 验收 → 落盘）
   - `__init__.py` — 包入口
 
 - **`tests/`** — 验证

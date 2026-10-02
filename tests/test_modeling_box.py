@@ -291,3 +291,123 @@ class TestModelingEndToEnd:
         task_run = BeelineExecutor().execute(task_run, beeline, minimal)
         assert task_run.status == TaskRunStatus.COMPLETED
         assert task_run.result["requirement_coverage"] == 100.0
+
+
+# ============================================================
+# Mock 数据流语义（parse 透传载荷 / classify 按真实 type / 覆盖率真算）
+# ============================================================
+
+
+class TestModelingMockSemantics:
+    def _run(self, requirements, set_id="req_sem"):
+        box = get_definition()
+        beeline = get_beeline()
+        task_run = create_task_run(
+            "pm", "handle_modeling_request", box.result.result_schema,
+            f"{box.id}@v{box.version}", beeline.id, beeline.version,
+            "rt", "in",
+        )
+        return BeelineExecutor().execute(
+            task_run, beeline,
+            {"set_id": set_id, "business_goal": "g", "requirements": requirements},
+        )
+
+    def test_classify_by_declared_type_not_id_suffix(self):
+        """分类按声明的 requirement_type，id 尾号不影响分类"""
+        task_run = self._run([
+            # 尾号 4 旧逻辑会误判为 rule，但声明是 metric
+            {"requirement_id": "req_4", "description": "x", "requirement_type": "metric", "priority": "must_have"},
+            # 尾号 7 旧逻辑会误判为 metric，但声明是 object
+            {"requirement_id": "req_7", "description": "x", "requirement_type": "object", "priority": "must_have"},
+        ])
+        by_type = task_run.operations["classify_requirements"].output["by_type"]
+        assert by_type["metric"] == ["req_4"]
+        assert by_type["object"] == ["req_7"]
+
+    def test_five_types_all_present_accepted(self):
+        """五类需求齐全（含 goal）：goal 不计入覆盖率，4 类全覆盖 → ACCEPTED"""
+        reqs = [
+            {"requirement_id": f"r_{t}", "description": "x", "requirement_type": t, "priority": "must_have"}
+            for t in ("object", "rule", "process", "metric", "goal")
+        ]
+        box = get_definition()
+        task_run = self._run(reqs)
+        assert task_run.result["requirement_coverage"] == 100.0
+        assert task_run.result["metrics_defined"] is True
+        assert evaluate_acceptance(task_run, box.result).status == AcceptanceStatus.ACCEPTED
+
+    def test_no_metric_requirement_rejected(self):
+        """无 metric 类需求 → metrics_defined=False → REJECTED"""
+        box = get_definition()
+        task_run = self._run([
+            {"requirement_id": "r_obj", "description": "x", "requirement_type": "object", "priority": "must_have"},
+        ])
+        assert task_run.result["requirement_coverage"] == 100.0
+        assert task_run.result["metrics_defined"] is False
+        assert evaluate_acceptance(task_run, box.result).status == AcceptanceStatus.REJECTED
+
+    def test_invalid_type_excluded_from_coverage(self):
+        """type 非法的需求被 parse 剔除，不进覆盖率分母"""
+        task_run = self._run([
+            {"requirement_id": "r_ok", "description": "x", "requirement_type": "object", "priority": "must_have"},
+            {"requirement_id": "r_bad", "description": "x", "requirement_type": "bogus", "priority": "must_have"},
+        ])
+        parse_out = task_run.operations["parse_requirements"].output
+        assert parse_out["valid_ids"] == ["r_ok"]
+        assert parse_out["parse_errors"] == ["invalid requirement_type for r_bad"]
+        assert task_run.result["requirement_coverage"] == 100.0
+        assert task_run.result["requirement_count"] == 1
+
+    def test_coverage_verifier_detects_uncovered(self):
+        """coverage_verifier 真实对比：未被 trace 覆盖的需求进入 uncovered"""
+        from runtime.mock_runner import MockRunner
+        out = MockRunner().run("coverage_verifier", {
+            "set_id": "s",
+            "modelable_ids": ["r1", "r2", "r3"],
+            "entities": [{"entity_id": "e1", "name": "E", "trace_to": "r1"}],
+            "rules": [{"rule_id": "ru2", "condition": "c", "action": "a", "trace_to": "r2"}],
+            "processes": [],
+            "metrics": [],
+        })
+        assert out["__coverage__"] == round(100.0 * 2 / 3, 2)
+        assert out["__uncovered__"] == ["r3"]
+
+    def test_consistency_checker_detects_broken_reference(self):
+        """consistency_checker 真实检查：trace_to 指向无效需求 → reference_integrity=False"""
+        from runtime.mock_runner import MockRunner
+        out = MockRunner().run("consistency_checker", {
+            "set_id": "s",
+            "valid_ids": ["r1"],
+            "entities": [{"entity_id": "e1", "name": "E", "trace_to": "r_ghost"}],
+            "rules": [],
+            "processes": [],
+            "metrics": [],
+        })
+        assert out["__reference_integrity__"] is False
+        assert out["__broken_references__"] == ["e1"]
+
+    def test_business_goal_flows_to_package(self):
+        """business_goal 从输入一路透传到最终 package"""
+        task_run = self._run([
+            {"requirement_id": "r_obj", "description": "x", "requirement_type": "object", "priority": "must_have"},
+        ])
+        assert task_run.result["business_goal"] == "g"
+    def test_event_type_produces_domain_event(self):
+        """event 类需求 → 领域事件元素（DDD 战术设计），计入覆盖率；不指派聚合根"""
+        task_run = self._run([
+            {"requirement_id": "r_obj", "description": "订单", "requirement_type": "object", "priority": "must_have"},
+            {"requirement_id": "r_evt", "description": "退款已完成", "requirement_type": "event", "priority": "must_have"},
+            {"requirement_id": "r_met", "description": "时长", "requirement_type": "metric", "priority": "must_have"},
+        ])
+        events = task_run.operations["generate_model_elements"].output["events"]
+        assert events == [
+            {"event_id": "evt_r_evt", "name": "退款已完成",
+             "pattern": "domain_event", "trace_to": "r_evt"}
+        ]
+        assert task_run.result["requirement_coverage"] == 100.0
+        model = task_run.result["model_elements"]
+        assert model["domain_events"][0]["pattern"] == "domain_event"
+        # 聚合根是一致性边界，没有不变量分析就不指派
+        assert "aggregate_roots" not in model
+        # object 一律建模为实体
+        assert all(e["pattern"] == "entity" for e in model["entities"])

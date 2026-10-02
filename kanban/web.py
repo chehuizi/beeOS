@@ -19,6 +19,8 @@ URL：
   GET /             → HTML 页面
   GET /api/data     → JSON（boxes / status / acceptance / metrics / recent）
   GET /api/data?box=...  → JSON（过滤单个 box）
+  POST /api/trigger → 触发 1 次履约（box_id + task_type + payload）
+  POST /api/structure → 自然语言业务表述 → TASK IN 结构化表达（text → payload）
 """
 
 from __future__ import annotations
@@ -32,6 +34,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from kanban.trigger import (
+    TriggerError,
+    box_meta,
+    list_task_entries,
+    registered_box_ids,
+    structure_business_text,
+    trigger_task,
+)
 from runtime.store import TaskRunStore
 
 
@@ -43,8 +53,11 @@ from runtime.store import TaskRunStore
 def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[str, Any]:
     """生成看板 JSON 数据
 
-    与 CLI render_dashboard 共用同一份数据源（TaskRunStore）
+    与 CLI render_dashboard 共用同一份数据源（TaskRunStore）。
+    只展示已注册盒子（BOX_REGISTRY）——未注册盒子的历史记录留在
+    审计日志里，看板不显示。
     """
+    store = store.view(registered_box_ids())
     records = store._cache
     if box_filter:
         records = [r for r in records if r["box_id"] == box_filter]
@@ -72,7 +85,7 @@ def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[s
     else:
         boxes = all_boxes
 
-    # Per-box stats（每只 beeBox 的聚合数据，给 3D 渲染用）
+    # Per-box stats（每只 beeBox 的聚合数据，给盒子渲染用）
     # 单盒视图时：只过滤出当前盒；多盒视图时：所有盒
     box_stats = []
     target_boxes = [box_filter] if box_filter else all_boxes
@@ -89,12 +102,14 @@ def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[s
         )
         box_stats.append({
             "box_id": b,
+            "meta": box_meta(b),
             "total": b_total,
             "accepted": b_accepted,
             "rejected": b_rejected,
             "acceptance_rate": b_rate,
             "last_run_at": latest["created_at"] if latest else None,
             "last_run_status": latest["acceptance_status"] if latest else None,
+            "task_entries": list_task_entries(b),
         })
 
     return {
@@ -118,7 +133,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>beeOS Kanban</title>
+<title>BeeBox Fulfillment Overview — beeOS Kanban</title>
 <style>
   body {{
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -127,10 +142,19 @@ HTML_PAGE = f"""<!DOCTYPE html>
     color: #0f172a; min-height: 100vh;
   }}
   h1 {{ margin: 0 0 8px 0; font-size: 26px; font-weight: 700; }}
-  .subtitle {{ color: #64748b; font-size: 13px; margin-bottom: 32px; }}
+  .subtitle {{ color: #64748b; font-size: 13px; }}
+  .page-head {{
+    display: flex; justify-content: space-between; align-items: flex-start;
+    gap: 24px; margin-bottom: 24px;
+  }}
+  .head-right {{
+    display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+    padding-top: 6px;
+  }}
+  .refresh-tag {{ color: #94a3b8; font-size: 11px; }}
 
   /* ===== Filter chips ===== */
-  .filter-bar {{ margin-bottom: 32px; }}
+  .filter-bar {{ }}
   .filter-bar a {{
     display: inline-block; padding: 6px 14px; margin-right: 8px;
     background: white; border: 1px solid #e2e8f0; border-radius: 18px;
@@ -143,40 +167,102 @@ HTML_PAGE = f"""<!DOCTYPE html>
     background: linear-gradient(135deg, #2563eb, #1d4ed8);
     color: white; border-color: transparent;
   }}
-  .refresh-tag {{ float: right; color: #94a3b8; font-size: 11px; }}
 
-  /* ===== 3D beeBox (SVG isometric) ===== */
+  /* ===== 3D cube beeBox（CSS 3D 玻璃盒） ===== */
   .boxes-scene {{
-    display: flex; flex-wrap: wrap; gap: 60px;
-    margin-bottom: 32px;
-    padding: 32px 16px;
+    display: flex; flex-wrap: wrap; gap: 80px;
+    margin-bottom: 32px; padding: 48px 16px 32px;
     justify-content: center;
   }}
-  /* 单盒视图：盒子放大 */
-  .boxes-scene.single {{
-    padding: 48px 16px 32px;
+  .cube-scene {{
+    perspective: 1200px;
+    width: var(--cw); height: var(--ch);
+    position: relative; flex: 0 0 auto;
   }}
-  .boxes-scene.single .beebox-svg {{
-    width: 440px; height: auto;
+  .cube-float {{
+    width: 100%; height: 100%;
+    transform-style: preserve-3d;
+    animation: cube-float 5s ease-in-out infinite;
   }}
-  .beebox-svg {{
-    display: block;
-    transition: transform 0.3s ease;
-    cursor: pointer;
-    filter: drop-shadow(0 16px 24px rgba(0,0,0,0.18));
+  @keyframes cube-float {{
+    0%, 100% {{ transform: translateY(0); }}
+    50% {{ transform: translateY(-7px); }}
   }}
-  .beebox-svg:hover {{
-    transform: translateY(-6px) scale(1.02);
+  .cube {{
+    position: relative; width: 100%; height: 100%;
+    transform-style: preserve-3d;
+    transition: transform 0.25s ease-out;
   }}
-  .beebox-svg .front-bg {{ fill: #ffffff; }}
-  .beebox-svg text {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif; }}
-  .beebox-svg .box-name {{ font-size: 13px; font-weight: 700; fill: #0f172a; }}
-  .beebox-svg .box-line {{ font-size: 9px; fill: #64748b; letter-spacing: 0.5px; }}
-  .beebox-svg .stat-label {{ font-size: 9px; fill: #64748b; letter-spacing: 0.3px; }}
-  .beebox-svg .stat-value {{ font-size: 18px; font-weight: 700; }}
-  .beebox-svg .bee-tag {{ font-size: 10px; fill: rgba(255,255,255,0.9); font-weight: 600; letter-spacing: 1px; }}
-  .beebox-svg .last-run {{ font-size: 9px; fill: #64748b; }}
-  .beebox-svg .last-run-val {{ font-size: 11px; font-weight: 600; }}
+  .cube-face {{
+    position: absolute; box-sizing: border-box;
+    border: 1px solid var(--edge);
+    background: linear-gradient(135deg, rgba(255,255,255,0.16), rgba(255,255,255,0.03) 55%, rgba(255,255,255,0.08));
+    box-shadow: inset 0 0 30px rgba(255,255,255,0.05);
+  }}
+  .cube-front {{
+    width: var(--cw); height: var(--ch); left: 0; top: 0;
+    transform: translateZ(calc(var(--cd) / 2));
+  }}
+  /* 玻璃高光斜纹 */
+  .cube-front::after {{
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(115deg, transparent 30%, rgba(255,255,255,0.15) 42%, transparent 55%);
+  }}
+  .cube-back {{
+    width: var(--cw); height: var(--ch); left: 0; top: 0;
+    transform: rotateY(180deg) translateZ(calc(var(--cd) / 2));
+    background: linear-gradient(135deg, var(--tint), rgba(255,255,255,0.02));
+  }}
+  .cube-left {{
+    width: var(--cd); height: var(--ch);
+    left: calc((var(--cw) - var(--cd)) / 2); top: 0;
+    transform: rotateY(-90deg) translateZ(calc(var(--cw) / 2));
+  }}
+  .cube-right {{
+    width: var(--cd); height: var(--ch);
+    left: calc((var(--cw) - var(--cd)) / 2); top: 0;
+    transform: rotateY(90deg) translateZ(calc(var(--cw) / 2));
+    background: linear-gradient(135deg, var(--tint), rgba(255,255,255,0.03));
+  }}
+  .cube-top {{
+    width: var(--cw); height: var(--cd);
+    left: 0; top: calc((var(--ch) - var(--cd)) / 2);
+    transform: rotateX(90deg) translateZ(calc(var(--ch) / 2));
+    background: linear-gradient(135deg, rgba(255,255,255,0.20), var(--tint));
+  }}
+  .cube-bottom {{
+    width: var(--cw); height: var(--cd);
+    left: 0; top: calc((var(--ch) - var(--cd)) / 2);
+    transform: rotateX(-90deg) translateZ(calc(var(--ch) / 2));
+    background: var(--tint);
+  }}
+  /* 地面软阴影 */
+  .cube-shadow {{
+    position: absolute; left: 6%; right: 6%; bottom: -30px; height: 30px;
+    background: radial-gradient(ellipse at center, rgba(15,23,42,0.22), transparent 70%);
+    filter: blur(4px); pointer-events: none;
+  }}
+  /* 2D 履约盒舞台 */
+  #box2d-stage {{
+    width: 560px; height: 420px; flex: 0 0 auto;
+  }}
+  #box2d-stage svg {{ display: block; }}
+  .cube-caption {{ text-align: center; margin-top: 34px; }}
+  .cube-caption .name, .beebox-nameplate .name {{ font-size: 15px; font-weight: 700; color: #0f172a; }}
+  .cube-caption .name .bid, .beebox-nameplate .name .bid {{
+    color: #94a3b8; font-weight: 400; font-size: 11px; margin-left: 6px;
+  }}
+  .cube-caption .spec {{ display: inline-block; text-align: left; margin-top: 8px; }}
+  .spec-row {{ display: flex; font-size: 10px; line-height: 1.8; }}
+  .spec-row .k {{
+    width: 118px; text-align: right; color: #94a3b8;
+    letter-spacing: 0.8px; padding-right: 10px;
+  }}
+  .spec-row .v {{ color: #334155; font-weight: 600; }}
+  .health-dot {{
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    margin-right: 6px; vertical-align: 1px;
+  }}
 
   /* ===== Section titles + tables ===== */
   .section {{ margin-bottom: 32px; }}
@@ -204,16 +290,149 @@ HTML_PAGE = f"""<!DOCTYPE html>
     background: white; border: 1px solid #e2e8f0; border-radius: 8px;
     text-align: center;
   }}
+
+  /* ===== BeeBox 边界（中间整块区域就是履约盒子） ===== */
+  .beebox-frame {{
+    border: 2px solid #475569; border-radius: 16px;
+    background: rgba(255,255,255,0.45);
+    box-shadow: 0 4px 16px rgba(15,23,42,0.06);
+  }}
+  .beebox-nameplate {{
+    display: flex; align-items: baseline; gap: 20px; flex-wrap: wrap;
+    padding: 12px 20px; border-bottom: 1.5px solid #64748b;
+  }}
+  .beebox-nameplate .name {{ font-size: 16px; }}
+  .beebox-nameplate .spec {{ display: flex; gap: 18px; margin-top: 0; flex-wrap: wrap; }}
+  .beebox-nameplate .spec-row {{ display: flex; gap: 6px; font-size: 10px; line-height: 1.8; }}
+  .beebox-nameplate .spec-row .k {{ width: auto; text-align: left; padding-right: 0; }}
+  .beebox-body {{
+    display: flex; gap: 12px; align-items: center; justify-content: center;
+    padding: 16px; flex-wrap: wrap; row-gap: 24px;
+  }}
+  .port {{
+    width: 300px; background: white; border: 1px solid #e2e8f0;
+    border-radius: 10px; padding: 14px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+  }}
+  .port-title {{
+    font-size: 11px; font-weight: 700; color: #64748b;
+    letter-spacing: 0.8px; margin-bottom: 10px;
+  }}
+  .port select {{
+    width: 100%; box-sizing: border-box; padding: 6px 8px; margin-bottom: 8px;
+    border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; background: white;
+  }}
+  .trigger-btn {{
+    width: 100%; padding: 8px 0; border: none; border-radius: 6px; font-size: 13px;
+    background: linear-gradient(135deg, #2563eb, #1d4ed8);
+    color: white; cursor: pointer; font-weight: 600;
+  }}
+  .trigger-btn:hover {{ opacity: 0.9; }}
+  .trigger-btn:disabled {{ opacity: 0.5; cursor: default; }}
+  #task-payload {{
+    width: 100%; box-sizing: border-box; padding: 8px; margin-bottom: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px; border: 1px solid #cbd5e1; border-radius: 6px;
+  }}
+  .trigger-result {{ margin-top: 8px; font-size: 12px; color: #475569; min-height: 16px; word-break: break-all; }}
+  .trigger-result.ok {{ color: #16a34a; font-weight: 600; }}
+  .trigger-result.err {{ color: #dc2626; font-weight: 600; }}
+
+  /* 自然语言业务表述区（在 BeeBox 边界之外——它是 originator 的角色） */
+  .nl-row {{
+    display: flex; flex-direction: column; align-items: flex-start;
+    margin-top: 4px; padding-left: 72px;
+  }}
+  .nl-arrow {{
+    font-size: 26px; color: #94a3b8; margin: 2px 0 4px 130px; user-select: none;
+  }}
+  .nl-panel {{ border-style: dashed; }}
+  .nl-panel textarea {{
+    width: 100%; box-sizing: border-box; padding: 8px; margin-bottom: 8px;
+    font-size: 12px; border: 1px solid #cbd5e1; border-radius: 6px;
+    font-family: inherit; line-height: 1.6;
+  }}
+
+  /* 盒子内部：2D 流水线（矩形工位 + 状态灯 + 方向箭头 + task 令牌） */
+  .port-2d {{ fill: #0f172a; stroke-width: 4; }}
+  .port-in-2d {{ stroke: #f59e0b; }}
+  .port-out-2d {{ stroke: #14b8a6; }}
+  .port-label {{ font-size: 9px; fill: #94a3b8; text-anchor: middle; letter-spacing: 1px; }}
+  .op-node .station {{ fill: #ffffff; stroke: #94a3b8; stroke-width: 1.4; transition: all 0.25s; }}
+  .op-node .lamp {{ fill: #cbd5e1; transition: fill 0.25s; }}
+  .op-node text {{ fill: #64748b; transition: fill 0.25s; }}
+  .op-node.active .station {{ fill: #dbeafe; stroke: #2563eb; stroke-width: 2; }}
+  .op-node.active .lamp {{ fill: #2563eb; }}
+  .op-node.active text {{ fill: #1d4ed8; font-weight: 700; }}
+  .op-node.done .station {{ fill: #dcfce7; stroke: #16a34a; }}
+  .op-node.done .lamp {{ fill: #16a34a; }}
+  .op-node.done text {{ fill: #15803d; }}
+  .op-node.failed .station {{ fill: #fee2e2; stroke: #dc2626; stroke-width: 2; }}
+  .op-node.failed .lamp {{ fill: #dc2626; }}
+  .op-node.failed text {{ fill: #b91c1c; font-weight: 700; }}
+  .op-link {{ stroke: #cbd5e1; stroke-width: 1.5; }}
+  .op-label {{ font-size: 10px; text-anchor: middle; }}
+  .token-2d {{ transition: transform 0.32s ease; }}
+  .token-2d rect {{
+    fill: #f59e0b; stroke: #ffffff; stroke-width: 1.5;
+    filter: drop-shadow(0 0 5px rgba(245,158,11,0.8));
+  }}
+
+  /* artifacts 出口卡片 */
+  .artifact-card {{
+    border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px;
+    font-size: 12px; background: #f8fafc;
+  }}
+  .artifact-badge {{
+    display: inline-block; padding: 2px 10px; border-radius: 10px;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.5px; margin-bottom: 6px;
+  }}
+  .badge-accepted {{ background: #dcfce7; color: #15803d; }}
+  .badge-rejected {{ background: #fee2e2; color: #b91c1c; }}
+  .badge-failed {{ background: #fee2e2; color: #b91c1c; }}
+  .artifact-card .tid {{ color: #94a3b8; font-size: 10px; word-break: break-all; }}
+  .artifact-card details {{ margin-top: 6px; }}
+  .artifact-card summary {{ cursor: pointer; color: #64748b; font-size: 11px; }}
+  .artifact-card pre {{
+    font-size: 10px; background: white; border: 1px solid #e2e8f0;
+    border-radius: 6px; padding: 6px; overflow-x: auto; max-height: 180px;
+  }}
+
+  /* DDD 战术设计视图（业务建模盒的产出物 = 业务模型） */
+  .ddd-model {{ margin-top: 8px; border-top: 1px dashed #e2e8f0; padding-top: 8px; }}
+  .ddd-goal {{ font-size: 11px; color: #475569; font-style: italic; margin-bottom: 8px; }}
+  .ddd-group {{ margin-bottom: 8px; }}
+  .ddd-pattern {{
+    display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: 0.8px;
+    padding: 1px 7px; border-radius: 8px; margin-bottom: 4px;
+  }}
+  .pat-entity {{ background: #dbeafe; color: #1d4ed8; }}
+  .pat-specification {{ background: #ede9fe; color: #6d28d9; }}
+  .pat-domain_service {{ background: #ccfbf1; color: #0f766e; }}
+  .pat-domain_event {{ background: #fef9c3; color: #a16207; }}
+  .pat-domain_metric {{ background: #f1f5f9; color: #475569; }}
+  .ddd-el {{
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 11px; padding: 2px 0 2px 4px;
+  }}
+  .ddd-name {{ color: #0f172a; font-weight: 600; }}
+  .ddd-trace {{
+    color: #94a3b8; font-size: 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }}
 </style>
 </head>
 <body>
-  <h1>beeOS Kanban — Operational Dashboard</h1>
-  <div class="subtitle">
-    3D view of beeBoxes in flight · auto-refresh every 2s
-    <span class="refresh-tag" id="last-refresh">never</span>
+  <div class="page-head">
+    <div>
+      <h1>BeeBox Fulfillment Overview</h1>
+      <div class="subtitle">beeOS Kanban · live view · auto-refresh every 2s</div>
+    </div>
+    <div class="head-right">
+      <span class="refresh-tag" id="last-refresh">never</span>
+      <div class="filter-bar" id="filter-bar"></div>
+    </div>
   </div>
-
-  <div class="filter-bar" id="filter-bar"></div>
 
   <div id="content">Loading...</div>
 
@@ -236,9 +455,14 @@ function renderFilters(boxes, current) {{
   return html;
 }}
 
-function lineOf(boxId) {{
-  if (boxId.includes('modeling') || boxId.includes('development') || boxId.includes('test') || boxId.includes('deploy') || boxId.includes('operation')) return 'software';
-  return 'operations';
+// 价值流 → 配色（归属数据来自服务端 box.meta，声明式，不再按 box_id 关键词猜测）
+const VS_PALETTE = {{
+  'Software Delivery': ['rgba(124,58,237,0.10)', 'rgba(124,58,237,0.40)'],
+  'Order Fulfillment': ['rgba(59,130,246,0.10)', 'rgba(37,99,235,0.40)'],
+}};
+
+function vsPalette(box) {{
+  return VS_PALETTE[(box.meta || {{}}).value_stream] || ['rgba(59,130,246,0.10)', 'rgba(37,99,235,0.40)'];
 }}
 
 function healthOf(box) {{
@@ -250,66 +474,177 @@ function healthOf(box) {{
   return 'bad';
 }}
 
-function renderBeeBox(box, isSingle) {{
-  const line = lineOf(box.box_id);
-  const health = healthOf(box);
-  const safeId = box.box_id.replace(/[^a-zA-Z0-9]/g, '_');
+// 盒子铭牌：Line 是价值流，Box 是业务责任单元
+function captionHtml(box) {{
+  const meta = box.meta || {{}};
+  const healthColor = {{ good: '#16a34a', warn: '#f59e0b', bad: '#dc2626', none: '#cbd5e1' }}[healthOf(box)];
+  const row = (k, v) => `<div class="spec-row"><span class="k">${{k}}</span><span class="v">${{v ?? '—'}}</span></div>`;
+  return `<div class="name"><span class="health-dot" style="background:${{healthColor}}"></span>${{meta.display_name || box.box_id}}<span class="bid">${{box.box_id}}</span></div>
+    <div class="spec">
+      ${{row('VALUE STREAM', meta.value_stream)}}
+      ${{row('ROLE', meta.role)}}
+      ${{row('RUNS', box.total)}}
+      ${{row('ACCEPTANCE', box.acceptance_rate)}}
+    </div>`;
+}}
 
-  // 产品线色
-  const colors = line === 'operations'
-    ? {{ top: ['#1e40af', '#3b82f6'], right: ['#1e3a8a', '#2563eb'] }}
-    : {{ top: ['#7c3aed', '#a78bfa'], right: ['#5b21b6', '#7c3aed'] }};
+// ===== 履约盒子空间状态（跨 2s 刷新保持） =====
+let _boxState = {{ opStates: {{}}, token: null, artifact: null, running: false, tilt: null }};
+let _lastData = null;
 
-  // 健康度色（仅用于侧条）
-  const healthColor = {{ good: '#16a34a', warn: '#f59e0b', bad: '#dc2626', none: '#cbd5e1' }}[health];
+function layout2D(ops) {{
+  // 蛇形两排布局（盒内 560x420 画布）：row1 左→右（y=130），row2 右→左（y=235）
+  // IN 对齐 row1 高度（直入），OUT 对齐 row2 高度；排间转换在右端（x 对齐，垂直下落）
+  // 间距按完整 op 名设计（不省略），最长 21 字符也能放得下
+  const pos = {{}};
+  const n = ops.length;
+  if (n === 0) return pos;
+  const perRow = Math.ceil(n / 2);
+  const spread = (count) => {{
+    if (count === 1) return [270];
+    const arr = [];
+    for (let i = 0; i < count; i++) arr.push(Math.round(90 + (360 / (count - 1)) * i));
+    return arr;
+  }};
+  const xs1 = spread(perRow);
+  for (let i = 0; i < perRow; i++) pos[ops[i]] = {{ x: xs1[i], y: 130 }};
+  const rest = ops.slice(perRow);
+  const xs2 = spread(rest.length);
+  for (let i = 0; i < rest.length; i++) pos[rest[i]] = {{ x: xs2[rest.length - 1 - i], y: 235 }};
+  pos._in = {{ x: 30, y: 130 }};
+  pos._out = {{ x: 528, y: 235 }};
+  return pos;
+}}
 
-  // 单盒视图：盒子名居中放在前面板
-  const nameY = isSingle ? 130 : 130;
-  const lineY = isSingle ? 155 : 155;
-
-  return `<svg class="beebox-svg" viewBox="0 0 320 220">
+function initBox2D(container, ops) {{
+  // 2D 履约盒内部：IN/OUT 端口 + 流水线工位（矩形机器 + 状态灯）+ task 令牌
+  // 正交布线：横平竖直 + 盒底出口通道，无交叉；令牌沿折线轨道走
+  // 盒子边界由外层 .beebox-frame 承担（这里不再画内框）
+  // 对外 api：setOpState / moveToken / reset
+  const pos = layout2D(ops);
+  const EXIT_Y = 310, EXIT_X = 508;   // 盒底出口通道
+  let s = `<svg viewBox="0 0 560 420" style="width:100%;height:100%">
     <defs>
-      <linearGradient id="top-${{safeId}}" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" stop-color="${{colors.top[0]}}" />
-        <stop offset="100%" stop-color="${{colors.top[1]}}" />
-      </linearGradient>
-      <linearGradient id="right-${{safeId}}" x1="0%" y1="0%" x2="100%" y2="0%">
-        <stop offset="0%" stop-color="${{colors.right[0]}}" />
-        <stop offset="100%" stop-color="${{colors.right[1]}}" />
-      </linearGradient>
-      <pattern id="honey-${{safeId}}" x="0" y="0" width="24" height="20" patternUnits="userSpaceOnUse">
-        <polygon points="12,0 24,5 24,15 12,20 0,15 0,5"
-                 fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="1" />
-      </pattern>
-    </defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 1.5 L 8 5 L 0 8.5" fill="none" stroke="#94a3b8" stroke-width="1.6"/>
+      </marker>
+    </defs>`;
 
-    <!-- Drop shadow -->
-    <ellipse cx="160" cy="215" rx="140" ry="6" fill="rgba(0,0,0,0.18)" />
+  // 流水线：IN → op1 → ... → opN → 盒底通道 → OUT（带方向箭头）
+  const chain = ['_in', ...ops, '_out'];
+  const pathTo = {{}};   // key → 到达该节点的折线途径点（不含终点）
+  for (let i = 0; i < chain.length - 1; i++) {{
+    const a = pos[chain[i]], b = pos[chain[i + 1]];
+    let pts;
+    if (chain[i + 1] === '_out') {{
+      // 末工位 → 垂直下到盒底通道 → 沿通道向右 → 向上到 OUT 高度 → 进 OUT
+      pts = [[a.x, a.y], [a.x, EXIT_Y], [EXIT_X, EXIT_Y], [EXIT_X, b.y], [b.x, b.y]];
+      pathTo._out = pts.slice(1, -1);
+    }} else {{
+      pts = [[a.x, a.y], [b.x, b.y]];
+    }}
+    s += `<polyline points="${{pts.map(p => p.join(',')).join(' ')}}" class="op-link" fill="none" marker-end="url(#arrow)" />`;
+  }}
 
-    <!-- Right face -->
-    <polygon points="280,40 320,0 320,180 280,220"
-             fill="url(#right-${{safeId}})" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" />
+  // IN / OUT 端口
+  s += `<circle cx="${{pos._in.x}}" cy="${{pos._in.y}}" r="13" class="port-2d port-in-2d" />
+    <text x="${{pos._in.x}}" y="${{pos._in.y + 30}}" class="port-label">IN</text>
+    <circle cx="${{pos._out.x}}" cy="${{pos._out.y}}" r="13" class="port-2d port-out-2d" />
+    <text x="${{pos._out.x}}" y="${{pos._out.y + 30}}" class="port-label">OUT</text>`;
 
-    <!-- Top face -->
-    <polygon points="0,40 280,40 320,0 40,0"
-             fill="url(#top-${{safeId}})" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" />
-    <polygon points="0,40 280,40 320,0 40,0"
-             fill="url(#honey-${{safeId}})" />
+  // 工位：矩形机器 + 右上角状态灯 + 下方标签
+  for (const op of ops) {{
+    const p = pos[op];
+    s += `<g class="op-node" id="op-${{op}}">
+      <rect class="station" x="${{p.x - 34}}" y="${{p.y - 17}}" width="68" height="34" rx="8" />
+      <circle class="lamp" cx="${{p.x + 26}}" cy="${{p.y - 9}}" r="4" />
+      <text x="${{p.x}}" y="${{p.y + 34}}" class="op-label">${{op}}</text>
+    </g>`;
+  }}
 
-    <!-- Front face -->
-    <polygon points="0,40 280,40 280,220 0,220"
-             class="front-bg" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" />
+  // task 令牌（包裹）
+  s += `<g id="task-token" class="token-2d" style="display:none"><rect x="-9" y="-7" width="18" height="14" rx="3" /></g>`;
+  s += '</svg>';
+  container.innerHTML = s;
 
-    <!-- Health bar (left edge accent) -->
-    <rect x="14" y="60" width="5" height="130" fill="${{healthColor}}" rx="2" />
+  const token = container.querySelector('#task-token');
+  let hideWhenDone = false;
+  // 沿折线逐段移动（CSS transition 提供段内平滑）
+  const runLegs = (pts, i) => {{
+    token.style.transform = `translate(${{pts[i][0]}}px, ${{pts[i][1]}}px)`;
+    if (i + 1 < pts.length) {{
+      setTimeout(() => runLegs(pts, i + 1), 340);
+    }} else if (hideWhenDone) {{
+      hideWhenDone = false;
+      setTimeout(() => {{ token.style.display = 'none'; }}, 340);
+    }}
+  }};
+  return {{
+    setOpState(opId, state) {{
+      const g = container.querySelector('#op-' + opId);
+      if (g) g.setAttribute('class', 'op-node ' + state);
+    }},
+    moveToken(key) {{
+      if (key === null) {{
+        // 若令牌正在折线上走，等走完后隐藏；否则直接隐藏
+        hideWhenDone = true;
+        setTimeout(() => {{ if (hideWhenDone) {{ hideWhenDone = false; token.style.display = 'none'; }} }}, 400);
+        return;
+      }}
+      const p = pos[key];
+      if (!p) return;
+      hideWhenDone = false;
+      token.style.display = '';
+      runLegs([...(pathTo[key] || []), [p.x, p.y]], 0);
+    }},
+    reset() {{
+      for (const op of ops) this.setOpState(op, '');
+      hideWhenDone = false;
+      token.style.display = 'none';
+    }},
+  }};
+}}
 
-    <!-- Box name (centered on front face) -->
-    <text x="140" y="${{nameY}}" class="box-name" text-anchor="middle" font-size="15">${{box.box_id}}</text>
-    <text x="140" y="${{lineY}}" class="box-line" text-anchor="middle">${{line.toUpperCase()}} LINE · BEEBOX</text>
+function renderCube(box) {{
+  // CSS 3D 玻璃履约盒（仅用于多盒总览的小盒；单盒聚焦视图是 2D 流水线）
+  const [tint, edge] = vsPalette(box);
+  const tilt = _boxState.tilt || {{ rx: -12, ry: -16 }};
 
-    <!-- Bee tag on top face -->
-    <text x="20" y="28" class="bee-tag">🐝 beeBox</text>
-  </svg>`;
+  return `<div>
+    <div class="cube-scene" style="--cw:280px;--ch:190px;--cd:130px;">
+      <div class="cube-float">
+        <div class="cube" style="--tint:${{tint}};--edge:${{edge}};transform:rotateX(${{tilt.rx}}deg) rotateY(${{tilt.ry}}deg)">
+          <div class="cube-face cube-back"></div>
+          <div class="cube-face cube-left"></div>
+          <div class="cube-face cube-right"></div>
+          <div class="cube-face cube-top"></div>
+          <div class="cube-face cube-bottom"></div>
+          <div class="cube-face cube-front"></div>
+        </div>
+      </div>
+      <div class="cube-shadow"></div>
+    </div>
+    <div class="cube-caption">${{captionHtml(box)}}</div>
+  </div>`;
+}}
+
+function bindTilt() {{
+  // 鼠标跟随倾斜（真实感）；状态存 _boxState.tilt，跨 2s 刷新保持
+  const scene = document.querySelector('.cube-scene');
+  if (!scene) return;
+  scene.addEventListener('mousemove', (e) => {{
+    const r = scene.getBoundingClientRect();
+    const dx = (e.clientX - r.left) / r.width - 0.5;
+    const dy = (e.clientY - r.top) / r.height - 0.5;
+    _boxState.tilt = {{ rx: Math.round(-12 - dy * 10), ry: Math.round(-16 + dx * 14) }};
+    const cube = scene.querySelector('.cube');
+    if (cube) cube.style.transform = `rotateX(${{_boxState.tilt.rx}}deg) rotateY(${{_boxState.tilt.ry}}deg)`;
+  }});
+  scene.addEventListener('mouseleave', () => {{
+    _boxState.tilt = {{ rx: -12, ry: -16 }};
+    const cube = scene.querySelector('.cube');
+    if (cube) cube.style.transform = 'rotateX(-12deg) rotateY(-16deg)';
+  }});
 }}
 
 function renderCard(label, value, cssClass) {{
@@ -319,7 +654,234 @@ function renderCard(label, value, cssClass) {{
   </div>`;
 }}
 
+// DDD 战术设计视图：result.model_elements 按战术模式分组渲染
+function renderDddModel(r) {{
+  const m = r && r.model_elements;
+  if (!m) return '';
+  const PATTERNS = [
+    ['entities', 'ENTITY', 'pat-entity'],
+    ['specifications', 'SPECIFICATION', 'pat-specification'],
+    ['domain_services', 'DOMAIN SERVICE', 'pat-domain_service'],
+    ['domain_events', 'DOMAIN EVENT', 'pat-domain_event'],
+    ['domain_metrics', 'DOMAIN METRIC', 'pat-domain_metric'],
+  ];
+  let h = `<div class="ddd-model"><div class="ddd-goal">目标：${{r.business_goal || ''}}</div>`;
+  for (const [key, label, cls] of PATTERNS) {{
+    const els = m[key] || [];
+    if (!els.length) continue;
+    h += `<div class="ddd-group"><span class="ddd-pattern ${{cls}}">${{label}}</span>`;
+    for (const el of els) {{
+      const elName = el.name || el.entity_id || el.rule_id || el.process_id || el.metric_id;
+      h += `<div class="ddd-el"><span class="ddd-name">${{elName}}</span><span class="ddd-trace">← ${{el.trace_to || ''}}</span></div>`;
+    }}
+    h += `</div>`;
+  }}
+  h += '</div>';
+  return h;
+}}
+
+function renderArtifact() {{
+  const a = _boxState.artifact;
+  if (!a) return `<div class="empty" style="padding:24px 8px;">(等待产出)</div>`;
+  const acc = a.acceptance_status || a.status || 'unknown';
+  const badge = acc === 'accepted' ? 'badge-accepted' : 'badge-rejected';
+  return `<div class="artifact-card">
+    <span class="artifact-badge ${{badge}}">${{acc.toUpperCase()}}</span>
+    <div class="tid">task_run ${{a.task_run_id}}</div>
+    ${{renderDddModel(a.result)}}
+    <details><summary>raw JSON</summary><pre>${{JSON.stringify(a.result, null, 2)}}</pre></details>
+  </div>`;
+}}
+
+let _scene2d = null;      // 2D 场景 api（随 shell 持久，不被 2s 刷新重建）
+let _shellBox = null;   // 当前 shell 属于哪个 box
+
+function buildShell(boxId, box, entries) {{
+  // 静态 shell：只建一次——工位图 DOM 不随 2s 刷新重建
+  window._taskEntries = {{}};
+  let options = '';
+  let ops = [];
+  for (const e of entries) {{
+    window._taskEntries[e.task_type] = e.sample_payload;
+    options += `<option value="${{e.task_type}}">${{e.task_type}}</option>`;
+    if (e.beeline_ops && e.beeline_ops.length > 0) ops = e.beeline_ops;
+  }}
+  document.getElementById('content').innerHTML = `<div class="section">
+    <div class="beebox-frame">
+      <div class="beebox-nameplate" id="cube-caption"></div>
+      <div class="beebox-body">
+        <div class="port">
+          <div class="port-title">TASK IN · 投料口（业务流程 / 业务规则的结构化表达）</div>
+          <select id="task-type" onchange="onTaskTypeChange()">${{options}}</select>
+          <textarea id="task-payload" rows="10" spellcheck="false"></textarea>
+          <button class="trigger-btn" id="trigger-btn" onclick="triggerTask('${{boxId}}')">▶ 履约</button>
+          <div id="trigger-result" class="trigger-result"></div>
+        </div>
+        <div id="box2d-stage"></div>
+        <div class="port">
+          <div class="port-title">ARTIFACTS OUT · 产出口（领域模型）</div>
+          <div id="artifact-slot"></div>
+        </div>
+      </div>
+    </div>
+    <div class="nl-row">
+      <div class="nl-arrow">⇧</div>
+      <div class="port nl-panel">
+        <div class="port-title">业务表述 · 自然语言</div>
+        <textarea id="nl-input" rows="5" spellcheck="false" placeholder="用自然语言描述业务。首句是业务目标，之后每句是一条业务事实，例如：&#10;建模订单退款流程。退款必须在 7 天内完成。退款申请走主管审批流程。退款已完成要通知财务。退款处理时长要可度量。"></textarea>
+        <button class="trigger-btn" id="structure-btn" onclick="structureText()">⇧ 抽象为 TASK IN 结构化表达</button>
+        <div id="structure-result" class="trigger-result"></div>
+      </div>
+    </div>
+  </div>`;
+  onTaskTypeChange();
+
+  const stage = document.getElementById('box2d-stage');
+  _scene2d = ops.length > 0 ? initBox2D(stage, ops) : null;
+  // shell 重建后恢复工位状态
+  if (_scene2d) {{
+    for (const op of ops) _scene2d.setOpState(op, _boxState.opStates[op] || '');
+  }}
+  _lastArtifactKey = null;   // shell 重建后 slot 是新 DOM，强制重渲 artifact
+  renderArtifactInto();
+}}
+
+let _lastArtifactKey = null;   // 已渲染的 artifact 标识（内容没变就不重建 DOM，保留 details 开合状态）
+
+function renderArtifactInto() {{
+  const slot = document.getElementById('artifact-slot');
+  if (!slot) return;
+  const a = _boxState.artifact;
+  const key = a ? `${{a.task_run_id}}|${{a.acceptance_status}}` : 'none';
+  if (key === _lastArtifactKey) return;
+  _lastArtifactKey = key;
+  slot.innerHTML = renderArtifact();
+}}
+
+function updateCaption(box) {{
+  const el = document.getElementById('cube-caption');
+  if (!el) return;
+  el.innerHTML = captionHtml(box);
+}}
+
+function onTaskTypeChange() {{
+  const typeEl = document.getElementById('task-type');
+  const payloadEl = document.getElementById('task-payload');
+  if (!typeEl || !payloadEl) return;
+  const sample = (window._taskEntries || {{}})[typeEl.value] || {{}};
+  payloadEl.value = JSON.stringify(sample, null, 2);
+}}
+
+function sleep(ms) {{ return new Promise(r => setTimeout(r, ms)); }}
+
+// 自然语言 → TASK IN 结构化表达（POST /api/structure），结果填入投料口
+async function structureText() {{
+  const resultEl = document.getElementById('structure-result');
+  const btn = document.getElementById('structure-btn');
+  const text = document.getElementById('nl-input').value;
+  if (!text.trim()) {{
+    resultEl.className = 'trigger-result err';
+    resultEl.textContent = '先用自然语言描述业务';
+    return;
+  }}
+  btn.disabled = true;
+  resultEl.className = 'trigger-result';
+  resultEl.textContent = '结构化中...';
+  try {{
+    const resp = await fetch('/api/structure', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{text: text}}),
+    }});
+    const data = await resp.json();
+    if (!resp.ok) {{
+      resultEl.className = 'trigger-result err';
+      resultEl.textContent = '结构化失败: ' + (data.error || resp.status);
+    }} else {{
+      document.getElementById('task-payload').value = JSON.stringify(data.payload, null, 2);
+      resultEl.className = 'trigger-result ok';
+      resultEl.textContent = `已抽象为 ${{data.requirement_count}} 条业务需求 ↑ 进入 TASK IN`;
+    }}
+  }} catch (e) {{
+    resultEl.className = 'trigger-result err';
+    resultEl.textContent = '请求失败: ' + e.message;
+  }}
+  btn.disabled = false;
+}}
+
+async function triggerTask(boxId) {{
+  const resultEl = document.getElementById('trigger-result');
+  const btn = document.getElementById('trigger-btn');
+  const taskType = document.getElementById('task-type').value;
+  let payload;
+  try {{
+    payload = JSON.parse(document.getElementById('task-payload').value);
+  }} catch (e) {{
+    resultEl.className = 'trigger-result err';
+    resultEl.textContent = 'payload JSON 解析失败: ' + e.message;
+    return;
+  }}
+  _boxState.running = true;
+  btn.disabled = true;
+  resultEl.className = 'trigger-result';
+  resultEl.textContent = '履约中...';
+  try {{
+    const resp = await fetch('/api/trigger', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{box_id: boxId, task_type: taskType, payload: payload}}),
+    }});
+    const data = await resp.json();
+    if (!resp.ok) {{
+      resultEl.className = 'trigger-result err';
+      resultEl.textContent = '触发失败: ' + (data.error || resp.status);
+    }} else {{
+      // 在 2D 盒子内部回放真实执行轨迹（op_trace 来自服务端真实执行）
+      const trace = data.op_trace || [];
+      _boxState.opStates = {{}};
+      _boxState.artifact = null;
+      renderArtifactInto();
+      if (_scene2d) {{
+        _scene2d.reset();
+        _scene2d.moveToken('_in');
+      }}
+      await sleep(600);
+      for (const step of trace) {{
+        _boxState.opStates[step.op_id] = 'active';
+        if (_scene2d) {{
+          _scene2d.setOpState(step.op_id, 'active');
+          _scene2d.moveToken(step.op_id);
+        }}
+        await sleep(600);
+        const st = step.status === 'completed' ? 'done' : 'failed';
+        _boxState.opStates[step.op_id] = st;
+        if (_scene2d) _scene2d.setOpState(step.op_id, st);
+      }}
+      // 令牌流向 OUT 口 → 产出 artifact
+      if (_scene2d) _scene2d.moveToken('_out');
+      await sleep(600);
+      if (_scene2d) _scene2d.moveToken(null);
+      _boxState.artifact = {{
+        task_run_id: data.task_run_id,
+        status: data.status,
+        acceptance_status: data.acceptance_status,
+        result: data.result,
+      }};
+      renderArtifactInto();
+      resultEl.className = 'trigger-result ' + (data.acceptance_status === 'accepted' ? 'ok' : 'err');
+      resultEl.textContent = `task_run ${{data.task_run_id.slice(0, 8)}}… → ${{data.status}} / ${{data.acceptance_status || 'n/a'}}`;
+    }}
+  }} catch (e) {{
+    resultEl.className = 'trigger-result err';
+    resultEl.textContent = '请求失败: ' + e.message;
+  }}
+  _boxState.running = false;
+  btn.disabled = false;
+  tick();
+}}
+
 function render(data) {{
+  _lastData = data;
   const box = data.box_filter;
   const isSingle = !!box;
 
@@ -327,25 +889,33 @@ function render(data) {{
   document.getElementById('last-refresh').textContent =
     'refreshed ' + new Date().toLocaleTimeString();
 
-  let html = '';
+  // 单盒视图：静态 shell + 动态小更新（WebGL 场景常驻）
+  if (isSingle && data.box_stats && data.box_stats.length > 0) {{
+    if (_shellBox !== box) {{
+      buildShell(box, data.box_stats[0], data.box_stats[0].task_entries || []);
+      _shellBox = box;
+    }}
+    updateCaption(data.box_stats[0]);
+    renderArtifactInto();
+    return;
+  }}
 
-  // 3D beeBoxes scene（单盒视图 / 多盒视图）
+  // 多盒视图 / 空态：重建 DOM（CSS 立方体，无 WebGL 状态）
+  _shellBox = null;
+  _scene2d = null;
+  let html = '';
   if (data.box_stats && data.box_stats.length > 0) {{
-    const sceneClass = isSingle ? 'boxes-scene single' : 'boxes-scene';
-    const title = isSingle
-      ? `beeBox · ${{box}}`
-      : `beeBoxes in Flight (${{data.box_stats.length}})`;
-    html += `<div class="section"><div class="section-title">${{title}}</div>`;
-    html += `<div class="${{sceneClass}}">`;
+    html += `<div class="section"><div class="section-title">beeBoxes in Flight (${{data.box_stats.length}})</div>`;
+    html += `<div class="boxes-scene">`;
     for (const b of data.box_stats) {{
-      html += renderBeeBox(b, isSingle);
+      html += renderCube(b);
     }}
     html += `</div></div>`;
   }} else {{
     html += `<div class="empty">(no beeBoxes registered)</div>`;
   }}
-
   document.getElementById('content').innerHTML = html;
+  bindTilt();
 }}
 
 async function tick() {{
@@ -371,11 +941,16 @@ setInterval(tick, 2000);
 # ============================================================
 
 
+VENDOR_DIR = Path(__file__).resolve().parent / "vendor"
+
+
 class KanbanRequestHandler(BaseHTTPRequestHandler):
     """Kanban HTTP handler
 
     GET /             → HTML page
     GET /api/data     → JSON dashboard data
+    GET /vendor/*     → 本地化前端依赖（three.js 等）
+    POST /api/trigger → 触发 1 次履约（{box_id, task_type, payload}）
     """
 
     # 注入 store 实例（在 main 时设置）
@@ -390,8 +965,70 @@ class KanbanRequestHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/data":
             box_filter = (qs.get("box") or [None])[0] or None
             self._serve_json(box_filter)
+        elif parsed.path.startswith("/vendor/"):
+            self._serve_vendor(parsed.path[len("/vendor/"):])
         else:
             self.send_error(404)
+
+    def _serve_vendor(self, rel: str) -> None:
+        """静态服务 kanban/vendor/ 下的前端依赖（防路径穿越）"""
+        target = (VENDOR_DIR / rel).resolve()
+        if not str(target).startswith(str(VENDOR_DIR)) or not target.is_file():
+            self.send_error(404)
+            return
+        body = target.read_bytes()
+        mime = "text/javascript; charset=utf-8" if target.suffix == ".js" else "application/octet-stream"
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path not in ("/api/trigger", "/api/structure"):
+            self.send_error(404)
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except (ValueError, json.JSONDecodeError):
+            self._send_json(400, {"error": "invalid JSON body"})
+            return
+
+        if parsed.path == "/api/structure":
+            # 自然语言业务表述 → TASK IN 结构化表达（BusinessRequirementSet）
+            text = body.get("text")
+            if not isinstance(text, str) or not text.strip():
+                self._send_json(400, {"error": "body must include text (non-empty string)"})
+                return
+            payload = structure_business_text(text)
+            self._send_json(200, {
+                "payload": payload,
+                "requirement_count": len(payload["requirements"]),
+            })
+            return
+
+        box_id = body.get("box_id")
+        task_type = body.get("task_type")
+        payload = body.get("payload")
+        if not box_id or not task_type or not isinstance(payload, dict):
+            self._send_json(400, {
+                "error": "body must include box_id, task_type, and payload (object)",
+            })
+            return
+
+        try:
+            result = trigger_task(box_id, task_type, payload, self.store)
+        except TriggerError as e:
+            self._send_json(400, {"error": str(e)})
+            return
+        except Exception as e:
+            self._send_json(500, {"error": f"fulfillment failed: {e}"})
+            return
+
+        self._send_json(200, result)
 
     def _serve_html(self) -> None:
         body = HTML_PAGE.encode("utf-8")
@@ -403,8 +1040,11 @@ class KanbanRequestHandler(BaseHTTPRequestHandler):
 
     def _serve_json(self, box_filter: str | None) -> None:
         data = dashboard_data(self.store, box_filter=box_filter)
-        body = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
-        self.send_response(200)
+        self._send_json(200, data)
+
+    def _send_json(self, status: int, obj: Any) -> None:
+        body = json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8")
+        self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()

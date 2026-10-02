@@ -17,9 +17,14 @@ kanban/
   __init__.py
   cli.py        # CLI 看板（python -m kanban.cli）
   web.py        # Web 看板（python -m kanban.web，HTTP server + HTML + JS）
+  trigger.py    # task 投料口（BOX_REGISTRY + trigger_task：校验 → 执行 → 验收 → 落盘）
 runtime/
-  store.py      # TaskRunStore（JSONL 持久化 + 查询）
+  store.py      # TaskRunStore（JSONL 持久化 + 查询 + view 过滤）
 ```
+
+> **可见性**：看板只展示 `BOX_REGISTRY`（trigger.py）里已注册的盒子；
+> 未注册盒子的历史记录保留在 JSONL 审计日志里，只是不显示、不可触发。
+> 当前聚焦业务建模履约盒子，`order_exception_box` 代码保留在仓库但未注册。
 
 ## CLI 入口
 
@@ -66,6 +71,7 @@ runtime/
 | `GET /` | HTML 页面 |
 | `GET /api/data` | JSON 全量 dashboard 数据 |
 | `GET /api/data?box=xxx` | JSON 单 box 数据 |
+| `POST /api/trigger` | 触发 1 次履约（`{box_id, task_type, payload}`），返回执行轨迹 `op_trace` + 验收结果 |
 
 ## 数据落盘
 

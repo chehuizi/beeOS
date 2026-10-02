@@ -39,7 +39,7 @@ BUSINESS_REQUIREMENT = SchemaDef(
         FieldDef(name="description", type="string"),
         FieldDef(
             name="requirement_type",
-            type="enum",  # object / rule / process / metric / goal
+            type="enum",  # object / rule / process / metric / goal / event
         ),
         FieldDef(
             name="priority",
@@ -83,11 +83,26 @@ BUSINESS_REQUIREMENT_SET = SchemaDef(
 
 PARSED_REQUIREMENTS = SchemaDef(
     id="schema_parsed_requirements",
-    description="解析后的需求（结构验证 + id 校验）",
+    description="解析后的需求（结构验证 + 透传有效需求载荷）",
     fields=[
         FieldDef(name="set_id", type="string"),
+        FieldDef(name="business_goal", type="string"),
         FieldDef(name="requirement_count", type="integer"),
         FieldDef(name="valid_ids", type="array", items=FieldDef(name="id", type="string")),
+        FieldDef(
+            name="requirements",
+            type="array",
+            items=FieldDef(
+                name="requirement",
+                type="object",
+                properties=[
+                    FieldDef(name="requirement_id", type="string"),
+                    FieldDef(name="description", type="string"),
+                    FieldDef(name="requirement_type", type="enum"),
+                    FieldDef(name="priority", type="enum"),
+                ],
+            ),
+        ),
         FieldDef(name="parse_errors", type="array", items=FieldDef(name="err", type="string")),
     ],
 )
@@ -95,9 +110,17 @@ PARSED_REQUIREMENTS = SchemaDef(
 
 CLASSIFIED_REQUIREMENTS = SchemaDef(
     id="schema_classified_requirements",
-    description="分类后的需求（按 type 分组）",
+    description="分类后的需求（按声明的 requirement_type 分组）",
     fields=[
         FieldDef(name="set_id", type="string"),
+        FieldDef(name="business_goal", type="string"),
+        FieldDef(name="requirement_count", type="integer"),
+        FieldDef(name="valid_ids", type="array", items=FieldDef(name="id", type="string")),
+        FieldDef(
+            name="modelable_ids",
+            type="array",
+            items=FieldDef(name="id", type="string"),
+        ),  # 可建模 4 类需求 id（覆盖率分母；goal 不计入）
         FieldDef(
             name="by_type",
             type="object",
@@ -115,9 +138,17 @@ CLASSIFIED_REQUIREMENTS = SchemaDef(
 
 MODEL_ELEMENTS = SchemaDef(
     id="schema_model_elements",
-    description="生成的模型元素（实体 / 规则 / 流程 / 指标）",
+    description="生成的模型元素（DDD 战术设计：实体 / 规格 / 领域服务 / 领域事件 / 领域指标）",
     fields=[
         FieldDef(name="set_id", type="string"),
+        FieldDef(name="business_goal", type="string"),
+        FieldDef(name="requirement_count", type="integer"),
+        FieldDef(name="valid_ids", type="array", items=FieldDef(name="id", type="string")),
+        FieldDef(
+            name="modelable_ids",
+            type="array",
+            items=FieldDef(name="id", type="string"),
+        ),
         FieldDef(
             name="entities",
             type="array",
@@ -127,7 +158,22 @@ MODEL_ELEMENTS = SchemaDef(
                 properties=[
                     FieldDef(name="entity_id", type="string"),
                     FieldDef(name="name", type="string"),
+                    FieldDef(name="pattern", type="enum"),  # entity
                     FieldDef(name="trace_to", type="string"),  # 关联 requirement_id
+                ],
+            ),
+        ),
+        FieldDef(
+            name="events",
+            type="array",
+            items=FieldDef(
+                name="event",
+                type="object",
+                properties=[
+                    FieldDef(name="event_id", type="string"),
+                    FieldDef(name="name", type="string"),
+                    FieldDef(name="pattern", type="enum"),  # domain_event
+                    FieldDef(name="trace_to", type="string"),
                 ],
             ),
         ),
@@ -139,8 +185,10 @@ MODEL_ELEMENTS = SchemaDef(
                 type="object",
                 properties=[
                     FieldDef(name="rule_id", type="string"),
+                    FieldDef(name="name", type="string"),
                     FieldDef(name="condition", type="string"),
                     FieldDef(name="action", type="string"),
+                    FieldDef(name="pattern", type="enum"),  # specification
                     FieldDef(name="trace_to", type="string"),
                 ],
             ),
@@ -154,6 +202,7 @@ MODEL_ELEMENTS = SchemaDef(
                 properties=[
                     FieldDef(name="process_id", type="string"),
                     FieldDef(name="name", type="string"),
+                    FieldDef(name="pattern", type="enum"),  # domain_service
                     FieldDef(name="trace_to", type="string"),
                 ],
             ),
@@ -168,6 +217,7 @@ MODEL_ELEMENTS = SchemaDef(
                     FieldDef(name="metric_id", type="string"),
                     FieldDef(name="name", type="string"),
                     FieldDef(name="target", type="number"),
+                    FieldDef(name="pattern", type="enum"),  # domain_metric（扩展元素）
                     FieldDef(name="trace_to", type="string"),
                 ],
             ),
@@ -185,6 +235,9 @@ MODEL_EVIDENCE = SchemaDef(
     id="schema_model_evidence",
     description="模型验证证据（机械可验 5 项）",
     fields=[
+        FieldDef(name="set_id", type="string"),
+        FieldDef(name="business_goal", type="string"),
+        FieldDef(name="requirement_count", type="integer"),
         FieldDef(name="requirement_coverage", type="number"),  # 0-100
         FieldDef(name="rule_consistency", type="boolean"),
         FieldDef(name="reference_integrity", type="boolean"),

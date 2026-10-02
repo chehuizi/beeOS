@@ -8,9 +8,9 @@ Software Line 第一只 beeline。
     ↓
   parse_requirements         （校验结构 + 提取有效 id）
     ↓
-  classify_requirements      （按 type 分组：object / rule / process / metric / goal）
+  classify_requirements      （按 type 分组：object / rule / process / metric / goal / event）
     ↓
-  generate_model_elements    （按分类生成 entity / rule / process / metric）
+  generate_model_elements    （按分类生成 DDD 战术元素：entity / specification / domain_service / domain_event / domain_metric）
     ↓
   verify_coverage            （检查 requirement_coverage）
     ↓

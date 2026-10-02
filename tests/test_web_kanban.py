@@ -125,24 +125,29 @@ class TestDashboardData:
             })
             store.append(tr, box_id=mod_def.id, acceptance_status="rejected")
 
-        # 无 filter
+        # 无 filter：未注册盒子的记录被隐藏，只剩 2 条 mod
         data = dashboard_data(store)
-        assert data["metrics"]["total"] == 3
+        assert data["metrics"]["total"] == 2
+        assert data["boxes"] == [mod_def.id]
         # 过滤 mod
         data_mod = dashboard_data(store, box_filter=mod_def.id)
         assert data_mod["metrics"]["total"] == 2
         assert data_mod["box_filter"] == mod_def.id
         assert data_mod["boxes"] == [mod_def.id]
+        # 过滤未注册盒子：空
+        data_inv = dashboard_data(store, box_filter=inv_def.id)
+        assert data_inv["metrics"]["total"] == 0
+        assert data_inv["boxes"] == []
 
     def test_box_stats_per_box(self, tmp_path: Path):
-        """box_stats 应该有每只 beeBox 的聚合数据（不被 box_filter 影响）"""
+        """box_stats 只含已注册盒子的聚合数据（未注册盒子隐藏）"""
         store = TaskRunStore(path=tmp_path / "x.jsonl")
         inv_def = get_inv_def()
         inv_beeline = get_inv_beeline()
         mod_def = get_mod_def()
         mod_beeline = get_mod_beeline()
 
-        # 1 inv (accepted)
+        # 1 inv (accepted) —— 未注册，应被隐藏
         tr = create_task_run(
             "o", "i", inv_def.result.result_schema, f"{inv_def.id}@v{inv_def.version}",
             inv_beeline.id, inv_beeline.version, "rt", "in",
@@ -161,17 +166,11 @@ class TestDashboardData:
         })
         store.append(tr, box_id=mod_def.id, acceptance_status="rejected")
 
-        # box_stats 应该有两盒子的聚合数据
         stats = dashboard_data(store)["box_stats"]
-        assert len(stats) == 2
+        assert len(stats) == 1
 
-        inv_stat = next(s for s in stats if s["box_id"] == inv_def.id)
-        assert inv_stat["total"] == 1
-        assert inv_stat["accepted"] == 1
-        assert inv_stat["rejected"] == 0
-        assert inv_stat["acceptance_rate"] == "100.0%"
-
-        mod_stat = next(s for s in stats if s["box_id"] == mod_def.id)
+        mod_stat = stats[0]
+        assert mod_stat["box_id"] == mod_def.id
         assert mod_stat["total"] == 1
         assert mod_stat["accepted"] == 0
         assert mod_stat["rejected"] == 1
@@ -203,25 +202,38 @@ class TestKanbanServer:
         resp = conn.getresponse()
         assert resp.status == 200
         data = json.loads(resp.read())
-        assert data["metrics"]["total"] == 3
-        assert len(data["boxes"]) == 2
+        # 只展示已注册盒子：2 条 inv 历史记录被隐藏，只剩 1 条 mod
+        assert data["metrics"]["total"] == 1
+        assert data["boxes"] == ["business_modeling_box"]
         assert data["box_filter"] is None
         conn.close()
 
     def test_api_data_box_filter(self, server_url: tuple[str, TaskRunStore]):
         url, store = server_url
-        inv_box_id = get_inv_def().id
+        mod_box_id = get_mod_def().id
         conn = HTTPConnection(url.replace("http://", ""))
-        conn.request("GET", f"/api/data?box={inv_box_id}")
+        conn.request("GET", f"/api/data?box={mod_box_id}")
         resp = conn.getresponse()
         assert resp.status == 200
         data = json.loads(resp.read())
-        assert data["box_filter"] == inv_box_id
-        # 2 个 inv task run
-        assert data["metrics"]["total"] == 2
+        assert data["box_filter"] == mod_box_id
+        assert data["metrics"]["total"] == 1
         # 所有 recent 的 box_id 必须匹配
         for r in data["recent"]:
-            assert r["box_id"] == inv_box_id
+            assert r["box_id"] == mod_box_id
+        conn.close()
+
+    def test_api_data_unregistered_box_hidden(self, server_url: tuple[str, TaskRunStore]):
+        """未注册盒子（order_exception_box）即使有历史记录也不显示"""
+        url, _ = server_url
+        conn = HTTPConnection(url.replace("http://", ""))
+        conn.request("GET", "/api/data?box=order_exception_box")
+        resp = conn.getresponse()
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        assert data["metrics"]["total"] == 0
+        assert data["boxes"] == []
+        assert data["recent"] == []
         conn.close()
 
     def test_api_data_unknown_box(self, server_url: tuple[str, TaskRunStore]):
@@ -234,6 +246,27 @@ class TestKanbanServer:
         # 空结果
         assert data["metrics"]["total"] == 0
         assert data["recent"] == []
+        conn.close()
+
+    def test_vendor_static_serving(self, server_url: tuple[str, TaskRunStore]):
+        """本地化前端依赖（three.js）可访问"""
+        url, _ = server_url
+        conn = HTTPConnection(url.replace("http://", ""))
+        conn.request("GET", "/vendor/three.module.js")
+        resp = conn.getresponse()
+        assert resp.status == 200
+        assert "javascript" in resp.getheader("Content-Type")
+        assert len(resp.read()) > 100_000  # three.module.js ~650KB
+        conn.close()
+
+    def test_vendor_path_traversal_blocked(self, server_url: tuple[str, TaskRunStore]):
+        """/vendor/../web.py 之类的路径穿越被拒绝"""
+        url, _ = server_url
+        conn = HTTPConnection(url.replace("http://", ""))
+        conn.request("GET", "/vendor/../web.py")
+        resp = conn.getresponse()
+        resp.read()
+        assert resp.status == 404
         conn.close()
 
     def test_404_for_unknown_path(self, server_url: tuple[str, TaskRunStore]):
@@ -254,3 +287,214 @@ class TestKanbanServer:
         assert "setInterval" in body
         assert "2000" in body  # 2 秒
         conn.close()
+
+
+# ============================================================
+# POST /api/trigger（task 投料口）
+# ============================================================
+
+
+class TestTriggerApi:
+    def _post(self, url: str, body: dict | None, raw: bytes | None = None):
+        conn = HTTPConnection(url.replace("http://", ""))
+        payload = raw if raw is not None else json.dumps(body).encode("utf-8")
+        conn.request(
+            "POST", "/api/trigger", body=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        resp = conn.getresponse()
+        data = json.loads(resp.read())
+        conn.close()
+        return resp.status, data
+
+    def test_trigger_modeling_box_accepted(self, server_url: tuple[str, TaskRunStore]):
+        """有效触发：建模盒走完整履约链 → completed + accepted，并落盘"""
+        url, store = server_url
+        before = len(store._cache)
+        status, data = self._post(url, {
+            "box_id": "business_modeling_box",
+            "task_type": "handle_modeling_request",
+            "payload": {
+                "set_id": "req_api_1",
+                "business_goal": "建模退款流程",
+                "requirements": [
+                    {"requirement_id": "r_obj", "description": "x", "requirement_type": "object", "priority": "must_have"},
+                    {"requirement_id": "r_met", "description": "x", "requirement_type": "metric", "priority": "must_have"},
+                ],
+            },
+        })
+        assert status == 200
+        assert data["status"] == "completed"
+        assert data["acceptance_status"] == "accepted"
+        assert data["result"]["requirement_coverage"] == 100.0
+        # 真实执行轨迹：7 个 op 按顺序全部 completed
+        assert [s["op_id"] for s in data["op_trace"]] == [
+            "parse_requirements",
+            "classify_requirements",
+            "generate_model_elements",
+            "verify_coverage",
+            "check_consistency",
+            "generate_evidence",
+            "package_model",
+        ]
+        assert all(s["status"] == "completed" for s in data["op_trace"])
+        # 已追加到 store
+        assert len(store._cache) == before + 1
+        assert store._cache[-1]["task_run_id"] == data["task_run_id"]
+        assert store._cache[-1]["acceptance_status"] == "accepted"
+
+    def test_trigger_rejected_flow(self, server_url: tuple[str, TaskRunStore]):
+        """履约完成但验收失败（无 metric 需求）→ completed + rejected"""
+        url, _ = server_url
+        status, data = self._post(url, {
+            "box_id": "business_modeling_box",
+            "task_type": "handle_modeling_request",
+            "payload": {
+                "set_id": "req_api_2",
+                "business_goal": "x",
+                "requirements": [
+                    {"requirement_id": "r_obj", "description": "x", "requirement_type": "object", "priority": "must_have"},
+                ],
+            },
+        })
+        assert status == 200
+        assert data["status"] == "completed"
+        assert data["acceptance_status"] == "rejected"
+
+    def test_removed_box_not_triggerable(self, server_url: tuple[str, TaskRunStore]):
+        """运营线盒子已从看板移除：未注册 = trigger 拒收（代码保留在仓库）"""
+        url, _ = server_url
+        status, data = self._post(url, {
+            "box_id": "order_exception_box",
+            "task_type": "handle_order_exception",
+            "payload": {"exception_type": "inventory_shortage", "amount": 100},
+        })
+        assert status == 400
+        assert "order_exception_box" in data["error"]
+
+    def test_unknown_box_400(self, server_url: tuple[str, TaskRunStore]):
+        url, _ = server_url
+        status, data = self._post(url, {
+            "box_id": "ghost_box", "task_type": "x", "payload": {},
+        })
+        assert status == 400
+        assert "ghost_box" in data["error"]
+
+    def test_unknown_task_type_400(self, server_url: tuple[str, TaskRunStore]):
+        url, _ = server_url
+        status, data = self._post(url, {
+            "box_id": "business_modeling_box",
+            "task_type": "handle_unknown_task",
+            "payload": {},
+        })
+        assert status == 400
+        assert "handle_unknown_task" in data["error"]
+
+    def test_invalid_json_400(self, server_url: tuple[str, TaskRunStore]):
+        url, _ = server_url
+        status, data = self._post(url, None, raw=b"{not json")
+        assert status == 400
+        assert "error" in data
+
+    def test_missing_fields_400(self, server_url: tuple[str, TaskRunStore]):
+        url, _ = server_url
+        status, data = self._post(url, {"box_id": "business_modeling_box"})
+        assert status == 400
+        assert "error" in data
+
+    def test_task_entries_in_dashboard_data(self, tmp_path: Path):
+        """dashboard_data 的 box_stats 带 task 入口（task_type + 示例 payload）"""
+        store = TaskRunStore(path=tmp_path / "x.jsonl")
+        mod_def = get_mod_def()
+        tr = create_task_run(
+            "pm", "i", mod_def.result.result_schema, f"{mod_def.id}@v{mod_def.version}",
+            "beeline_business_modeling_v1", 1, "rt", "in",
+        )
+        store.append(tr, box_id=mod_def.id, acceptance_status="accepted")
+
+        stats = dashboard_data(store, box_filter=mod_def.id)["box_stats"]
+        entries = stats[0]["task_entries"]
+        assert len(entries) == 1
+        assert entries[0]["task_type"] == "handle_modeling_request"
+        # 示例 payload 符合 task_schema 顶层字段
+        assert set(entries[0]["sample_payload"]) >= {"set_id", "business_goal", "requirements"}
+        # 内部工位图：beeline 7 个 op 按声明顺序
+        assert entries[0]["beeline_ops"] == [
+            "parse_requirements",
+            "classify_requirements",
+            "generate_model_elements",
+            "verify_coverage",
+            "check_consistency",
+            "generate_evidence",
+            "package_model",
+        ]
+
+# ============================================================
+# POST /api/structure（自然语言 → TASK IN 结构化表达）
+# ============================================================
+
+
+class TestStructureApi:
+    def _post(self, url: str, body: dict):
+        conn = HTTPConnection(url.replace("http://", ""))
+        conn.request(
+            "POST", "/api/structure", body=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        resp = conn.getresponse()
+        data = json.loads(resp.read())
+        conn.close()
+        return resp.status, data
+
+    def test_structure_natural_language(self, server_url: tuple[str, TaskRunStore]):
+        """自然语言业务表述 → BusinessRequirementSet：首句=目标，其余按关键词分类"""
+        url, _ = server_url
+        status, data = self._post(url, {
+            "text": "建模订单退款流程。退款必须在 7 天内完成。退款申请走主管审批流程。"
+                    "退款已完成要通知财务。退款处理时长要可度量。订单是核心实体。",
+        })
+        assert status == 200
+        payload = data["payload"]
+        assert payload["business_goal"] == "建模订单退款流程"
+        assert payload["set_id"].startswith("req_set_nl_")
+        types = [r["requirement_type"] for r in payload["requirements"]]
+        assert types == ["rule", "process", "event", "metric", "object"]
+        # requirement_id 唯一且带类型前缀
+        ids = [r["requirement_id"] for r in payload["requirements"]]
+        assert len(set(ids)) == len(ids)
+        assert ids[0].startswith("req_rule_")
+        assert data["requirement_count"] == 5
+
+    def test_structure_empty_text_400(self, server_url: tuple[str, TaskRunStore]):
+        url, _ = server_url
+        status, data = self._post(url, {"text": "   "})
+        assert status == 400
+        assert "text" in data["error"]
+
+    def test_structured_payload_fulfills_end_to_end(self, server_url: tuple[str, TaskRunStore]):
+        """结构化产物可以直接履约：structure → trigger 全链路"""
+        url, _ = server_url
+        _, structured = self._post(url, {
+            "text": "建模订单退款流程。退款必须在 7 天内完成。退款申请走审批流程。退款处理时长要可度量。",
+        })
+        conn = HTTPConnection(url.replace("http://", ""))
+        conn.request(
+            "POST", "/api/trigger",
+            body=json.dumps({
+                "box_id": "business_modeling_box",
+                "task_type": "handle_modeling_request",
+                "payload": structured["payload"],
+            }).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        resp = conn.getresponse()
+        data = json.loads(resp.read())
+        conn.close()
+        assert resp.status == 200
+        assert data["status"] == "completed"
+        assert data["acceptance_status"] == "accepted"
+        # 自然语言里的规则 / 流程 / 指标都进了领域模型
+        model = data["result"]["model_elements"]
+        assert model["specifications"][0]["name"] == "退款必须在 7 天内完成"
+        assert model["domain_services"][0]["name"] == "退款申请走审批流程"
+        assert model["domain_metrics"][0]["name"] == "退款处理时长要可度量"

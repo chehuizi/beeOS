@@ -244,9 +244,10 @@ HTML_PAGE = f"""<!DOCTYPE html>
   }}
   /* 2D 履约盒舞台 */
   #box2d-stage {{
-    width: 560px; height: 420px; flex: 0 0 auto;
+    width: 100%; min-width: 0; flex: 1 1 auto;
+    display: flex; align-items: center; justify-content: center;
   }}
-  #box2d-stage svg {{ display: block; }}
+  #box2d-stage svg {{ display: block; max-width: 100%; height: auto; }}
   .cube-caption {{ text-align: center; margin-top: 34px; }}
   .cube-caption .name, .beebox-nameplate .name {{ font-size: 15px; font-weight: 700; color: #0f172a; }}
   .cube-caption .name .bid, .beebox-nameplate .name .bid {{
@@ -306,13 +307,32 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .beebox-nameplate .spec-row {{ display: flex; gap: 6px; font-size: 10px; line-height: 1.8; }}
   .beebox-nameplate .spec-row .k {{ width: auto; text-align: left; padding-right: 0; }}
   .beebox-body {{
-    display: flex; gap: 12px; align-items: center; justify-content: center;
-    padding: 16px; flex-wrap: wrap; row-gap: 24px;
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px;
+    align-items: stretch; padding: 16px;
+  }}
+  .beebox-body > * {{ min-width: 0; }}
+  @media (max-width: 1080px) {{
+    .beebox-body {{ grid-template-columns: 1fr; }}
   }}
   .port {{
-    width: 300px; background: white; border: 1px solid #e2e8f0;
-    border-radius: 10px; padding: 14px;
+    background: white; border: 1px solid #e2e8f0;
+    border-radius: 10px; padding: 14px; align-self: stretch;
+    display: flex; flex-direction: column;
     box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+  }}
+  /* 中间 BEELINE 流水线框：跟两侧端口对齐，视觉上把盒内工位围起来 */
+  .lane {{
+    border: 1px dashed #7c93ad; border-radius: 10px; padding: 10px 10px 4px;
+    background: rgba(255,255,255,0.55);
+    display: flex; flex-direction: column; align-self: stretch;
+  }}
+  .lane-title {{
+    font-size: 11px; font-weight: 700; color: #64748b;
+    letter-spacing: 0.8px; margin-bottom: 6px; text-align: center;
+  }}
+  .lane-ops {{
+    font-size: 10px; color: #94a3b8; text-align: center;
+    margin-top: 4px; word-break: break-word; line-height: 1.6;
   }}
   .port-title {{
     font-size: 11px; font-weight: 700; color: #64748b;
@@ -322,6 +342,8 @@ HTML_PAGE = f"""<!DOCTYPE html>
     width: 100%; box-sizing: border-box; padding: 6px 8px; margin-bottom: 8px;
     border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; background: white;
   }}
+  #task-payload {{ flex: 1 1 auto; min-height: 260px; resize: vertical; }}
+  #artifact-slot {{ flex: 1 1 auto; overflow: auto; }}
   .trigger-btn {{
     width: 100%; padding: 8px 0; border: none; border-radius: 6px; font-size: 13px;
     background: linear-gradient(135deg, #2563eb, #1d4ed8);
@@ -346,7 +368,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .nl-arrow {{
     font-size: 26px; color: #94a3b8; margin: 2px 0 4px 130px; user-select: none;
   }}
-  .nl-panel {{ border-style: dashed; }}
+  .nl-panel {{ border-style: dashed; width: 320px; flex: 0 0 320px; }}
   .nl-panel textarea {{
     width: 100%; box-sizing: border-box; padding: 8px; margin-bottom: 8px;
     font-size: 12px; border: 1px solid #cbd5e1; border-radius: 6px;
@@ -523,7 +545,7 @@ function initBox2D(container, ops) {{
   // 对外 api：setOpState / moveToken / reset
   const pos = layout2D(ops);
   const EXIT_Y = 310, EXIT_X = 508;   // 盒底出口通道
-  let s = `<svg viewBox="0 0 560 420" style="width:100%;height:100%">
+  let s = `<svg viewBox="0 0 560 420" style="width:100%;height:auto;display:block" preserveAspectRatio="xMidYMid meet">
     <defs>
       <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
         <path d="M 0 1.5 L 8 5 L 0 8.5" fill="none" stroke="#94a3b8" stroke-width="1.6"/>
@@ -717,7 +739,11 @@ function buildShell(boxId, box, entries) {{
           <button class="trigger-btn" id="trigger-btn" onclick="triggerTask('${{boxId}}')">▶ 履约</button>
           <div id="trigger-result" class="trigger-result"></div>
         </div>
-        <div id="box2d-stage"></div>
+        <div class="lane">
+          <div class="lane-title">BEELINE · 履约流水线</div>
+          <div id="box2d-stage"></div>
+          <div class="lane-ops" id="lane-ops"></div>
+        </div>
         <div class="port">
           <div class="port-title">ARTIFACTS OUT · 产出口（领域模型）</div>
           <div id="artifact-slot"></div>
@@ -738,6 +764,8 @@ function buildShell(boxId, box, entries) {{
 
   const stage = document.getElementById('box2d-stage');
   _scene2d = ops.length > 0 ? initBox2D(stage, ops) : null;
+  const laneOps = document.getElementById('lane-ops');
+  if (laneOps) laneOps.textContent = ops.length > 0 ? ops.join(' · ') : '(该 task type 未绑定 beeline)';
   // shell 重建后恢复工位状态
   if (_scene2d) {{
     for (const op of ops) _scene2d.setOpState(op, _boxState.opStates[op] || '');

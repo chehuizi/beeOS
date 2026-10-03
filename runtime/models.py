@@ -84,6 +84,26 @@ class AcceptanceStatus(str, Enum):
     COMPENSATING_ACCEPTANCE = "compensating_acceptance"
 
 
+class RejectionClass(str, Enum):
+    """REJECTED 的失败归因（不改变 4 状态机，只给 rejected 加原因分类）
+
+    为什么需要：rejected 只说明"没过"，不说明"为什么没"。
+    业务方看到 rejected 无法判断该补投料、该改需求、还是该找模型 bug。
+    归因分四类，边界在"投料之前 / 建模之中 / 规则之间"：
+
+    - EMPTY_INPUT：投料里没有可建模的业务需求，无从建模
+      （注意：结构上合法的空集能过第一道闸，在这里被拦）
+    - INSUFFICIENT_COVERAGE：有需求，但模型元素没覆盖全
+    - CONFLICT：规则之间自相矛盾
+    - STRUCTURAL：引用 / 结构 / 指标等其余结构性判据不达标
+    """
+
+    EMPTY_INPUT = "empty_input"
+    INSUFFICIENT_COVERAGE = "insufficient_coverage"
+    CONFLICT = "conflict"
+    STRUCTURAL = "structural"
+
+
 # ============================================================
 # Event log（durable）
 # ============================================================
@@ -161,6 +181,8 @@ class AcceptanceEvaluation(BaseModel):
     evaluated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     passed_rules: list[str] = Field(default_factory=list)
     failed_rules: list[dict[str, Any]] = Field(default_factory=list)
+    # rejected 归因（ACCEPTED / AWAITING 时为 None）——让看板能说清"为什么没通过"
+    rejection_class: Optional[RejectionClass] = None
     exception_action: Optional[str] = None  # no_deliver / rollback / escalate
     queen_decision: Optional[str] = None  # queen 决策（escalate 时）
 

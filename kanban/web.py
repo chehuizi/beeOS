@@ -411,6 +411,11 @@ HTML_PAGE = f"""<!DOCTYPE html>
   }}
   .badge-accepted {{ background: #dcfce7; color: #15803d; }}
   .badge-rejected {{ background: #fee2e2; color: #b91c1c; }}
+  .rej-why {{
+    font-size: 11px; color: #b91c1c; background: #fff7ed;
+    border: 1px solid #fed7aa; border-radius: 6px;
+    padding: 5px 8px; margin: 6px 0; line-height: 1.6;
+  }}
   .badge-failed {{ background: #fee2e2; color: #b91c1c; }}
   .artifact-card .tid {{ color: #94a3b8; font-size: 10px; word-break: break-all; }}
   .artifact-card details {{ margin-top: 6px; }}
@@ -707,9 +712,13 @@ function renderArtifact() {{
   if (!a) return `<div class="empty" style="padding:24px 8px;">(等待产出)</div>`;
   const acc = a.acceptance_status || a.status || 'unknown';
   const badge = acc === 'accepted' ? 'badge-accepted' : 'badge-rejected';
+  const why = a.rejection_class
+    ? `<div class="rej-why">未通过原因：<b>${{REJECT_LABEL[a.rejection_class] || a.rejection_class}}</b></div>`
+    : '';
   return `<div class="artifact-card">
     <span class="artifact-badge ${{badge}}">${{acc.toUpperCase()}}</span>
     <div class="tid">task_run ${{a.task_run_id}}</div>
+    ${{why}}
     ${{renderDddModel(a.result)}}
     <details><summary>raw JSON</summary><pre>${{JSON.stringify(a.result, null, 2)}}</pre></details>
   </div>`;
@@ -717,6 +726,14 @@ function renderArtifact() {{
 
 let _scene2d = null;      // 2D 场景 api（随 shell 持久，不被 2s 刷新重建）
 let _shellBox = null;   // 当前 shell 属于哪个 box
+
+// rejected 归因 → 中文标签（runtime.models.RejectionClass）
+const REJECT_LABEL = {{
+  empty_input: '投料里没有可建模的业务需求',
+  insufficient_coverage: '模型元素没覆盖全部需求',
+  conflict: '业务规则之间自相矛盾',
+  structural: '模型结构 / 引用 / 指标不达标',
+}};
 
 function buildShell(boxId, box, entries) {{
   // 静态 shell：只建一次——工位图 DOM 不随 2s 刷新重建
@@ -862,7 +879,9 @@ async function triggerTask(boxId) {{
     const data = await resp.json();
     if (!resp.ok) {{
       resultEl.className = 'trigger-result err';
-      resultEl.textContent = '触发失败: ' + (data.error || resp.status);
+      // 400 = 投料被第一道闸（结构契约）拦下，这次投料没有产生 TaskRun
+      const prefix = resp.status === 400 ? '投料被拒（未进入履约）: ' : '触发失败: ';
+      resultEl.textContent = prefix + (data.error || resp.status);
     }} else {{
       // 在 2D 盒子内部回放真实执行轨迹（op_trace 来自服务端真实执行）
       const trace = data.op_trace || [];
@@ -893,11 +912,13 @@ async function triggerTask(boxId) {{
         task_run_id: data.task_run_id,
         status: data.status,
         acceptance_status: data.acceptance_status,
+        rejection_class: data.rejection_class,
         result: data.result,
       }};
       renderArtifactInto();
       resultEl.className = 'trigger-result ' + (data.acceptance_status === 'accepted' ? 'ok' : 'err');
-      resultEl.textContent = `task_run ${{data.task_run_id.slice(0, 8)}}… → ${{data.status}} / ${{data.acceptance_status || 'n/a'}}`;
+      const why = data.rejection_class ? ` — ${{REJECT_LABEL[data.rejection_class] || data.rejection_class}}` : '';
+      resultEl.textContent = `task_run ${{data.task_run_id.slice(0, 8)}}… → ${{data.status}} / ${{data.acceptance_status || 'n/a'}}${{why}}`;
     }}
   }} catch (e) {{
     resultEl.className = 'trigger-result err';
@@ -1050,7 +1071,14 @@ class KanbanRequestHandler(BaseHTTPRequestHandler):
         try:
             result = trigger_task(box_id, task_type, payload, self.store)
         except TriggerError as e:
-            self._send_json(400, {"error": str(e)})
+            # TriggerError = 投料被拒（box/task/beeline 未注册，或结构契约没过）。
+            # 这些都发生在 create_task_run 之前——本次投料不产生 TaskRun，
+            # 看板 / store 里不会留下记录。用 stage 字段让前端能区分归因。
+            self._send_json(400, {
+                "error": str(e),
+                "stage": "intake",
+                "task_run_created": False,
+            })
             return
         except Exception as e:
             self._send_json(500, {"error": f"fulfillment failed: {e}"})

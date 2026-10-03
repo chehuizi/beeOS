@@ -27,6 +27,17 @@ from core.models import FieldDef, SchemaDef
 
 
 # ============================================================
+# 业务枚举取值表（投料契约校验用——声明即约束）
+# ============================================================
+
+REQUIREMENT_TYPES = ("object", "rule", "process", "metric", "goal", "event")
+REQUIREMENT_PRIORITIES = ("must_have", "should_have", "could_have")
+
+# DDD 模型元素的五种 pattern
+MODEL_PATTERNS = ("entity", "specification", "domain_service", "domain_event", "domain_metric")
+
+
+# ============================================================
 # 输入层：业务需求
 # ============================================================
 
@@ -39,11 +50,13 @@ BUSINESS_REQUIREMENT = SchemaDef(
         FieldDef(name="description", type="string"),
         FieldDef(
             name="requirement_type",
-            type="enum",  # object / rule / process / metric / goal / event
+            type="enum",
+            values=list(REQUIREMENT_TYPES),
         ),
         FieldDef(
             name="priority",
-            type="enum",  # must_have / should_have / could_have
+            type="enum",
+            values=list(REQUIREMENT_PRIORITIES),
         ),
         FieldDef(name="traceable_to", type="string", required=False),  # 上游引用
     ],
@@ -66,8 +79,8 @@ BUSINESS_REQUIREMENT_SET = SchemaDef(
                 properties=[
                     FieldDef(name="requirement_id", type="string"),
                     FieldDef(name="description", type="string"),
-                    FieldDef(name="requirement_type", type="enum"),
-                    FieldDef(name="priority", type="enum"),
+                    FieldDef(name="requirement_type", type="enum", values=list(REQUIREMENT_TYPES)),
+                    FieldDef(name="priority", type="enum", values=list(REQUIREMENT_PRIORITIES)),
                     FieldDef(name="traceable_to", type="string", required=False),
                 ],
             ),
@@ -98,8 +111,8 @@ PARSED_REQUIREMENTS = SchemaDef(
                 properties=[
                     FieldDef(name="requirement_id", type="string"),
                     FieldDef(name="description", type="string"),
-                    FieldDef(name="requirement_type", type="enum"),
-                    FieldDef(name="priority", type="enum"),
+                    FieldDef(name="requirement_type", type="enum", values=list(REQUIREMENT_TYPES)),
+                    FieldDef(name="priority", type="enum", values=list(REQUIREMENT_PRIORITIES)),
                 ],
             ),
         ),
@@ -158,7 +171,7 @@ MODEL_ELEMENTS = SchemaDef(
                 properties=[
                     FieldDef(name="entity_id", type="string"),
                     FieldDef(name="name", type="string"),
-                    FieldDef(name="pattern", type="enum"),  # entity
+                    FieldDef(name="pattern", type="enum", values=list(MODEL_PATTERNS)),  # entity
                     FieldDef(name="trace_to", type="string"),  # 关联 requirement_id
                 ],
             ),
@@ -172,7 +185,7 @@ MODEL_ELEMENTS = SchemaDef(
                 properties=[
                     FieldDef(name="event_id", type="string"),
                     FieldDef(name="name", type="string"),
-                    FieldDef(name="pattern", type="enum"),  # domain_event
+                    FieldDef(name="pattern", type="enum", values=list(MODEL_PATTERNS)),  # domain_event
                     FieldDef(name="trace_to", type="string"),
                 ],
             ),
@@ -188,7 +201,7 @@ MODEL_ELEMENTS = SchemaDef(
                     FieldDef(name="name", type="string"),
                     FieldDef(name="condition", type="string"),
                     FieldDef(name="action", type="string"),
-                    FieldDef(name="pattern", type="enum"),  # specification
+                    FieldDef(name="pattern", type="enum", values=list(MODEL_PATTERNS)),  # specification
                     FieldDef(name="trace_to", type="string"),
                 ],
             ),
@@ -202,7 +215,7 @@ MODEL_ELEMENTS = SchemaDef(
                 properties=[
                     FieldDef(name="process_id", type="string"),
                     FieldDef(name="name", type="string"),
-                    FieldDef(name="pattern", type="enum"),  # domain_service
+                    FieldDef(name="pattern", type="enum", values=list(MODEL_PATTERNS)),  # domain_service
                     FieldDef(name="trace_to", type="string"),
                 ],
             ),
@@ -217,7 +230,7 @@ MODEL_ELEMENTS = SchemaDef(
                     FieldDef(name="metric_id", type="string"),
                     FieldDef(name="name", type="string"),
                     FieldDef(name="target", type="number"),
-                    FieldDef(name="pattern", type="enum"),  # domain_metric（扩展元素）
+                    FieldDef(name="pattern", type="enum", values=list(MODEL_PATTERNS)),  # domain_metric（扩展元素）
                     FieldDef(name="trace_to", type="string"),
                 ],
             ),

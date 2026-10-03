@@ -22,6 +22,7 @@ from boxes.modeling import get_definition as get_mod_definition
 from core.beeline_models import Beeline
 from core.models import BeeBoxDefinition, FieldDef
 from runtime import BeelineExecutor, create_task_run, evaluate_acceptance
+from runtime.contract import validate_payload
 from runtime.models import TaskRunStatus
 from runtime.store import TaskRunStore
 
@@ -188,6 +189,23 @@ def trigger_task(
             f"registry has v{beeline.version}"
         )
 
+    # ===== 第一道闸：结构契约（投料前，不产生 TaskRun） =====
+    # 形状不对（字段缺失 / 类型错 / 枚举值非法）在这里中断，
+    # 不进入履约——看板上也看不到这次投料，因为它没开始过。
+    # 注意：空需求集在结构上合法（0 条违规），会放行到 acceptance 由业务判据接管。
+    schema = definition.get_schema(task.task_schema)
+    if schema is None:
+        raise TriggerError(
+            f"task {task_type!r} pins task_schema {task.task_schema!r} "
+            f"which is not declared in definition.schemas"
+        )
+    contract_errors = validate_payload(payload, schema)
+    if contract_errors:
+        raise TriggerError(
+            f"payload violates task_schema {task.task_schema!r}: "
+            + "; ".join(contract_errors)
+        )
+
     task_run = create_task_run(
         originator=originator,
         intent=task_type,
@@ -201,11 +219,20 @@ def trigger_task(
     task_run = BeelineExecutor().execute(task_run, beeline, payload)
 
     acceptance_status = None
+    rejection_class = None
     if task_run.status == TaskRunStatus.COMPLETED:
         evaluation = evaluate_acceptance(task_run, definition.result)
         acceptance_status = evaluation.status.value
+        rejection_class = (
+            evaluation.rejection_class.value if evaluation.rejection_class else None
+        )
 
-    store.append(task_run, box_id=box_id, acceptance_status=acceptance_status)
+    store.append(
+        task_run,
+        box_id=box_id,
+        acceptance_status=acceptance_status,
+        rejection_class=rejection_class,
+    )
 
     return {
         "task_run_id": task_run.identity.task_run_id,
@@ -213,6 +240,7 @@ def trigger_task(
         "task_type": task_type,
         "status": task_run.status.value,
         "acceptance_status": acceptance_status,
+        "rejection_class": rejection_class,
         "result": task_run.result,
         # 真实执行轨迹（按执行顺序）——看板用来在盒子内部回放履约过程
         "op_trace": [
@@ -246,6 +274,15 @@ _TYPE_PREFIX = {
     "event": "evt",
 }
 
+# 句内枚举分隔符（顿号 + 中英文逗号）——中文枚举习惯用顿号
+_ENUM_SEP = r"[、,，]"
+
+# 存在性声明词：出现在枚举项之前时，其左侧是业务目标，右侧枚举项是业务需求
+_EXIST_WORDS = ("有", "包含", "包括", "分为", "涵盖", "涉及")
+
+# 枚举碎片最短长度——短于此的（顿号拆出的单字）视为切碎噪声丢弃
+_ENUM_MIN_LEN = 2
+
 
 def _classify_sentence(sentence: str) -> str:
     """单句业务表述 → 需求类型（event > rule > metric > process > object）"""
@@ -260,29 +297,67 @@ def _classify_sentence(sentence: str) -> str:
     return "object"
 
 
+def _split_enum_phrase(phrase: str) -> tuple[str, list[str]]:
+    """枚举短语 → (业务目标, 枚举出的业务事实)
+
+    处理 "wms的流程有入库流程、出库流程、盘点流程" 这类句内枚举：
+    存在性声明词（"有"）左侧是业务目标，右侧每项算 1 条业务需求。
+
+    Returns:
+        (goal, facts)；无枚举时 facts 为空（goal = 原短语）
+    """
+    parts = [p.strip() for p in re.split(_ENUM_SEP, phrase) if p.strip()]
+    parts = [p for p in parts if len(p) >= _ENUM_MIN_LEN] or parts[:1]
+    if len(parts) < 2:
+        return phrase, []
+
+    head, facts = parts[0], parts[1:]
+    for w in _EXIST_WORDS:
+        if w in head:
+            goal = head.split(w)[0].strip()
+            if goal:
+                # 存在词右侧粘着首个枚举项（"有入库流程"），取回来一并算需求
+                lead = head.split(w, 1)[1].strip()
+                if lead and lead not in facts:
+                    facts = [lead, *facts]
+                return goal, facts
+    return head, facts
+
+
 def structure_business_text(text: str) -> dict[str, Any]:
     """自然语言业务表述 → BusinessRequirementSet（TASK IN 的结构化表达）
 
-    约定：按 。；！？\\n 切句；首句 = business_goal，其余每句 = 1 条业务需求。
+    分句约定：
+    1. 按 。；！？\\n 切句
+    2. 首句 = business_goal，其余每句 = 1 条业务需求
+    3. 枚举兜底：首句含顿号枚举时，按"存在性声明"拆成 1 个目标 + N 条需求
+       （否则整句会被当成目标，requirements 落空）
     """
+
+    def _mk(goal: str, rest: list[str]) -> dict[str, Any]:
+        counters: Counter[str] = Counter()
+        requirements = []
+        for s in rest:
+            rtype = _classify_sentence(s)
+            counters[rtype] += 1
+            requirements.append({
+                "requirement_id": f"req_{_TYPE_PREFIX[rtype]}_{counters[rtype]}",
+                "description": s,
+                "requirement_type": rtype,
+                "priority": "must_have",
+            })
+        return {
+            "set_id": f"req_set_nl_{uuid4().hex[:8]}",
+            "business_goal": goal,
+            "requirements": requirements,
+        }
+
     sentences = [s.strip() for s in re.split(r"[。；;！!？?\n]+", text) if s.strip()]
     if not sentences:
-        return {"set_id": f"req_set_nl_{uuid4().hex[:8]}", "business_goal": "", "requirements": []}
+        return _mk("", [])
 
     goal, rest = sentences[0], sentences[1:]
-    counters: Counter[str] = Counter()
-    requirements = []
-    for s in rest:
-        rtype = _classify_sentence(s)
-        counters[rtype] += 1
-        requirements.append({
-            "requirement_id": f"req_{_TYPE_PREFIX[rtype]}_{counters[rtype]}",
-            "description": s,
-            "requirement_type": rtype,
-            "priority": "must_have",
-        })
-    return {
-        "set_id": f"req_set_nl_{uuid4().hex[:8]}",
-        "business_goal": goal,
-        "requirements": requirements,
-    }
+    # 首句若含顿号枚举也拆开（"wms的流程有入库流程、出库流程。后续句…"），
+    # 枚举出的业务事实排在后续句之前，保持业务表述的原始顺序
+    enum_goal, facts = _split_enum_phrase(goal)
+    return _mk(enum_goal, facts + rest)

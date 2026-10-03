@@ -20,7 +20,12 @@ from __future__ import annotations
 from typing import Any
 
 from core.models import AcceptanceRule, ExceptionRule, ResultDef
-from runtime.models import AcceptanceEvaluation, AcceptanceStatus, TaskRun
+from runtime.models import (
+    AcceptanceEvaluation,
+    AcceptanceStatus,
+    RejectionClass,
+    TaskRun,
+)
 
 
 # ============================================================
@@ -105,6 +110,42 @@ def _evaluate_condition(condition: str, result: dict[str, Any]) -> bool:
     return False
 
 
+def _classify_failure(
+    failed: list[dict[str, Any]],
+    result: dict[str, Any],
+) -> RejectionClass:
+    """给 REJECTED 归因——区分"投料没东西" / "模型没覆盖" / "规则打架" / 其余结构问题
+
+    判据（按优先级，先看是否根本没东西可建）：
+    1. 所有失败判据的 actual 都是 None——评测器一个值都没取到，
+       说明上游没产出这些量（典型：0 条需求 → 没有任何模型元素 → 没有覆盖率）
+    2. requirement_count == 0——明确没需求
+    3. rule_consistency 判定为 false——规则自相矛盾（优先级高于覆盖率，
+       因为规则矛盾时先修规则，补覆盖率没有意义）
+    4. 有具体覆盖率数值但没达标——模型没覆盖全
+    5. 其余（引用 / 结构 / 指标）
+    """
+    # 1 + 2：什么都没取到 / 明确没需求
+    if result.get("requirement_count") == 0:
+        return RejectionClass.EMPTY_INPUT
+    if failed and all(f.get("actual") is None for f in failed):
+        return RejectionClass.EMPTY_INPUT
+
+    metrics_failed = {f.get("metric") for f in failed}
+
+    # 3：规则矛盾优先归因
+    if "rule_consistency" in metrics_failed and result.get("rule_consistency") is False:
+        return RejectionClass.CONFLICT
+
+    # 4：覆盖率有值但不够
+    coverage = result.get("requirement_coverage")
+    if "requirement_coverage" in metrics_failed and coverage is not None:
+        return RejectionClass.INSUFFICIENT_COVERAGE
+
+    # 5：其余结构性判据
+    return RejectionClass.STRUCTURAL
+
+
 # ============================================================
 # Acceptance 评估器
 # ============================================================
@@ -167,12 +208,15 @@ def evaluate_acceptance(
     # 有 fail：找 exception 规则
     exception = _find_exception_rule(contract.exceptions, result)
 
+    rejection_class = _classify_failure(failed, result)
+
     # 没匹配到 exception：默认 REJECTED
     if exception is None:
         return AcceptanceEvaluation(
             status=AcceptanceStatus.REJECTED,
             passed_rules=passed,
             failed_rules=failed,
+            rejection_class=rejection_class,
             exception_action=None,
         )
 
@@ -181,6 +225,7 @@ def evaluate_acceptance(
             status=AcceptanceStatus.REJECTED,
             passed_rules=passed,
             failed_rules=failed,
+            rejection_class=rejection_class,
             exception_action="no_deliver",
         )
 
@@ -202,6 +247,7 @@ def evaluate_acceptance(
             status=AcceptanceStatus.REJECTED,  # queen 默认拒绝（人工接管）
             passed_rules=passed,
             failed_rules=failed,
+            rejection_class=rejection_class,
             exception_action="escalate",
             queen_decision=queen_decision,
         )

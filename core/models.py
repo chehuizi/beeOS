@@ -59,13 +59,15 @@ class FieldDef(BaseModel):
     """字段定义（递归支持 object / array）"""
 
     name: str
-    type: str  # string / number / boolean / integer / object / array / ref:<schema_id>
+    type: str  # string / number / boolean / integer / object / array / enum / ref:<schema_id>
     required: bool = True
     description: Optional[str] = None
     # object 类型用 properties 嵌套
     properties: Optional[list["FieldDef"]] = None
     # array 类型用 items 描述元素
     items: Optional["FieldDef"] = None
+    # enum 类型的合法取值表；不声明表示"暂不约束取值"（只校验类型）
+    values: Optional[list[Any]] = None
 
     @model_validator(mode="after")
     def validate_type_structure(self) -> "FieldDef":

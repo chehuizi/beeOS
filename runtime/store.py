@@ -23,7 +23,12 @@ from typing import Any, Optional
 from runtime.models import TaskRun, TaskRunStatus, AcceptanceStatus
 
 
-def task_run_to_record(task_run: TaskRun, box_id: str, acceptance_status: Optional[str] = None) -> dict[str, Any]:
+def task_run_to_record(
+    task_run: TaskRun,
+    box_id: str,
+    acceptance_status: Optional[str] = None,
+    rejection_class: Optional[str] = None,
+) -> dict[str, Any]:
     """TaskRun → 精简持久化 record"""
     duration_ms = 0
     if task_run.identity.started_at and task_run.identity.finished_at:
@@ -43,6 +48,7 @@ def task_run_to_record(task_run: TaskRun, box_id: str, acceptance_status: Option
         "originator": task_run.identity.originator,
         "status": task_run.status.value,
         "acceptance_status": acceptance_status,
+        "rejection_class": rejection_class,
         "started_at": task_run.identity.started_at.isoformat() if task_run.identity.started_at else None,
         "finished_at": task_run.identity.finished_at.isoformat() if task_run.identity.finished_at else None,
         "created_at": task_run.identity.created_at.isoformat(),
@@ -86,9 +92,10 @@ class TaskRunStore:
         task_run: TaskRun,
         box_id: str,
         acceptance_status: Optional[str] = None,
+        rejection_class: Optional[str] = None,
     ) -> dict[str, Any]:
         """追加一条 task run 记录（同步落盘）"""
-        record = task_run_to_record(task_run, box_id, acceptance_status)
+        record = task_run_to_record(task_run, box_id, acceptance_status, rejection_class)
         self._cache.append(record)
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")

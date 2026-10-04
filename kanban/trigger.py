@@ -361,3 +361,159 @@ def structure_business_text(text: str) -> dict[str, Any]:
     # 枚举出的业务事实排在后续句之前，保持业务表述的原始顺序
     enum_goal, facts = _split_enum_phrase(goal)
     return _mk(enum_goal, facts + rest)
+
+
+# ============================================================
+# LLM 结构化（自然语言 → BusinessRequirementSet）
+# ============================================================
+#
+# 规则版（structure_business_text）的能力上限已经被实测卡死：
+# 类型分类只认词面，"出库要先进先出"→object、"盘点差异 3 个工作日内处理"→object
+# 这类语义在词面之外的句子，10 条实测错 6 条。补词表是打地鼠。
+#
+# 但 LLM 不可信，所以它的输出**不能直接投料**——必须过三道机械检查：
+#   1. 结构契约（validate_payload）—— 形状对不对
+#   2. 幻觉检查（_no_hallucination）—— 有没有编造原文没有的需求
+#   3. 降级兜底（_structure_business_text_rule）—— 上面任一不过就退回规则版
+# 这正是结构契约闸在有 LLM 之后价值翻倍的原因：它从"锦上添花"变成"第一道防线"。
+
+_CAPTURE_PROMPT = """把下面的中文业务表述，抽成结构化业务需求。只输出 JSON，不要任何解释文字。
+
+输出格式：
+{{"set_id": "req_set_xxx", "business_goal": "第一句的业务目标", "requirements": [{{"requirement_id": "req_xxx_1", "description": "一条业务事实", "requirement_type": "object|rule|process|metric|goal|event", "priority": "must_have"}}]}}
+
+requirement_type 取值含义：
+- object：业务实体/对象（订单、库位、批次）
+- rule：业务规则或约束（必须/不得/只有…才 / 阈值限制）
+- process：业务流程或步骤（有先后顺序的动作）
+- metric：业务指标（时长、数量、比率，需要被度量）
+- event：已经发生或应该发出的业务事件（已XX / 通知 / 触发）
+- goal：业务目标本身
+
+硬性要求：
+1. 只抽取原文里真实存在的内容，绝对不要补充、推断或编造原文没有的需求
+2. 中文顿号「、」和逗号连接并列项时，每一项单独成一条
+3. requirement_type 必填且只能是上面 6 个值之一
+4. description 必须是原文中出现过的片段（可截取，可去掉主语），不要改写
+5. 如果原文里没有可抽取的业务事实，requirements 返回空数组
+
+业务表述：
+{text}"""
+
+
+def _no_hallucination(payload: dict[str, Any], text: str) -> list[str]:
+    """幻觉检查：每条需求的 description 必须在原文里找得到
+
+    不是语义判断，是字面子串匹配——模型改写会漏掉这项检查，
+    但"凭空多出原文没有的需求"这类最常见的幻觉能拦住。
+    """
+    errors: list[str] = []
+    haystack = re.sub(r"\s+", "", text)
+    for r in payload.get("requirements", []):
+        desc = re.sub(r"\s+", "", r.get("description", ""))
+        if desc and desc not in haystack:
+            errors.append(
+                f"requirement {r.get('requirement_id')!r} description "
+                f"{r.get('description')!r} not found in source text (possible hallucination)"
+            )
+    return errors
+
+
+def _normalize_requirement_ids(payload: dict[str, Any]) -> list[str]:
+    """按 requirement_type 分组重编 requirement_id —— 机械规范化，不涉及语义
+
+    LLM 输出的 id 格式不稳（实测出现过 req_001_1 / req_proc_1 混用，
+    同一批里前缀不一致），而 id 是 acceptance 里 trace_to 的锚点，
+    格式必须统一。这里只重编号，不改 description / type。
+    """
+    counters: Counter[str] = Counter()
+    changed: list[str] = []
+    for r in payload.get("requirements", []):
+        rtype = r.get("requirement_type") or "object"
+        counters[rtype] += 1
+        want = f"req_{_TYPE_PREFIX.get(rtype, 'obj')}_{counters[rtype]}"
+        if r.get("requirement_id") != want:
+            changed.append(f"{r.get('requirement_id')}→{want}")
+            r["requirement_id"] = want
+    return changed
+
+
+def _structure_business_text_llm(text: str) -> dict[str, Any]:
+    """LLM 结构化：调模型 → 三道机械检查 → 不过就降级规则版
+
+    Returns:
+        {"set_id", "business_goal", "requirements", "_extractor", "_extractor_note"}
+        _extractor = "llm" 表示模型输出通过了全部检查
+    """
+    from runtime import llm
+
+    def _fallback(note: str) -> dict[str, Any]:
+        p = _structure_business_text_rule(text)
+        p["_extractor"] = "rule"
+        p["_extractor_note"] = note
+        return p
+
+    try:
+        raw = llm.complete_json(
+            _CAPTURE_PROMPT.format(text=text), max_tokens=2000
+        )
+    except llm.LLMError as e:
+        return _fallback(f"llm unavailable: {e}")
+
+    if not isinstance(raw, dict):
+        return _fallback(f"llm returned {type(raw).__name__}, expected object")
+
+    # 补齐可选字段，避免下游因缺 context/traceable_to 报错
+    raw.setdefault("context", "")
+
+    # 第 1 道：结构契约
+    from boxes.modeling import get_definition
+    schema = get_definition().get_schema("schema_business_requirement_set")
+    errors = validate_payload(raw, schema)
+    if errors:
+        return _fallback("llm output violates task_schema: " + "; ".join(errors[:3]))
+
+    # set_id 是系统内部标识，必须由系统生成——LLM 编的（实测 req_set_001）
+    # 既不保证唯一也不保证前缀，重复投料会撞 id
+    raw["set_id"] = f"req_set_nl_{uuid4().hex[:8]}"
+
+    # 第 2 道：幻觉
+    errors = _no_hallucination(raw, text)
+    if errors:
+        return _fallback("hallucination check failed: " + "; ".join(errors[:3]))
+
+    # 第 3 道：空需求不算成功（模型说"抽不出来"时退回规则版再试一次）
+    if not raw.get("requirements"):
+        return _fallback("llm returned 0 requirements")
+
+    raw["_extractor"] = "llm"
+    # 第 4 道：id 规范化（机械、不涉及语义，固定锚点格式）
+    renumbered = _normalize_requirement_ids(raw)
+    if renumbered:
+        raw["_extractor_note"] = "id renormalized: " + ", ".join(renumbered[:4])
+
+    # 第 5 道：business_goal 一律取规则版结果，不采信 LLM
+    # 实测同一句跑 3 次，LLM 的 goal 给出 3 个不同版本，且会**改写**原文
+    # （"wms的流程有…" → "WMS包含…等流程"，原文没有"包含/等"）。
+    # 目标抽取不需要语义理解（首句 + 存在性声明词已足够），
+    # 规则版严格截取原文、零幻觉、可复现；需求抽取才需要 LLM。
+    rule_goal = _structure_business_text_rule(text)["business_goal"]
+    if raw.get("business_goal") != rule_goal:
+        raw["_extractor_note"] = (
+            (raw.get("_extractor_note") + "; ") if raw.get("_extractor_note") else ""
+        ) + "business_goal 取规则版（LLM 会改写原文）"
+        raw["business_goal"] = rule_goal
+    return raw
+
+
+# 保留规则版原名，供 LLM 版降级调用
+_structure_business_text_rule = structure_business_text
+
+
+def structure_business_text_with_llm(text: str, *, model: str = "minimax/MiniMax-M3") -> dict[str, Any]:
+    """投料口入口：优先 LLM 结构化，不可用则降级规则版
+
+    无论走哪条路，产出都保证满足 schema_business_requirement_set 的结构契约——
+    投料口下游（trigger_task）不会再因为结构问题被拒。
+    """
+    return _structure_business_text_llm(text)

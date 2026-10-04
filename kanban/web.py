@@ -39,7 +39,7 @@ from kanban.trigger import (
     box_meta,
     list_task_entries,
     registered_box_ids,
-    structure_business_text,
+    structure_business_text_with_llm,
     trigger_task,
 )
 from runtime.store import TaskRunStore
@@ -845,7 +845,9 @@ async function structureText() {{
     }} else {{
       document.getElementById('task-payload').value = JSON.stringify(data.payload, null, 2);
       resultEl.className = 'trigger-result ok';
-      resultEl.textContent = `已抽象为 ${{data.requirement_count}} 条业务需求 ↑ 进入 TASK IN`;
+      const via = data.extractor === 'llm' ? 'LLM 抽取' : '规则抽取';
+      resultEl.textContent = `已抽象为 ${{data.requirement_count}} 条业务需求（${{via}}）↑ 进入 TASK IN`
+        + (data.note ? `\n· ${{data.note}}` : '');
     }}
   }} catch (e) {{
     resultEl.className = 'trigger-result err';
@@ -1048,14 +1050,17 @@ class KanbanRequestHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/structure":
             # 自然语言业务表述 → TASK IN 结构化表达（BusinessRequirementSet）
+            # 优先 LLM 抽取（语义理解），五道机械检查不过则降级规则版
             text = body.get("text")
             if not isinstance(text, str) or not text.strip():
                 self._send_json(400, {"error": "body must include text (non-empty string)"})
                 return
-            payload = structure_business_text(text)
+            payload = structure_business_text_with_llm(text)
             self._send_json(200, {
                 "payload": payload,
                 "requirement_count": len(payload["requirements"]),
+                "extractor": payload.get("_extractor", "rule"),
+                "note": payload.get("_extractor_note"),
             })
             return
 

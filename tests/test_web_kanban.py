@@ -447,7 +447,15 @@ class TestStructureApi:
         return resp.status, data
 
     def test_structure_natural_language(self, server_url: tuple[str, TaskRunStore]):
-        """自然语言业务表述 → BusinessRequirementSet：首句=目标，其余按关键词分类"""
+        """自然语言 → BusinessRequirementSet
+
+        这里验证**规则降级路径**（LLM 不可用时必须还能产出合规投料）。
+        LLM 路径的清洗 / 五道检查在 test_llm_structurer 覆盖，不在这里真调模型。
+        """
+        from runtime import llm
+        llm.complete_json = lambda *a, **kw: (_ for _ in ()).throw(
+            llm.LLMError("stubbed in web-layer test")
+        )
         url, _ = server_url
         status, data = self._post(url, {
             "text": "建模订单退款流程。退款必须在 7 天内完成。退款申请走主管审批流程。"
@@ -457,6 +465,7 @@ class TestStructureApi:
         payload = data["payload"]
         assert payload["business_goal"] == "建模订单退款流程"
         assert payload["set_id"].startswith("req_set_nl_")
+        assert data["extractor"] == "rule"
         types = [r["requirement_type"] for r in payload["requirements"]]
         assert types == ["rule", "process", "event", "metric", "object"]
         # requirement_id 唯一且带类型前缀
@@ -472,7 +481,14 @@ class TestStructureApi:
         assert "text" in data["error"]
 
     def test_structured_payload_fulfills_end_to_end(self, server_url: tuple[str, TaskRunStore]):
-        """结构化产物可以直接履约：structure → trigger 全链路"""
+        """结构化产物可以直接履约：structure → trigger 全链路
+
+        LLM 路径被 stub 掉——web 层只测编排，LLM 行为在 test_llm_structurer 覆盖。
+        """
+        from runtime import llm
+        llm.complete_json = lambda *a, **kw: (_ for _ in ()).throw(
+            llm.LLMError("stubbed in web-layer test")
+        )
         url, _ = server_url
         _, structured = self._post(url, {
             "text": "建模订单退款流程。退款必须在 7 天内完成。退款申请走审批流程。退款处理时长要可度量。",

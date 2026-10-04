@@ -6,10 +6,13 @@ definition 通过 task[].beeline_id + beeline_version 引用。
 
 from beelines.inventory_shortage import INVENTORY_SHORTAGE_BEELINE, get_beeline as get_inventory_shortage_beeline
 from beelines.modeling import BUSINESS_MODELING_BEELINE, get_beeline as get_modeling_beeline
+from beelines.requirement_capture import REQUIREMENT_CAPTURE_BEELINE, get_beeline as get_requirement_capture_beeline
 
 __all__ = [
     "INVENTORY_SHORTAGE_BEELINE",
     "get_inventory_shortage_beeline",
     "BUSINESS_MODELING_BEELINE",
     "get_modeling_beeline",
+    "REQUIREMENT_CAPTURE_BEELINE",
+    "get_requirement_capture_beeline",
 ]

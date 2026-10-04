@@ -427,6 +427,12 @@ MOCK_HANDLERS = {
     "model_packager": _simulate_package_model,
 }
 
+# 需求捕获盒的 5 个 op 放在独立模块（其中 extract_requirements 真调 LLM），
+# 这里并入同一张分派表，executor 无需感知哪只盒子。
+from runtime.capture_runner import CAPTURE_HANDLERS
+
+MOCK_HANDLERS.update(CAPTURE_HANDLERS)
+
 
 class MockRunner:
     """Mock operation runner

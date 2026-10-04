@@ -17,8 +17,9 @@ from collections import Counter
 from typing import Any, Callable
 from uuid import uuid4
 
-from beelines import get_modeling_beeline
+from beelines import get_modeling_beeline, get_requirement_capture_beeline
 from boxes.modeling import get_definition as get_mod_definition
+from boxes.requirement_capture import get_definition as get_capture_definition
 from core.beeline_models import Beeline
 from core.models import BeeBoxDefinition, FieldDef
 from runtime import BeelineExecutor, create_task_run, evaluate_acceptance
@@ -34,6 +35,10 @@ BOX_REGISTRY: dict[
     str,
     tuple[Callable[[], BeeBoxDefinition], dict[str, Callable[[], Beeline]]],
 ] = {
+    "requirement_capture_box": (
+        get_capture_definition,
+        {"beeline_requirement_capture_v1": get_requirement_capture_beeline},
+    ),
     "business_modeling_box": (
         get_mod_definition,
         {"beeline_business_modeling_v1": get_modeling_beeline},
@@ -43,6 +48,11 @@ BOX_REGISTRY: dict[
 # Box 元信息（声明式归属，不从 box_id 关键词推断）：
 # Line = 企业价值流（value stream），Box = 业务责任单元
 BOX_META: dict[str, dict[str, str]] = {
+    "requirement_capture_box": {
+        "display_name": "Requirement Capture Box",
+        "value_stream": "Software Delivery",
+        "role": "Business Requirement Capture Fulfillment",
+    },
     "business_modeling_box": {
         "display_name": "Business Modeling Box",
         "value_stream": "Software Delivery",
@@ -98,6 +108,16 @@ _EXAMPLE_PAYLOADS: dict[tuple[str, str], dict[str, Any]] = {
             {"requirement_id": "req_evt_refunded", "description": "退款已完成", "requirement_type": "event", "priority": "should_have"},
             {"requirement_id": "req_met_sla", "description": "退款处理时长", "requirement_type": "metric", "priority": "should_have"},
         ],
+    },
+    ("requirement_capture_box", "capture_business_requirement"): {
+        "narrative": (
+            "建模订单退款流程。\n"
+            "订单是核心实体。\n"
+            "退款必须在 7 天内完成。\n"
+            "退款申请走主管审批流程。\n"
+            "退款已完成要通知财务。\n"
+            "退款处理时长要可度量。"
+        ),
     },
 }
 

@@ -416,6 +416,30 @@ HTML_PAGE = f"""<!DOCTYPE html>
     border: 1px solid #fed7aa; border-radius: 6px;
     padding: 5px 8px; margin: 6px 0; line-height: 1.6;
   }}
+  /* 需求集（捕获盒产出）+ type 人工确认 */
+  .rs-pack {{ margin-top: 8px; border-top: 1px dashed #e2e8f0; padding-top: 8px; }}
+  .rs-head {{ font-size: 12px; color: #0f172a; font-weight: 600; margin-bottom: 6px; }}
+  .rs-checks {{ display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }}
+  .rs-check {{
+    font-size: 10px; padding: 2px 6px; border-radius: 4px; border: 1px solid;
+  }}
+  .rs-check.ok {{ background: #f0fdf4; color: #15803d; border-color: #bbf7d0; }}
+  .rs-check.bad {{ background: #fef2f2; color: #b91c1c; border-color: #fecaca; }}
+  .rs-check.by {{ background: #f1f5f9; color: #64748b; border-color: #e2e8f0; }}
+  .rs-hint {{ font-size: 10px; color: #94a3b8; margin-bottom: 6px; font-style: italic; }}
+  .rs-row {{
+    display: flex; align-items: center; gap: 6px; padding: 3px 4px;
+    border-radius: 4px; font-size: 11px;
+  }}
+  .rs-row:hover {{ background: #f8fafc; }}
+  .rs-id {{ font-size: 10px; color: #94a3b8; min-width: 62px; font-family: monospace; }}
+  .rs-type {{
+    font-size: 10px; padding: 1px 2px; border: 1px solid #cbd5e1;
+    border-radius: 3px; background: white; flex: 0 0 auto;
+  }}
+  .rs-type.edited {{ border-color: #f59e0b; background: #fffbeb; color: #b45309; font-weight: 600; }}
+  .rs-desc {{ color: #0f172a; flex: 1 1 auto; }}
+  .rs-trace {{ font-size: 10px; color: #94a3b8; font-family: monospace; }}
   .badge-failed {{ background: #fee2e2; color: #b91c1c; }}
   .artifact-card .tid {{ color: #94a3b8; font-size: 10px; word-break: break-all; }}
   .artifact-card details {{ margin-top: 6px; }}
@@ -707,6 +731,48 @@ function renderDddModel(r) {{
   return h;
 }}
 
+// 需求集渲染（捕获盒产出）——含 type 人工确认（human-in-the-loop）
+// 为什么要人工：type_boundary（rule vs metric vs process）实测 LLM 仍会错，
+// 且无法机械验证。投料前让人一眼确认，比事后 rejected 便宜得多。
+const REQ_TYPES = ['object', 'rule', 'process', 'metric', 'event', 'goal'];
+
+function renderRequirementSet(r) {{
+  if (!r || !Array.isArray(r.requirements)) return '';
+  const acc4 = [
+    ['契约合规', r.contract_compliance],
+    ['原文覆盖', r.source_coverage !== undefined ? r.source_coverage + '%' : '—'],
+    ['溯源完整', r.trace_integrity],
+    ['无幻觉', r.no_hallucination],
+  ];
+  const checks = acc4.map(([k, v]) => {{
+    const ok = v === true || v === '100%';
+    return `<span class="rs-check ${{ok ? 'ok' : 'bad'}}">${{ok ? '✓' : '✗'}} ${{k}} ${{v}}</span>`;
+  }}).join('');
+  const rows = r.requirements.map((q) => {{
+    const opts = REQ_TYPES.map((t) =>
+      `<option value="${{t}}"${{t === q.requirement_type ? ' selected' : ''}}>${{t}}</option>`
+    ).join('');
+    return `<div class="rs-row">
+      <span class="rs-id">${{q.requirement_id}}</span>
+      <select class="rs-type" onchange="markTypeEdited(this)">${{opts}}</select>
+      <span class="rs-desc">${{q.description}}</span>
+      <span class="rs-trace" title="溯源到原文句子">← ${{q.trace_to || '?'}}</span>
+    </div>`;
+  }}).join('');
+  return `<div class="rs-pack">
+    <div class="rs-head">业务目标：${{r.business_goal || '—'}}</div>
+    <div class="rs-checks">${{checks}}<span class="rs-check by">抽取者：${{r.extractor}}</span></div>
+    <div class="rs-hint">type 无法机械验证，确认一下再投料（改过的会高亮）</div>
+    ${{rows}}
+  </div>`;
+}}
+
+function markTypeEdited(sel) {{
+  sel.classList.add('edited');
+  const box = document.getElementById('rs-edited-note');
+  if (box) box.style.display = 'block';
+}}
+
 function renderArtifact() {{
   const a = _boxState.artifact;
   if (!a) return `<div class="empty" style="padding:24px 8px;">(等待产出)</div>`;
@@ -715,11 +781,15 @@ function renderArtifact() {{
   const why = a.rejection_class
     ? `<div class="rej-why">未通过原因：<b>${{REJECT_LABEL[a.rejection_class] || a.rejection_class}}</b></div>`
     : '';
+  // 需求集（捕获盒）与 DDD 模型（建模盒）两种产出形态
+  const body = Array.isArray(a.result && a.result.requirements)
+    ? renderRequirementSet(a.result)
+    : renderDddModel(a.result);
   return `<div class="artifact-card">
     <span class="artifact-badge ${{badge}}">${{acc.toUpperCase()}}</span>
     <div class="tid">task_run ${{a.task_run_id}}</div>
     ${{why}}
-    ${{renderDddModel(a.result)}}
+    ${{body}}
     <details><summary>raw JSON</summary><pre>${{JSON.stringify(a.result, null, 2)}}</pre></details>
   </div>`;
 }}
@@ -1049,18 +1119,38 @@ class KanbanRequestHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/structure":
-            # 自然语言业务表述 → TASK IN 结构化表达（BusinessRequirementSet）
-            # 优先 LLM 抽取（语义理解），五道机械检查不过则降级规则版
+            # 自然语言业务表述 → 结构化表达
+            # 走**捕获盒的 task**（不再是影子函数）——每一次抽取都产生 TaskRun、
+            # 都过 4 项 acceptance、失败有 rejection_class 归因
             text = body.get("text")
             if not isinstance(text, str) or not text.strip():
                 self._send_json(400, {"error": "body must include text (non-empty string)"})
                 return
-            payload = structure_business_text_with_llm(text)
+            try:
+                result = trigger_task(
+                    "requirement_capture_box", "capture_business_requirement",
+                    {"narrative": text}, self.store,
+                )
+            except TriggerError as e:
+                self._send_json(400, {
+                    "error": str(e), "stage": "intake", "task_run_created": False,
+                })
+                return
+            except Exception as e:
+                self._send_json(500, {"error": f"capture failed: {e}"})
+                return
+
+            pkg = result.get("result") or {}
             self._send_json(200, {
-                "payload": payload,
-                "requirement_count": len(payload["requirements"]),
-                "extractor": payload.get("_extractor", "rule"),
-                "note": payload.get("_extractor_note"),
+                "task_run_id": result.get("task_run_id"),
+                "status": result.get("status"),
+                "acceptance_status": result.get("acceptance_status"),
+                "rejection_class": result.get("rejection_class"),
+                "op_trace": result.get("op_trace"),
+                "payload": pkg,
+                "requirement_count": pkg.get("requirement_count", 0),
+                "extractor": pkg.get("extractor", "rule"),
+                "note": (pkg.get("evidence_detail") or {}).get("degrade_reason") or "",
             })
             return
 

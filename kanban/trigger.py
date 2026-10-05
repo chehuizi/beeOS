@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 from uuid import uuid4
 
 from beelines import get_modeling_beeline, get_requirement_capture_beeline
@@ -73,6 +73,40 @@ def box_meta(box_id: str) -> dict[str, str]:
 def registered_box_ids() -> set[str]:
     """已注册（看板可见 / 可触发）的 box_id 集合"""
     return set(BOX_REGISTRY)
+
+
+def order_boxes_by_flow(box_ids: Iterable[str]) -> list[str]:
+    """按业务流向排盒子：产出方在前，消费方在后（需求捕获 → 业务建模）
+
+    顺序从 BOX_META 的 feeds_into 声明推导，不按 box_id 字母序也不按注册顺序。
+    字母序会把 business_modeling_box 排在 requirement_capture_box 前面，
+    而实际流程正好相反；注册顺序则只是开发历史的偶然（谁先加谁在前）。
+
+    稳定：同一层内保持传入顺序（Kahn 分层取出，不做字典序重排）。
+    兜底：feeds_into 声明成环时不抛错，剩下的按传入顺序收尾——看板不能白屏。
+    """
+    ids = list(box_ids)
+    # preds[b] = 哪些盒子把产出投给 b（b 的上游）
+    preds: dict[str, set[str]] = {b: set() for b in ids}
+    for src in ids:
+        for dst in BOX_META.get(src, {}).get("feeds_into", []):
+            if dst in preds:
+                preds[dst].add(src)
+
+    ordered: list[str] = []
+    placed: set[str] = set()
+    remaining = list(ids)
+    while remaining:
+        ready = [b for b in remaining if preds[b] <= placed]
+        if not ready:
+            # 环：剩下的按原顺序收尾，不死循环
+            ordered.extend(remaining)
+            break
+        for b in ready:
+            ordered.append(b)
+            placed.add(b)
+        remaining = [b for b in remaining if b not in placed]
+    return ordered
 
 
 class TriggerError(ValueError):

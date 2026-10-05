@@ -38,6 +38,7 @@ import argparse
 import sys
 from typing import Any, Optional
 
+from kanban.trigger import order_boxes_by_flow
 from runtime.store import TaskRunStore
 
 
@@ -65,7 +66,7 @@ def render_dashboard(store: TaskRunStore, box_filter: Optional[str] = None) -> s
     lines.append("")
     lines.append("  Boxes Registered")
     lines.append("  ----------------")
-    all_boxes = store.list_boxes()
+    all_boxes = order_boxes_by_flow(store.list_boxes())
     if box_filter:
         boxes = [b for b in all_boxes if b == box_filter]
     else:

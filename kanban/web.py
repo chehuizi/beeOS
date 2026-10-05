@@ -38,6 +38,7 @@ from kanban.trigger import (
     TriggerError,
     box_meta,
     list_task_entries,
+    order_boxes_by_flow,
     registered_box_ids,
     structure_business_text_with_llm,
     trigger_task,
@@ -79,7 +80,8 @@ def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[s
         exceptions = store.list_exceptions(limit=5)
 
     # Boxes（按 filter）
-    all_boxes = store.list_boxes()
+    # 排序按业务流向（feeds_into 声明），不是字母序也不是注册序
+    all_boxes = order_boxes_by_flow(store.list_boxes())
     if box_filter:
         boxes = [b for b in all_boxes if b == box_filter]
     else:

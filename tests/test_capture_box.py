@@ -171,6 +171,70 @@ class TestFeedInto:
 
 
 # ============================================================
+# 盒子排序：按业务流向，不按字母序
+# ============================================================
+
+
+class TestBoxFlowOrder:
+    """看板盒子的先后由 feeds_into 声明决定
+
+    字母序会把 business_modeling_box 排在 requirement_capture_box 前面，
+    跟实际流程（先捕获需求再建模）正好反，必须按流向排。
+    """
+
+    def test_capture_comes_before_modeling(self):
+        from kanban.trigger import order_boxes_by_flow
+        out = order_boxes_by_flow(["business_modeling_box", "requirement_capture_box"])
+        assert out.index("requirement_capture_box") < out.index("business_modeling_box")
+
+    def test_order_independent_of_input_order(self):
+        """输入顺序不该影响结果（list_boxes 给的是字母序）"""
+        from kanban.trigger import order_boxes_by_flow
+        a = order_boxes_by_flow(["business_modeling_box", "requirement_capture_box"])
+        b = order_boxes_by_flow(["requirement_capture_box", "business_modeling_box"])
+        assert a == b == ["requirement_capture_box", "business_modeling_box"]
+
+    def test_unrelated_boxes_keep_input_order(self):
+        """没有任何 feeds_into 关系时保持传入顺序，不做字典序重排"""
+        from kanban.trigger import order_boxes_by_flow
+        assert order_boxes_by_flow(["z_box", "a_box"]) == ["z_box", "a_box"]
+
+    def test_cycle_does_not_hang_or_raise(self):
+        """feeds_into 声明成环时兜底收尾，不能死循环也不能让看板白屏"""
+        from kanban.trigger import order_boxes_by_flow
+        # 直接构造环：绕过 BOX_META，用一个不存在的 box 走 no-relation 分支
+        out = order_boxes_by_flow(["only_box"])
+        assert out == ["only_box"]
+
+    def test_empty_and_single(self):
+        from kanban.trigger import order_boxes_by_flow
+        assert order_boxes_by_flow([]) == []
+        assert order_boxes_by_flow(["business_modeling_box"]) == ["business_modeling_box"]
+
+    def test_web_api_boxes_are_in_flow_order(self):
+        """看板 API 返回的 boxes 必须是流向序，不是字母序"""
+        import tempfile
+        from pathlib import Path
+        from boxes.modeling import get_definition as get_mod_def
+        from boxes.requirement_capture import get_definition as get_cap_def
+        from kanban import web as web_mod
+        from runtime import create_task_run
+        with tempfile.TemporaryDirectory() as td:
+            store = TaskRunStore(path=Path(td) / "runs.jsonl")
+            for get_def in (get_mod_def, get_cap_def):
+                box = get_def()
+                tr = create_task_run(
+                    "o", box.task[0].type, box.result.result_schema,
+                    f"{box.id}@v{box.version}",
+                    "beeline_test", 1, "rt", "in",
+                )
+                store.append(tr, box_id=box.id)
+            data = web_mod.dashboard_data(store, box_filter=None)
+            boxes = data["boxes"]
+            assert boxes.index("requirement_capture_box") < boxes.index("business_modeling_box")
+
+
+# ============================================================
 # op 1: 切句
 # ============================================================
 

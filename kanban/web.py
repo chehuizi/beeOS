@@ -311,10 +311,16 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .beebox-body {{
     display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px;
     align-items: stretch; padding: 16px;
+    /* 固定盒高：产出内容再多也不把盒子撑长，超出部分各自内部滚动。
+       clamp 让矮屏不至于溢出。 */
+    height: clamp(380px, 62vh, 560px);
   }}
   .beebox-body > * {{ min-width: 0; }}
   @media (max-width: 1080px) {{
-    .beebox-body {{ grid-template-columns: 1fr; }}
+    /* 单列堆叠时不能沿用固定盒高：三个端口会挤在一格里并溢到盒外 */
+    .beebox-body {{ grid-template-columns: 1fr; height: auto; }}
+    #task-payload {{ min-height: 200px; max-height: 320px; }}
+    .lane {{ padding-bottom: 8px; }}
   }}
   .port {{
     background: white; border: 1px solid #e2e8f0;
@@ -340,14 +346,18 @@ HTML_PAGE = f"""<!DOCTYPE html>
     font-size: 11px; font-weight: 700; color: #64748b;
     letter-spacing: 0.8px; margin-bottom: 10px;
   }}
-  .port select {{
+  /* 只命中投料口那个 task_type 下拉；产出口里的 type 下拉在更深层，
+     被这里 width:100% 命中会把整行撑满、把需求描述挤没。 */
+  .port > select {{
     width: 100%; box-sizing: border-box; padding: 6px 8px; margin-bottom: 8px;
     border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; background: white;
   }}
-  #task-payload {{ flex: 1 1 auto; min-height: 260px; resize: vertical; }}
-  #artifact-slot {{ flex: 1 1 auto; overflow: auto; }}
+  /* 投料框不给人拖动改大小：盒高固定后，拖一把就破版 */
+  #task-payload {{ flex: 1 1 auto; min-height: 0; resize: none; }}
+  #artifact-slot {{ flex: 1 1 auto; min-height: 0; overflow: auto; }}
   .trigger-btn {{
-    width: 100%; padding: 8px 0; border: none; border-radius: 6px; font-size: 13px;
+    align-self: center; min-width: 128px; padding: 7px 22px;
+    border: none; border-radius: 6px; font-size: 12px;
     background: linear-gradient(135deg, #2563eb, #1d4ed8);
     color: white; cursor: pointer; font-weight: 600;
   }}
@@ -421,17 +431,17 @@ HTML_PAGE = f"""<!DOCTYPE html>
   }}
   .rs-hint {{ font-size: 10px; color: #94a3b8; margin-bottom: 6px; font-style: italic; }}
   .rs-row {{
-    display: flex; align-items: center; gap: 6px; padding: 3px 4px;
-    border-radius: 4px; font-size: 11px;
+    display: flex; align-items: center; gap: 6px; padding: 2px 4px;
+    border-radius: 4px; font-size: 11px; line-height: 1.5;
   }}
   .rs-row:hover {{ background: #f8fafc; }}
   .rs-id {{ font-size: 10px; color: #94a3b8; min-width: 62px; font-family: monospace; }}
   .rs-type {{
     font-size: 10px; padding: 1px 2px; border: 1px solid #cbd5e1;
-    border-radius: 3px; background: white; flex: 0 0 auto;
+    border-radius: 3px; background: white; flex: 0 0 auto; width: auto;
   }}
   .rs-type.edited {{ border-color: #f59e0b; background: #fffbeb; color: #b45309; font-weight: 600; }}
-  .rs-desc {{ color: #0f172a; flex: 1 1 auto; }}
+  .rs-desc {{ color: #0f172a; flex: 1 1 auto; min-width: 0; }}
   .rs-trace {{ font-size: 10px; color: #94a3b8; font-family: monospace; }}
   /* 纯文本投料框（task_schema 全是标量时）——等宽换成正常字体，读着像在写话 */
   #task-payload.payload-text {{

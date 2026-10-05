@@ -296,6 +296,38 @@ class TestCredentialResolution:
         with pytest.raises(llm.LLMError):
             llm._resolve_config_path()
 
+    def test_npm_protocol_override(self, monkeypatch):
+        """协议覆盖：@ai-sdk/openai 决定 /chat/completions + Bearer，配错就是 401"""
+        import shutil
+        import yaml
+        from runtime import llm
+        monkeypatch.setenv(llm._ENV_KEY, "sk-realkey-abc")
+        monkeypatch.setenv(llm._ENV_NPM, "@ai-sdk/openai")
+        monkeypatch.setattr(llm, "_CONFIG_PATH", _tmp_config({"apiKey": "sk-xxx"}))
+        resolved, tmpdir = llm._resolve_config_path()
+        try:
+            minimax = yaml.safe_load(resolved.read_text())["provider"]["minimax"]
+            assert minimax["npm"] == "@ai-sdk/openai"
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_npm_only_override_still_writes_config(self, monkeypatch):
+        """只覆盖协议时也要走派生 config（不能当成"无需覆盖"而跳过）"""
+        import shutil
+        import yaml
+        from runtime import llm
+        monkeypatch.delenv(llm._ENV_KEY, raising=False)
+        monkeypatch.delenv(llm._ENV_BASE_URL, raising=False)
+        monkeypatch.setenv(llm._ENV_NPM, "@ai-sdk/openai")
+        monkeypatch.setattr(llm, "_CONFIG_PATH", _tmp_config({"apiKey": "sk-realkey-abc"}))
+        resolved, tmpdir = llm._resolve_config_path()
+        try:
+            assert tmpdir is not None
+            minimax = yaml.safe_load(resolved.read_text())["provider"]["minimax"]
+            assert minimax["npm"] == "@ai-sdk/openai"
+            assert minimax["options"]["apiKey"] == "sk-realkey-abc"
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
 def _tmp_config(options: dict) -> Path:
     import tempfile

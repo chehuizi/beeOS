@@ -40,6 +40,10 @@ _CONFIG_PATH = Path.home() / ".minimax/config.yaml"
 # 覆盖凭证的环境变量：runtime 改写 config.yaml 时不至于把 LLM 腿打断
 _ENV_KEY = "BEEOS_LLM_API_KEY"
 _ENV_BASE_URL = "BEEOS_LLM_BASE_URL"
+# 协议：@ai-sdk/openai 走 /chat/completions + Bearer，@ai-sdk/anthropic 走
+# /messages + x-api-key。配错协议会得到 401，而不是一个能看懂的报错——实测
+# 内部代理只认前者，所以把它也纳入覆盖范围。
+_ENV_NPM = "BEEOS_LLM_NPM"
 
 # 占位符 key：不是"没配"，是"配了个假的"——必须区分，否则只会得到一个 401
 _PLACEHOLDER_HINTS = ("xxx", "your", "changeme", "placeholder", "dummy", "fake", "test")
@@ -89,8 +93,9 @@ def _resolve_config_path() -> tuple[Path, Any]:
     """
     env_key = (os.environ.get(_ENV_KEY) or "").strip()
     env_base = (os.environ.get(_ENV_BASE_URL) or "").strip()
+    env_npm = (os.environ.get(_ENV_NPM) or "").strip()
 
-    if not env_key and not env_base:
+    if not env_key and not env_base and not env_npm:
         key = str(_provider_options(_read_config()).get("apiKey") or "").strip()
         if _is_placeholder(key):
             raise LLMError(
@@ -118,18 +123,22 @@ def _resolve_config_path() -> tuple[Path, Any]:
 
     tmpdir = Path(tempfile.mkdtemp(prefix="beeos-llm-"))
     try:
-        (tmpdir / "config.yaml").write_text(_dump_yaml(config, options))
+        (tmpdir / "config.yaml").write_text(_dump_yaml(config, options, env_npm))
         os.chmod(tmpdir / "config.yaml", 0o600)
     except Exception as e:  # noqa: BLE001
         raise LLMError(f"failed to write derived llm config: {e}") from e
     return tmpdir / "config.yaml", tmpdir
 
 
-def _dump_yaml(config: dict[str, Any], options: dict[str, Any]) -> str:
+def _dump_yaml(
+    config: dict[str, Any], options: dict[str, Any], npm: str = ""
+) -> str:
     import yaml
     merged = dict(config)
     provider = dict(merged.get("provider") or {})
     minimax = dict(provider.get("minimax") or {})
+    if npm:
+        minimax["npm"] = npm
     minimax["options"] = options
     provider["minimax"] = minimax
     merged["provider"] = provider

@@ -19,9 +19,12 @@ runtime.llm - LLM 调用客户端（最小可替换实现）
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +32,17 @@ from typing import Any
 _LLM_CALL_SCRIPT = (
     Path.home() / ".minimax/.builtin-skills/llm-call/scripts/llm_call.py"
 )
+
+# ~/.minimax/config.yaml —— 注意：这是 MCode runtime 拥有的文件，它会重写
+# （实测引号风格被 YAML 库规范化写回），所以我们不假设里面的值是稳定的。
+_CONFIG_PATH = Path.home() / ".minimax/config.yaml"
+
+# 覆盖凭证的环境变量：runtime 改写 config.yaml 时不至于把 LLM 腿打断
+_ENV_KEY = "BEEOS_LLM_API_KEY"
+_ENV_BASE_URL = "BEEOS_LLM_BASE_URL"
+
+# 占位符 key：不是"没配"，是"配了个假的"——必须区分，否则只会得到一个 401
+_PLACEHOLDER_HINTS = ("xxx", "your", "changeme", "placeholder", "dummy", "fake", "test")
 
 # 推理段（<think> / <think> 变体）
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
@@ -38,6 +52,88 @@ _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
 
 class LLMError(RuntimeError):
     """LLM 调用失败（端点错 / 凭证错 / 超时 / 输出无法解析为 JSON）"""
+
+
+def _is_placeholder(key: str) -> bool:
+    """判断 apiKey 是不是占位符（sk-xxx / your-api-key / ...）"""
+    low = key.strip().lower()
+    if not low:
+        return True
+    return any(h in low for h in _PLACEHOLDER_HINTS)
+
+
+def _read_config() -> dict[str, Any]:
+    if not _CONFIG_PATH.exists():
+        return {}
+    try:
+        import yaml
+        data = yaml.safe_load(_CONFIG_PATH.read_text()) or {}
+    except Exception:  # noqa: BLE001 — 读不动就当没配，交给上层报可操作的错
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _provider_options(config: dict[str, Any]) -> dict[str, Any]:
+    provider = (config.get("provider") or {}).get("minimax") or {}
+    options = provider.get("options") or {}
+    return options if isinstance(options, dict) else {}
+
+
+def _resolve_config_path() -> tuple[Path, Any]:
+    """决定传给 llm_call.py 的 config 路径
+
+    - 有 env 覆盖 → 写一份派生 config 到临时目录（凭证不入库、不回显、随用随删）
+    - 没有        → 用 ~/.minimax/config.yaml，但先做占位符预检
+
+    返回 (config 路径, 需要清理的临时目录 or None)
+    """
+    env_key = (os.environ.get(_ENV_KEY) or "").strip()
+    env_base = (os.environ.get(_ENV_BASE_URL) or "").strip()
+
+    if not env_key and not env_base:
+        key = str(_provider_options(_read_config()).get("apiKey") or "").strip()
+        if _is_placeholder(key):
+            raise LLMError(
+                "no usable LLM credential: "
+                f"{_CONFIG_PATH} provider.minimax.options.apiKey is a placeholder. "
+                f"Set a real key in that file, or export {_ENV_KEY}=<key> "
+                "before starting beeOS (and restart the web server)."
+            )
+        return _CONFIG_PATH, None
+
+    config = _read_config()
+    options = dict(_provider_options(config))
+    if env_key:
+        if _is_placeholder(env_key):
+            raise LLMError(
+                f"{_ENV_KEY} is set to a placeholder value, not a real key. "
+                "Export the actual API key, or clear it to fall back to "
+                f"{_CONFIG_PATH}."
+            )
+        options["apiKey"] = env_key
+    if env_base:
+        options["baseURL"] = env_base
+    if _is_placeholder(str(options.get("apiKey") or "")):
+        raise LLMError("resolved LLM apiKey is empty or a placeholder")
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="beeos-llm-"))
+    try:
+        (tmpdir / "config.yaml").write_text(_dump_yaml(config, options))
+        os.chmod(tmpdir / "config.yaml", 0o600)
+    except Exception as e:  # noqa: BLE001
+        raise LLMError(f"failed to write derived llm config: {e}") from e
+    return tmpdir / "config.yaml", tmpdir
+
+
+def _dump_yaml(config: dict[str, Any], options: dict[str, Any]) -> str:
+    import yaml
+    merged = dict(config)
+    provider = dict(merged.get("provider") or {})
+    minimax = dict(provider.get("minimax") or {})
+    minimax["options"] = options
+    provider["minimax"] = minimax
+    merged["provider"] = provider
+    return yaml.safe_dump(merged, allow_unicode=True)
 
 
 def strip_noise(text: str) -> str:
@@ -106,9 +202,11 @@ def complete(
     if not _LLM_CALL_SCRIPT.exists():
         raise LLMError(f"llm_call.py not found at {_LLM_CALL_SCRIPT}")
 
+    config_path, tmpdir = _resolve_config_path()
     cmd = [
         sys.executable,
         str(_LLM_CALL_SCRIPT),
+        "--config", str(config_path),
         "--model", model,
         "--max-tokens", str(max_tokens),
         "--timeout", str(int(timeout)),
@@ -120,6 +218,9 @@ def complete(
         )
     except subprocess.TimeoutExpired as e:
         raise LLMError(f"llm call timed out after {timeout}s") from e
+    finally:
+        if tmpdir is not None:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     out = (proc.stdout or "").strip()
     if proc.returncode != 0:

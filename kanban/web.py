@@ -413,6 +413,12 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .rs-check.ok {{ background: #f0fdf4; color: #15803d; border-color: #bbf7d0; }}
   .rs-check.bad {{ background: #fef2f2; color: #b91c1c; border-color: #fecaca; }}
   .rs-check.by {{ background: #f1f5f9; color: #64748b; border-color: #e2e8f0; }}
+  .rs-check.warn {{ background: #fffbeb; color: #b45309; border-color: #fde68a; }}
+  .rs-degrade {{
+    background: #fffbeb; border: 1px solid #fcd34d; color: #92400e;
+    padding: 5px 8px; border-radius: 5px; font-size: 11px;
+    margin-bottom: 6px; line-height: 1.45; cursor: help;
+  }}
   .rs-hint {{ font-size: 10px; color: #94a3b8; margin-bottom: 6px; font-style: italic; }}
   .rs-row {{
     display: flex; align-items: center; gap: 6px; padding: 3px 4px;
@@ -763,9 +769,16 @@ function renderRequirementSet(r) {{
       <span class="rs-trace" title="溯源到原文句子">← ${{q.trace_to || '?'}}</span>
     </div>`;
   }}).join('');
+  const degraded = r.extractor !== 'llm';
+  const degradeNote = degraded
+    ? `<div class="rs-degrade" title="${{(r.evidence_detail && r.evidence_detail.degrade_reason) || 'LLM 未参与，退回规则抽取'}}">
+         ⚠ 降级：规则版抽取（LLM 未参与，type 判定质量下降，请人工核对）
+       </div>`
+    : '';
   return `<div class="rs-pack">
     <div class="rs-head">业务目标：${{r.business_goal || '—'}}</div>
-    <div class="rs-checks">${{checks}}<span class="rs-check by">抽取者：${{r.extractor}}</span></div>
+    ${{degradeNote}}
+    <div class="rs-checks">${{checks}}<span class="rs-check ${{degraded ? 'by warn' : 'by'}}">抽取者：${{r.extractor}}</span></div>
     <div class="rs-hint">type 无法机械验证，确认一下再投料（改过的会高亮）</div>
     ${{rows}}
   </div>`;

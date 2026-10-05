@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -220,3 +221,87 @@ class TestFallback:
         """规则版保持原样，不带 _extractor 等内部标记"""
         p = structure_business_text("wms的流程有入库流程、出库流程。")
         assert set(p) == {"set_id", "business_goal", "requirements"}
+
+
+# ============================================================
+# 凭证解析：占位符预检 + env 覆盖
+# ============================================================
+
+
+class TestCredentialResolution:
+    """~/.minimax/config.yaml 是 MCode runtime 拥有的文件，会被重写
+
+    所以不能假设里面的 apiKey 一直有效——要么预检出占位符给出可操作的错，
+    要么用环境变量覆盖，不能让 LLM 腿静默断掉。
+    """
+
+    def test_placeholder_detected(self):
+        from runtime.llm import _is_placeholder
+        for bad in ("sk-xxx", "XXX", "your-api-key", "changeme", "placeholder", "", "   "):
+            assert _is_placeholder(bad), f"{bad!r} 应判为占位符"
+
+    def test_real_looking_key_not_flagged(self):
+        from runtime.llm import _is_placeholder
+        assert not _is_placeholder("sk-abc123def456ghi789jkl")
+        assert not _is_placeholder("eyJhbGciOiJIUzI1NiJ9.payload.sig")
+
+    def test_placeholder_raises_actionable_error(self, monkeypatch):
+        """配置里是假 key 时，错误要说清怎么修，而不是甩一个 401"""
+        from runtime import llm
+        monkeypatch.delenv(llm._ENV_KEY, raising=False)
+        monkeypatch.delenv(llm._ENV_BASE_URL, raising=False)
+        monkeypatch.setattr(llm, "_CONFIG_PATH", _tmp_config({"apiKey": "sk-xxx"}))
+        with pytest.raises(llm.LLMError) as ei:
+            llm.complete("hi", timeout=5)
+        msg = str(ei.value)
+        assert "no usable LLM credential" in msg
+        assert llm._ENV_KEY in msg, "错误里要给出可操作的修法"
+
+    def test_real_key_passes_preflight(self, monkeypatch):
+        """真 key 通过预检（只验解析，不发网络请求）"""
+        from runtime import llm
+        monkeypatch.delenv(llm._ENV_KEY, raising=False)
+        monkeypatch.delenv(llm._ENV_BASE_URL, raising=False)
+        path = _tmp_config({"apiKey": "sk-realkey123456"})
+        monkeypatch.setattr(llm, "_CONFIG_PATH", path)
+        resolved, tmpdir = llm._resolve_config_path()
+        assert resolved == path
+        assert tmpdir is None, "没有 env 覆盖时不该写临时 config"
+
+    def test_env_key_writes_derived_config_and_cleans_up(self, monkeypatch):
+        """env 覆盖：派生 config 写到 0600 临时文件，用完即删"""
+        import os
+        from runtime import llm
+        monkeypatch.setenv(llm._ENV_KEY, "sk-from-env-999")
+        monkeypatch.setenv(llm._ENV_BASE_URL, "https://example.invalid/v1")
+        monkeypatch.setattr(llm, "_CONFIG_PATH", _tmp_config({"apiKey": "sk-xxx"}))
+        resolved, tmpdir = llm._resolve_config_path()
+        try:
+            assert tmpdir is not None
+            assert resolved != llm._CONFIG_PATH
+            assert oct(os.stat(resolved).st_mode)[-3:] == "600"
+            import yaml
+            opts = yaml.safe_load(resolved.read_text())["provider"]["minimax"]["options"]
+            assert opts["apiKey"] == "sk-from-env-999"
+            assert opts["baseURL"] == "https://example.invalid/v1"
+        finally:
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        assert not os.path.exists(tmpdir), "临时 config 必须清理"
+
+    def test_env_empty_placeholder_rejected(self, monkeypatch):
+        from runtime import llm
+        monkeypatch.setenv(llm._ENV_KEY, "sk-xxx")
+        monkeypatch.setattr(llm, "_CONFIG_PATH", _tmp_config({"apiKey": "sk-realkey"}))
+        with pytest.raises(llm.LLMError):
+            llm._resolve_config_path()
+
+
+def _tmp_config(options: dict) -> Path:
+    import tempfile
+    import yaml
+    d = Path(tempfile.mkdtemp(prefix="beeos-test-cfg-"))
+    (d / "config.yaml").write_text(
+        yaml.safe_dump({"provider": {"minimax": {"options": options}}})
+    )
+    return d / "config.yaml"

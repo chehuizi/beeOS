@@ -355,12 +355,20 @@ HTML_PAGE = f"""<!DOCTYPE html>
   /* 投料框不给人拖动改大小：盒高固定后，拖一把就破版 */
   #task-payload {{ flex: 1 1 auto; min-height: 0; resize: none; }}
   #artifact-slot {{ flex: 1 1 auto; min-height: 0; overflow: auto; }}
+  .trigger-row {{
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+  }}
   .trigger-btn {{
-    align-self: center; min-width: 128px; padding: 7px 22px;
+    min-width: 128px; padding: 7px 22px;
     border: none; border-radius: 6px; font-size: 12px;
     background: linear-gradient(135deg, #2563eb, #1d4ed8);
     color: white; cursor: pointer; font-weight: 600;
   }}
+  .ghost-btn {{
+    padding: 7px 12px; border: 1px dashed #cbd5e1; border-radius: 6px;
+    font-size: 11px; background: transparent; color: #64748b; cursor: pointer;
+  }}
+  .ghost-btn:hover {{ border-color: #94a3b8; color: #334155; }}
   .trigger-btn:hover {{ opacity: 0.9; }}
   .trigger-btn:disabled {{ opacity: 0.5; cursor: default; }}
   #task-payload {{
@@ -851,7 +859,7 @@ function buildShell(boxId, box, entries) {{
   }}));
   let options = '';
   let ops = [];
-  let placeholder = '填写 task payload（JSON）';
+  let placeholder = '在这里粘贴 task payload（JSON）。下方「填入示例」可取一份样例。';
   for (const e of entries) {{
     window._taskEntries[e.task_type] = e;
     if (e.payload_kind === 'text') {{
@@ -859,9 +867,10 @@ function buildShell(boxId, box, entries) {{
       // 写成真正的转义会被 Python 提前解释成真换行，把 JS 字符串字面量撑破
       // （控制台报 SyntaxError: Invalid or unexpected token）。注释里也别写真转义。
       placeholder = (
-        '用自然语言描述业务。首句是业务目标，之后每句是一条业务事实。\\n'
+        '在这里写业务表述（下方灰字只是示例，履约前请清空）\\n\\n'
+        + '首句是业务目标，之后每句是一条业务事实。\\n'
         + '顿号「、」连接并列项时每项会单独成条。\\n\\n'
-        + '例如：\\n'
+        + '示例：\\n'
         + 'wms的流程有入库流程、出库流程、盘点流程。\\n'
         + '出库要先进先出拣货。\\n'
         + '入库处理时长要可度量。'
@@ -878,8 +887,12 @@ function buildShell(boxId, box, entries) {{
           <div class="port-title" id="port-title">TASK IN · 投料口</div>
           <select id="task-type" onchange="onTaskTypeChange()">${{options}}</select>
           <textarea id="task-payload" rows="12" spellcheck="false"
+                    oninput="clearPayloadError()"
                     placeholder="${{placeholder}}"></textarea>
-          <button class="trigger-btn" id="trigger-btn" onclick="triggerTask('${{boxId}}')">▶ 履约</button>
+          <div class="trigger-row">
+            <button class="trigger-btn" id="trigger-btn" onclick="triggerTask('${{boxId}}')">▶ 履约</button>
+            <button class="ghost-btn" onclick="fillSample()">填入示例</button>
+          </div>
           <div id="trigger-result" class="trigger-result"></div>
         </div>
         <div class="lane">
@@ -1001,16 +1014,37 @@ function onTaskTypeChange() {{
   // 不在前端硬编码——加新盒子时不用改这里。
   const isText = entry.payload_kind === 'text';
   payloadEl.classList.toggle('payload-text', isText);
-  if (isText) {{
-    payloadEl.value = sample.narrative || sample.text || '';
-  }} else {{
-    payloadEl.value = JSON.stringify(sample, null, 2);
-  }}
+  // 故意不预填示例：预填内容看着像"已经有人在投料"，直接点履约会误以为
+  // 那就是自己的数据。示例留在 placeholder（灰字，空框才显示）里，
+  // 另给一个「填入示例」按钮按需取用。
+  payloadEl.value = '';
 
   const t = document.getElementById('port-title');
   if (t) t.textContent = isText
     ? 'TASK IN · 投料口（自然语言业务表述）'
     : 'TASK IN · 投料口（结构化表达）';
+}}
+
+function fillSample() {{
+  const typeEl = document.getElementById('task-type');
+  const payloadEl = document.getElementById('task-payload');
+  if (!typeEl || !payloadEl) return;
+  const entry = (window._taskEntries || {{}})[typeEl.value] || {{}};
+  const sample = entry.sample_payload || {{}};
+  payloadEl.value = entry.payload_kind === 'text'
+    ? (sample.narrative || sample.text || '')
+    : JSON.stringify(sample, null, 2);
+  clearPayloadError();
+  payloadEl.focus();
+}}
+
+// 一开始打字/填示例就把上一条报错撤掉，否则红字挂着会误导成"当前内容仍无效"
+function clearPayloadError() {{
+  const res = document.getElementById('trigger-result');
+  if (res && res.classList.contains('err')) {{
+    res.className = 'trigger-result';
+    res.textContent = '';
+  }}
 }}
 
 function sleep(ms) {{ return new Promise(r => setTimeout(r, ms)); }}

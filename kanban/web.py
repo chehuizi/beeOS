@@ -564,8 +564,9 @@ let _boxState = {{ opStates: {{}}, token: null, artifact: null, running: false, 
 let _lastData = null;
 
 function layout2D(ops) {{
-  // 蛇形两排布局（盒内 560x420 画布）：row1 左→右（y=130），row2 右→左（y=235）
-  // IN 对齐 row1 高度（直入），OUT 对齐 row2 高度；排间转换在右端（x 对齐，垂直下落）
+  // 蛇形两排布局（盒内 560x420 画布）：row1 左→右（y=150），row2 右→左（y=250）
+  // IN 顶行、OUT 底行，各自独占一行，且横向对齐它连的那个工位中心——
+  // 端口与工位同 x，接入/产出就是一条竖线，不用猜"这个点连的是哪个框"
   // 间距按完整 op 名设计（不省略），最长 21 字符也能放得下
   const pos = {{}};
   const n = ops.length;
@@ -582,11 +583,8 @@ function layout2D(ops) {{
   const rest = ops.slice(perRow);
   const xs2 = spread(rest.length);
   for (let i = 0; i < rest.length; i++) pos[rest[i]] = {{ x: xs2[rest.length - 1 - i], y: 250 }};
-  // IN / OUT 各自独占一行，不跟工位并排：
-  // 之前 IN 跟第一行同高、OUT 跟第二行同高，端口挤在工位流里，
-  // 看不出"投料从哪进、产出从哪出"。现在 IN 顶行、OUT 底行。
-  pos._in = {{ x: 62, y: 52 }};
-  pos._out = {{ x: 498, y: 352 }};
+  pos._in = {{ x: pos[ops[0]].x, y: 52 }};
+  pos._out = {{ x: pos[ops[n - 1]].x, y: 352 }};
   return pos;
 }}
 
@@ -596,7 +594,6 @@ function initBox2D(container, ops) {{
   // 盒子边界由外层 .beebox-frame 承担（这里不再画内框）
   // 对外 api：setOpState / moveToken / reset
   const pos = layout2D(ops);
-  const EXIT_Y = pos._out.y, EXIT_X = pos._out.x;   // OUT 独占底行，沿它的高度走线
   let s = `<svg viewBox="0 0 560 420" style="width:100%;height:auto;display:block" preserveAspectRatio="xMidYMid meet">
     <defs>
       <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -604,23 +601,27 @@ function initBox2D(container, ops) {{
       </marker>
     </defs>`;
 
-  // 流水线：IN（顶行）→ op1 → ... → opN → OUT（底行），全程横平竖直
+  // 流水线：IN（顶行，对齐首工位）→ op1 → ... → opN → OUT（底行，对齐末工位）
   const chain = ['_in', ...ops, '_out'];
+  // 端口与工位同 x 时 L 形会退化成连续重复点，去掉，否则令牌多走一格空动画
+  const tidy = (pts) => pts.filter((p, i) =>
+    i === 0 || p[0] !== pts[i - 1][0] || p[1] !== pts[i - 1][1]);
   const pathTo = {{}};   // key → 到达该节点的折线途径点（不含终点）
   for (let i = 0; i < chain.length - 1; i++) {{
     const a = pos[chain[i]], b = pos[chain[i + 1]];
     let pts;
     if (chain[i + 1] === '_out') {{
-      // 末工位 → 垂直下到 OUT 所在底行 → 沿底行向右 → 进 OUT
-      pts = [[a.x, a.y], [a.x, EXIT_Y], [EXIT_X, EXIT_Y]];
-      pathTo._out = pts.slice(1, -1);
+      // 末工位 → 垂直下到 OUT 所在底行 → 沿底行横向 → 进 OUT
+      pts = [[a.x, a.y], [a.x, b.y], [b.x, b.y]];
     }} else if (chain[i] === '_in') {{
-      // IN 在顶行：先垂直下来对齐首工位那一行，再横向进首工位
+      // IN 在顶行：垂直下来对齐首工位那一行，再横向进首工位
       pts = [[a.x, a.y], [a.x, b.y], [b.x, b.y]];
     }} else {{
       pts = [[a.x, a.y], [b.x, b.y]];
     }}
+    pts = tidy(pts);
     s += `<polyline points="${{pts.map(p => p.join(',')).join(' ')}}" class="op-link" fill="none" marker-end="url(#arrow)" />`;
+    if (chain[i + 1] === '_out') pathTo._out = pts.slice(1, -1);
   }}
 
   // IN / OUT 端口

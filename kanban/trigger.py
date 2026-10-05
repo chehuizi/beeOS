@@ -47,16 +47,20 @@ BOX_REGISTRY: dict[
 
 # Box 元信息（声明式归属，不从 box_id 关键词推断）：
 # Line = 企业价值流（value stream），Box = 业务责任单元
-BOX_META: dict[str, dict[str, str]] = {
+BOX_META: dict[str, dict[str, Any]] = {
     "requirement_capture_box": {
         "display_name": "Requirement Capture Box",
         "value_stream": "Software Delivery",
         "role": "Business Requirement Capture Fulfillment",
+        # 本盒产出投给谁（看板产出口的"接力"按钮读它）。
+        # 声明在盒子上而不是硬编码在前端——盒子之间的关系是业务信息。
+        "feeds_into": ["business_modeling_box"],
     },
     "business_modeling_box": {
         "display_name": "Business Modeling Box",
         "value_stream": "Software Delivery",
         "role": "Business Modeling Fulfillment",
+        "feeds_into": [],
     },
 }
 
@@ -122,6 +126,21 @@ _EXAMPLE_PAYLOADS: dict[tuple[str, str], dict[str, Any]] = {
 }
 
 
+def _payload_kind(schema) -> str:
+    """投料框形态：由 task_schema 的必填字段形状决定，不在前端硬编码
+
+    - 必填字段里有 array / object / ref → "json"（嵌套结构，文本框会毁掉它）
+    - 否则全是标量 → "text"（纯文本直接打字，别套一层 JSON 编辑器）
+    """
+    if schema is None:
+        return "json"
+    has_complex = any(
+        f.required and (f.type in ("array", "object") or f.type.startswith("ref:"))
+        for f in schema.fields
+    )
+    return "json" if has_complex else "text"
+
+
 def list_task_entries(box_id: str) -> list[dict[str, Any]]:
     """列出某 box 可接收的 task 入口（task_type + 触发说明 + 示例 payload + 内部工位）
 
@@ -135,9 +154,9 @@ def list_task_entries(box_id: str) -> list[dict[str, Any]]:
     definition = get_definition()
     entries = []
     for task in definition.task:
+        schema = definition.get_schema(task.task_schema)
         sample = _EXAMPLE_PAYLOADS.get((box_id, task.type))
         if sample is None:
-            schema = definition.get_schema(task.task_schema)
             sample = (
                 {f.name: _sample_field(f) for f in schema.fields}
                 if schema is not None
@@ -154,6 +173,7 @@ def list_task_entries(box_id: str) -> list[dict[str, Any]]:
             "trigger": task.trigger,
             "sample_payload": sample,
             "beeline_ops": beeline_ops,
+            "payload_kind": _payload_kind(schema),
         })
     return entries
 

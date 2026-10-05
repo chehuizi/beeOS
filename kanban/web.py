@@ -360,21 +360,6 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .trigger-result.ok {{ color: #16a34a; font-weight: 600; }}
   .trigger-result.err {{ color: #dc2626; font-weight: 600; }}
 
-  /* 自然语言业务表述区（在 BeeBox 边界之外——它是 originator 的角色） */
-  .nl-row {{
-    display: flex; flex-direction: column; align-items: flex-start;
-    margin-top: 4px; padding-left: 72px;
-  }}
-  .nl-arrow {{
-    font-size: 26px; color: #94a3b8; margin: 2px 0 4px 130px; user-select: none;
-  }}
-  .nl-panel {{ border-style: dashed; width: 320px; flex: 0 0 320px; }}
-  .nl-panel textarea {{
-    width: 100%; box-sizing: border-box; padding: 8px; margin-bottom: 8px;
-    font-size: 12px; border: 1px solid #cbd5e1; border-radius: 6px;
-    font-family: inherit; line-height: 1.6;
-  }}
-
   /* 盒子内部：2D 流水线（矩形工位 + 状态灯 + 方向箭头 + task 令牌） */
   .port-2d {{ fill: #0f172a; stroke-width: 4; }}
   .port-in-2d {{ stroke: #f59e0b; }}
@@ -440,6 +425,23 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .rs-type.edited {{ border-color: #f59e0b; background: #fffbeb; color: #b45309; font-weight: 600; }}
   .rs-desc {{ color: #0f172a; flex: 1 1 auto; }}
   .rs-trace {{ font-size: 10px; color: #94a3b8; font-family: monospace; }}
+  /* 纯文本投料框（task_schema 全是标量时）——等宽换成正常字体，读着像在写话 */
+  #task-payload.payload-text {{
+    font-family: inherit; font-size: 13px; line-height: 1.8; color: #0f172a;
+  }}
+  /* 接力：把本盒产出投给下游盒，避免手工复制粘贴投错方向 */
+  .relay-bar {{
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e2e8f0;
+  }}
+  .relay-btn {{
+    font-size: 11px; padding: 5px 10px; border-radius: 6px; cursor: pointer;
+    border: 1px solid #2563eb; background: #eff6ff; color: #1d4ed8;
+    font-weight: 600;
+  }}
+  .relay-btn:hover {{ background: #dbeafe; }}
+  .relay-btn:disabled {{ opacity: 0.5; cursor: default; }}
+  .relay-note {{ font-size: 10px; color: #64748b; }}
   .badge-failed {{ background: #fee2e2; color: #b91c1c; }}
   .artifact-card .tid {{ color: #94a3b8; font-size: 10px; word-break: break-all; }}
   .artifact-card details {{ margin-top: 6px; }}
@@ -731,7 +733,7 @@ function renderDddModel(r) {{
   return h;
 }}
 
-// 需求集渲染（捕获盒产出）——含 type 人工确认（human-in-the-loop）
+  // 需求集（捕获盒产出）——含 type 人工确认（human-in-the-loop）
 // 为什么要人工：type_boundary（rule vs metric vs process）实测 LLM 仍会错，
 // 且无法机械验证。投料前让人一眼确认，比事后 rejected 便宜得多。
 const REQ_TYPES = ['object', 'rule', 'process', 'metric', 'event', 'goal'];
@@ -808,10 +810,31 @@ const REJECT_LABEL = {{
 function buildShell(boxId, box, entries) {{
   // 静态 shell：只建一次——工位图 DOM 不随 2s 刷新重建
   window._taskEntries = {{}};
+  // 接力目标：盒子之间的关系声明在后端 BOX_META.feeds_into（业务信息，不在前端硬编码）
+  // 显示名可能尚未就绪（_boxNames 在 refresh 里随后才填），所以重渲时再取一次
+  const names = window._boxNames || {{}};
+  window._feedsInto = ((box && box.meta && box.meta.feeds_into) || []).map((id) => ({{
+    box_id: id,
+    display_name: names[id] || id,
+  }}));
   let options = '';
   let ops = [];
+  let placeholder = '填写 task payload（JSON）';
   for (const e of entries) {{
-    window._taskEntries[e.task_type] = e.sample_payload;
+    window._taskEntries[e.task_type] = e;
+    if (e.payload_kind === 'text') {{
+      // 换行符必须写成「反斜杠 + n」两个字符：这段 HTML 整体是 Python f-string，
+      // 写成真正的转义会被 Python 提前解释成真换行，把 JS 字符串字面量撑破
+      // （控制台报 SyntaxError: Invalid or unexpected token）。注释里也别写真转义。
+      placeholder = (
+        '用自然语言描述业务。首句是业务目标，之后每句是一条业务事实。\\n'
+        + '顿号「、」连接并列项时每项会单独成条。\\n\\n'
+        + '例如：\\n'
+        + 'wms的流程有入库流程、出库流程、盘点流程。\\n'
+        + '出库要先进先出拣货。\\n'
+        + '入库处理时长要可度量。'
+      );
+    }}
     options += `<option value="${{e.task_type}}">${{e.task_type}}</option>`;
     if (e.beeline_ops && e.beeline_ops.length > 0) ops = e.beeline_ops;
   }}
@@ -820,9 +843,10 @@ function buildShell(boxId, box, entries) {{
       <div class="beebox-nameplate" id="cube-caption"></div>
       <div class="beebox-body">
         <div class="port">
-          <div class="port-title">TASK IN · 投料口（业务流程 / 业务规则的结构化表达）</div>
+          <div class="port-title" id="port-title">TASK IN · 投料口</div>
           <select id="task-type" onchange="onTaskTypeChange()">${{options}}</select>
-          <textarea id="task-payload" rows="10" spellcheck="false"></textarea>
+          <textarea id="task-payload" rows="12" spellcheck="false"
+                    placeholder="${{placeholder}}"></textarea>
           <button class="trigger-btn" id="trigger-btn" onclick="triggerTask('${{boxId}}')">▶ 履约</button>
           <div id="trigger-result" class="trigger-result"></div>
         </div>
@@ -832,22 +856,21 @@ function buildShell(boxId, box, entries) {{
           <div class="lane-ops" id="lane-ops"></div>
         </div>
         <div class="port">
-          <div class="port-title">ARTIFACTS OUT · 产出口（领域模型）</div>
+          <div class="port-title" id="out-title">ARTIFACTS OUT · 产出口</div>
           <div id="artifact-slot"></div>
         </div>
       </div>
     </div>
-    <div class="nl-row">
-      <div class="nl-arrow">⇧</div>
-      <div class="port nl-panel">
-        <div class="port-title">业务表述 · 自然语言</div>
-        <textarea id="nl-input" rows="5" spellcheck="false" placeholder="用自然语言描述业务。首句是业务目标，之后每句是一条业务事实，例如：&#10;建模订单退款流程。退款必须在 7 天内完成。退款申请走主管审批流程。退款已完成要通知财务。退款处理时长要可度量。"></textarea>
-        <button class="trigger-btn" id="structure-btn" onclick="structureText()">⇧ 抽象为 TASK IN 结构化表达</button>
-        <div id="structure-result" class="trigger-result"></div>
-      </div>
-    </div>
   </div>`;
   onTaskTypeChange();
+
+  // 产出口标题按盒子区分（有下游的盒子标"可接力"）
+  const outTitle = document.getElementById('out-title');
+  if (outTitle) {{
+    outTitle.textContent = (window._feedsInto || []).length
+      ? 'ARTIFACTS OUT · 产出口（可接力投给下游）'
+      : 'ARTIFACTS OUT · 产出口（领域模型）';
+  }}
 
   const stage = document.getElementById('box2d-stage');
   _scene2d = ops.length > 0 ? initBox2D(stage, ops) : null;
@@ -870,7 +893,62 @@ function renderArtifactInto() {{
   const key = a ? `${{a.task_run_id}}|${{a.acceptance_status}}` : 'none';
   if (key === _lastArtifactKey) return;
   _lastArtifactKey = key;
-  slot.innerHTML = renderArtifact();
+  slot.innerHTML = renderArtifact() + renderRelayBar();
+}}
+
+// 接力：本盒产出 → 下游盒投料口
+// 目标盒子来自后端 BOX_META.feeds_into（盒子之间的关系是业务信息，不在前端硬编码）。
+// 投料字段按下游 task_schema 裁剪——把捕获盒的 evidence / 抽取者等内部字段
+// 一起塞给下游会让人分不清哪些是对方需要的。
+function renderRelayBar() {{
+  const a = _boxState.artifact;
+  const names = window._boxNames || {{}};
+  const targets = (window._feedsInto || []).map((t) => ({{
+    box_id: t.box_id, display_name: names[t.box_id] || t.box_id,
+  }}));
+  if (!a || !targets.length) return '';
+  const buttons = targets.map((t) =>
+    `<button class="relay-btn" onclick="relayTo('${{t.box_id}}')">→ 投给 ${{t.display_name}}</button>`
+  ).join('');
+  return `<div class="relay-bar">${{buttons}}<span class="relay-note">一键投料，不用手工复制 JSON</span></div>`;
+}}
+
+function relayTo(boxId) {{
+  const a = _boxState.artifact;
+  if (!a) return;
+  // 投料口径由下游盒子的 task_schema 决定：
+  // 下游只要 set_id / business_goal / requirements（建模盒的输入契约），
+  // 不把本盒的 evidence / extractor 之类内部字段塞过去
+  const p = a.result || {{}};
+  const payload = {{
+    set_id: p.set_id, business_goal: p.business_goal,
+    context: p.context || '', requirements: p.requirements || [],
+  }};
+  location.href = `/?box=${{boxId}}&relay=` + encodeURIComponent(JSON.stringify(payload));
+}}
+
+// 接力回填：从 URL 的 relay 参数还原投料内容到投料框
+function applyRelayFromUrl() {{
+  const m = location.search.match(/[?&]relay=([^&]*)/);
+  if (!m) return;
+  let payload;
+  try {{
+    payload = JSON.parse(decodeURIComponent(m[1]));
+  }} catch (e) {{
+    return;
+  }}
+  const el = document.getElementById('task-payload');
+  const res = document.getElementById('trigger-result');
+  if (!el) return;
+  onTaskTypeChange();   // 先按 payload_kind 铺好形态
+  el.value = JSON.stringify(payload, null, 2);
+  if (res) {{
+    res.className = 'trigger-result ok';
+    res.textContent = `已接力 ${{payload.requirements ? payload.requirements.length : 0}} 条需求`
+      + ' — 确认无误点「履约」';
+  }}
+  // 清掉 URL 里的 relay，避免 2s 刷新后误判为未履约
+  history.replaceState(null, '', location.pathname + location.search.replace(/&?relay=[^&]*/, ''));
 }}
 
 function updateCaption(box) {{
@@ -883,60 +961,51 @@ function onTaskTypeChange() {{
   const typeEl = document.getElementById('task-type');
   const payloadEl = document.getElementById('task-payload');
   if (!typeEl || !payloadEl) return;
-  const sample = (window._taskEntries || {{}})[typeEl.value] || {{}};
-  payloadEl.value = JSON.stringify(sample, null, 2);
+  const entry = (window._taskEntries || {{}})[typeEl.value] || {{}};
+  const sample = entry.sample_payload || {{}};
+
+  // 投料框形态由后端按 task_schema 形状决定（见 kanban/trigger._payload_kind）：
+  // 纯文本 task 直接打字；嵌套结构 task 才用 JSON 编辑器。
+  // 不在前端硬编码——加新盒子时不用改这里。
+  const isText = entry.payload_kind === 'text';
+  payloadEl.classList.toggle('payload-text', isText);
+  if (isText) {{
+    payloadEl.value = sample.narrative || sample.text || '';
+  }} else {{
+    payloadEl.value = JSON.stringify(sample, null, 2);
+  }}
+
+  const t = document.getElementById('port-title');
+  if (t) t.textContent = isText
+    ? 'TASK IN · 投料口（自然语言业务表述）'
+    : 'TASK IN · 投料口（结构化表达）';
 }}
 
 function sleep(ms) {{ return new Promise(r => setTimeout(r, ms)); }}
-
-// 自然语言 → TASK IN 结构化表达（POST /api/structure），结果填入投料口
-async function structureText() {{
-  const resultEl = document.getElementById('structure-result');
-  const btn = document.getElementById('structure-btn');
-  const text = document.getElementById('nl-input').value;
-  if (!text.trim()) {{
-    resultEl.className = 'trigger-result err';
-    resultEl.textContent = '先用自然语言描述业务';
-    return;
-  }}
-  btn.disabled = true;
-  resultEl.className = 'trigger-result';
-  resultEl.textContent = '结构化中...';
-  try {{
-    const resp = await fetch('/api/structure', {{
-      method: 'POST',
-      headers: {{'Content-Type': 'application/json'}},
-      body: JSON.stringify({{text: text}}),
-    }});
-    const data = await resp.json();
-    if (!resp.ok) {{
-      resultEl.className = 'trigger-result err';
-      resultEl.textContent = '结构化失败: ' + (data.error || resp.status);
-    }} else {{
-      document.getElementById('task-payload').value = JSON.stringify(data.payload, null, 2);
-      resultEl.className = 'trigger-result ok';
-      const via = data.extractor === 'llm' ? 'LLM 抽取' : '规则抽取';
-      resultEl.textContent = `已抽象为 ${{data.requirement_count}} 条业务需求（${{via}}）↑ 进入 TASK IN`
-        + (data.note ? `\n· ${{data.note}}` : '');
-    }}
-  }} catch (e) {{
-    resultEl.className = 'trigger-result err';
-    resultEl.textContent = '请求失败: ' + e.message;
-  }}
-  btn.disabled = false;
-}}
 
 async function triggerTask(boxId) {{
   const resultEl = document.getElementById('trigger-result');
   const btn = document.getElementById('trigger-btn');
   const taskType = document.getElementById('task-type').value;
+  const entry = (window._taskEntries || {{}})[taskType] || {{}};
+  const raw = document.getElementById('task-payload').value;
   let payload;
-  try {{
-    payload = JSON.parse(document.getElementById('task-payload').value);
-  }} catch (e) {{
-    resultEl.className = 'trigger-result err';
-    resultEl.textContent = 'payload JSON 解析失败: ' + e.message;
-    return;
+  if (entry.payload_kind === 'text') {{
+    // 纯文本 task：整段就是 narrative，套一层 JSON 是折磨
+    if (!raw.trim()) {{
+      resultEl.className = 'trigger-result err';
+      resultEl.textContent = '先写业务表述再履约';
+      return;
+    }}
+    payload = {{ narrative: raw }};
+  }} else {{
+    try {{
+      payload = JSON.parse(raw);
+    }} catch (e) {{
+      resultEl.className = 'trigger-result err';
+      resultEl.textContent = 'payload JSON 解析失败: ' + e.message;
+      return;
+    }}
   }}
   _boxState.running = true;
   btn.disabled = true;
@@ -1012,9 +1081,15 @@ function render(data) {{
 
   // 单盒视图：静态 shell + 动态小更新（WebGL 场景常驻）
   if (isSingle && data.box_stats && data.box_stats.length > 0) {{
+    // 盒子显示名表（接力按钮要用）
+    window._boxNames = {{}};
+    for (const b of data.box_stats) {{
+      window._boxNames[b.box_id] = (b.meta && b.meta.display_name) || b.box_id;
+    }}
     if (_shellBox !== box) {{
       buildShell(box, data.box_stats[0], data.box_stats[0].task_entries || []);
       _shellBox = box;
+      applyRelayFromUrl();
     }}
     updateCaption(data.box_stats[0]);
     renderArtifactInto();

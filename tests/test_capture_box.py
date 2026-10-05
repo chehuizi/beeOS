@@ -109,6 +109,67 @@ class TestBeeline:
         assert len(e["beeline_ops"]) == 5
 
 
+class TestPayloadKind:
+    """投料框形态由 task_schema 形状决定——加新盒子不用改前端"""
+
+    def test_capture_is_text(self):
+        """narrative 是自由文本 → 纯文本框，别套 JSON 编辑器"""
+        assert list_task_entries("requirement_capture_box")[0]["payload_kind"] == "text"
+
+    def test_modeling_is_json(self):
+        """requirements 是嵌套数组 → 保持 JSON 编辑器"""
+        assert list_task_entries("business_modeling_box")[0]["payload_kind"] == "json"
+
+    def test_kind_follows_schema_shape(self):
+        from kanban.trigger import _payload_kind
+        from core.models import FieldDef, SchemaDef
+
+        text_schema = SchemaDef(id="s", fields=[
+            FieldDef(name="narrative", type="string"),
+            FieldDef(name="who", type="string", required=False),
+        ])
+        assert _payload_kind(text_schema) == "text"
+
+        json_schema = SchemaDef(id="s", fields=[
+            FieldDef(name="items", type="array", items=FieldDef(name="i", type="string")),
+        ])
+        assert _payload_kind(json_schema) == "json"
+
+    def test_optional_complex_field_does_not_force_json(self):
+        """复杂字段是选填的 → 必填仍是标量 → 仍用纯文本"""
+        from kanban.trigger import _payload_kind
+        from core.models import FieldDef, SchemaDef
+        schema = SchemaDef(id="s", fields=[
+            FieldDef(name="narrative", type="string"),
+            FieldDef(name="meta", type="array", required=False,
+                     items=FieldDef(name="m", type="string")),
+        ])
+        assert _payload_kind(schema) == "text"
+
+    def test_missing_schema_falls_back_to_json(self):
+        from kanban.trigger import _payload_kind
+        assert _payload_kind(None) == "json"
+
+
+class TestFeedInto:
+    """盒子之间的关系声明在 BOX_META，不在前端硬编码"""
+
+    def test_capture_feeds_modeling(self):
+        from kanban.trigger import box_meta
+        assert box_meta("requirement_capture_box")["feeds_into"] == ["business_modeling_box"]
+
+    def test_modeling_has_no_downstream(self):
+        from kanban.trigger import box_meta
+        assert box_meta("business_modeling_box")["feeds_into"] == []
+
+    def test_feeds_into_targets_are_registered(self):
+        """声明的下游必须是真盒子，否则接力按钮点了没地方去"""
+        from kanban.trigger import BOX_META, registered_box_ids
+        for bid, meta in BOX_META.items():
+            for t in meta.get("feeds_into", []):
+                assert t in registered_box_ids(), f"{bid} 指向未注册盒子 {t}"
+
+
 # ============================================================
 # op 1: 切句
 # ============================================================

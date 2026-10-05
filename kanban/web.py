@@ -578,12 +578,15 @@ function layout2D(ops) {{
     return arr;
   }};
   const xs1 = spread(perRow);
-  for (let i = 0; i < perRow; i++) pos[ops[i]] = {{ x: xs1[i], y: 130 }};
+  for (let i = 0; i < perRow; i++) pos[ops[i]] = {{ x: xs1[i], y: 150 }};
   const rest = ops.slice(perRow);
   const xs2 = spread(rest.length);
-  for (let i = 0; i < rest.length; i++) pos[rest[i]] = {{ x: xs2[rest.length - 1 - i], y: 235 }};
-  pos._in = {{ x: 30, y: 130 }};
-  pos._out = {{ x: 528, y: 235 }};
+  for (let i = 0; i < rest.length; i++) pos[rest[i]] = {{ x: xs2[rest.length - 1 - i], y: 250 }};
+  // IN / OUT 各自独占一行，不跟工位并排：
+  // 之前 IN 跟第一行同高、OUT 跟第二行同高，端口挤在工位流里，
+  // 看不出"投料从哪进、产出从哪出"。现在 IN 顶行、OUT 底行。
+  pos._in = {{ x: 62, y: 52 }};
+  pos._out = {{ x: 498, y: 352 }};
   return pos;
 }}
 
@@ -593,7 +596,7 @@ function initBox2D(container, ops) {{
   // 盒子边界由外层 .beebox-frame 承担（这里不再画内框）
   // 对外 api：setOpState / moveToken / reset
   const pos = layout2D(ops);
-  const EXIT_Y = 310, EXIT_X = 508;   // 盒底出口通道
+  const EXIT_Y = pos._out.y, EXIT_X = pos._out.x;   // OUT 独占底行，沿它的高度走线
   let s = `<svg viewBox="0 0 560 420" style="width:100%;height:auto;display:block" preserveAspectRatio="xMidYMid meet">
     <defs>
       <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -601,16 +604,19 @@ function initBox2D(container, ops) {{
       </marker>
     </defs>`;
 
-  // 流水线：IN → op1 → ... → opN → 盒底通道 → OUT（带方向箭头）
+  // 流水线：IN（顶行）→ op1 → ... → opN → OUT（底行），全程横平竖直
   const chain = ['_in', ...ops, '_out'];
   const pathTo = {{}};   // key → 到达该节点的折线途径点（不含终点）
   for (let i = 0; i < chain.length - 1; i++) {{
     const a = pos[chain[i]], b = pos[chain[i + 1]];
     let pts;
     if (chain[i + 1] === '_out') {{
-      // 末工位 → 垂直下到盒底通道 → 沿通道向右 → 向上到 OUT 高度 → 进 OUT
-      pts = [[a.x, a.y], [a.x, EXIT_Y], [EXIT_X, EXIT_Y], [EXIT_X, b.y], [b.x, b.y]];
+      // 末工位 → 垂直下到 OUT 所在底行 → 沿底行向右 → 进 OUT
+      pts = [[a.x, a.y], [a.x, EXIT_Y], [EXIT_X, EXIT_Y]];
       pathTo._out = pts.slice(1, -1);
+    }} else if (chain[i] === '_in') {{
+      // IN 在顶行：先垂直下来对齐首工位那一行，再横向进首工位
+      pts = [[a.x, a.y], [a.x, b.y], [b.x, b.y]];
     }} else {{
       pts = [[a.x, a.y], [b.x, b.y]];
     }}

@@ -36,6 +36,7 @@ from urllib.parse import parse_qs, urlparse
 
 from kanban.trigger import (
     TriggerError,
+    box_domain_context,
     box_meta,
     list_task_entries,
     order_boxes_by_flow,
@@ -112,6 +113,7 @@ def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[s
             "last_run_at": latest["created_at"] if latest else None,
             "last_run_status": latest["acceptance_status"] if latest else None,
             "task_entries": list_task_entries(b),
+            "domain_context": box_domain_context(b),
         })
 
     return {
@@ -308,6 +310,31 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .beebox-nameplate .spec {{ display: flex; gap: 18px; margin-top: 0; flex-wrap: wrap; }}
   .beebox-nameplate .spec-row {{ display: flex; gap: 6px; font-size: 10px; line-height: 1.8; }}
   .beebox-nameplate .spec-row .k {{ width: auto; text-align: left; padding-right: 0; }}
+  /* ===== DOMAIN CONTEXT：盒子是谁、跟谁接、边界在哪 =====
+     它跟下面四栏不是一类东西。四栏讲「这次履约发生了什么」，
+     这里讲「这只盒子是什么」。所以是横贯的一条 band，不是第五栏：
+     摆在四栏下面会被读成跑出来的第五步，而上下文在履约之前就在那儿。
+     样式刻意压低一档（灰底、发丝线、不加边框）——它是背景，不是舞台。 */
+  .ctx-band {{
+    padding: 9px 20px 11px;
+    background: rgba(148,163,184,0.11);
+    border-bottom: 1px solid #cbd5e1;
+  }}
+  .ctx-head {{
+    font-size: 9px; font-weight: 700; color: #64748b;
+    letter-spacing: 0.9px; margin-bottom: 7px;
+  }}
+  .ctx-cols {{ display: grid; grid-template-columns: 1.1fr 1fr 1.4fr; gap: 18px; }}
+  @media (max-width: 1080px) {{ .ctx-cols {{ grid-template-columns: 1fr; gap: 9px; }} }}
+  .ctx-k {{ font-size: 9px; color: #94a3b8; letter-spacing: 0.5px; margin-bottom: 3px; }}
+  .ctx-v {{
+    font-size: 11px; color: #0f172a; line-height: 1.65;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    word-break: break-word;
+  }}
+  .ctx-note {{ font-size: 10px; color: #64748b; }}
+  .ctx-me {{ color: #b45309; font-weight: 700; }}
+  .ctx-hop {{ color: #94a3b8; padding: 0 3px; }}
   /* 四栏：TASK IN · BEELINE · ACCEPTANCE · ARTIFACTS OUT。
      ACCEPTANCE 跟 BEELINE 平级不是排版偏好，是粒度本来就对：中间那栏把 5 个 op
      收成一个黑盒，验收栏把 N 条判据收成一个黑盒，两者粗细一致。
@@ -1068,6 +1095,48 @@ const REJECT_LABEL = {{
   structural: '结构 / 引用 / 指标不达标',
 }};
 
+// ===== DOMAIN CONTEXT =====
+// 盒子级的事实，不随单次履约变化。四栏在它下面跑。
+// 判据不在这里：声明值和实测值都归 ACCEPTANCE 栏，
+// 两处各留一份判据 = 每次改判据要改两个地方。
+function renderDomainContext(boxId, ctx) {{
+  if (!ctx) return '';
+  // 上游 / 下游的显示名由后端随 id 一起给（box_domain_context 里的 _hop）：
+  // 单盒过滤时前端只有当前这一只盒的名字表，自己补会露出原始 id
+  const hops = [
+    ...(ctx.fed_by || []).map((h) => `${{esc(h.name)}}<span class="ctx-hop">→</span>`),
+    `<span class="ctx-me">${{esc(ctx.self_name || boxId)}}</span>`,
+    ...(ctx.feeds_into || []).map((h) => `<span class="ctx-hop">→</span>${{esc(h.name)}}`),
+  ].join(' ') || '<span class="ctx-note">（价值流首端，没有上游）</span>';
+  const consumes = (ctx.consumes || []).map((c) => {{
+    const req = (c.required || []).map((f) => esc(f.name)).join(' · ') || '—';
+    return `<div class="ctx-v">${{esc(c.task_type)}}</div>
+            <div class="ctx-v ctx-note">${{esc(c.task_schema)}}　必填 ${{req}}</div>`;
+  }}).join('');
+  const p = ctx.produces || {{}};
+  const outFields = (p.fields || []).map(esc).join(' · ');
+  return `<div class="ctx-band">
+    <div class="ctx-head">DOMAIN CONTEXT · 领域上下文 — 这只盒子是谁、跟谁接、边界在哪</div>
+    <div class="ctx-cols">
+      <div>
+        <div class="ctx-k">价值流位置</div>
+        <div class="ctx-v ctx-note">${{esc(ctx.value_stream)}}</div>
+        <div class="ctx-v">${{hops}}</div>
+      </div>
+      <div>
+        <div class="ctx-k">消费契约 · 吃进去什么</div>
+        ${{consumes || '<div class="ctx-v ctx-note">—</div>'}}
+      </div>
+      <div>
+        <div class="ctx-k">产出契约 · 吐出来什么</div>
+        <div class="ctx-v">${{esc(p.type)}}</div>
+        <div class="ctx-v ctx-note">${{esc(p.result_schema)}}</div>
+        <div class="ctx-v ctx-note">${{outFields}}</div>
+      </div>
+    </div>
+  </div>`;
+}}
+
 function buildShell(boxId, box, entries) {{
   // 静态 shell：只建一次——工位图 DOM 不随 2s 刷新重建
   window._taskEntries = {{}};
@@ -1103,6 +1172,7 @@ function buildShell(boxId, box, entries) {{
   document.getElementById('content').innerHTML = `<div class="section">
     <div class="beebox-frame">
       <div class="beebox-nameplate" id="cube-caption"></div>
+      ${{renderDomainContext(boxId, (box && box.domain_context) || null)}}
       <div class="beebox-body">
         <div class="port">
           <div class="port-title" id="port-title">TASK IN · 投料口</div>

@@ -212,6 +212,69 @@ def list_task_entries(box_id: str) -> list[dict[str, Any]]:
     return entries
 
 
+def _hop(box_id: str) -> dict[str, str]:
+    """价值流上的一跳：id + 显示名。显示名跟着 id 一起出，
+    前端单盒过滤时手上只有一只盒的名字表，让它自己补下游名字会露出原始 id。"""
+    return {"id": box_id, "name": box_meta(box_id).get("display_name", box_id)}
+
+
+def box_domain_context(box_id: str) -> dict[str, Any]:
+    """盒子的领域上下文——这只盒子是谁、跟谁接、边界在哪
+
+    跟 task run 无关。看板上那四栏（投料 / 流水线 / 验收 / 产出）讲的全是
+    「这一次履约发生了什么」，这里讲的是「这只盒子是什么」：它在价值流的哪一段、
+    上下游是谁、吃进去的契约长什么样、吐出来的契约长什么样。
+
+    所以它不能在四栏里当第五栏——上下文在履约之前就在那儿，不是跑出来的。
+    它是盒子外面的一条 band。
+
+    只回看板要渲染的字段。判据不在这里：声明值和实测值都在 ACCEPTANCE 栏，
+    两处各留一份判据 = 两处都要跟着改。
+    """
+    entry = BOX_REGISTRY.get(box_id)
+    if entry is None:
+        return {}
+    get_definition, _ = entry
+    definition = get_definition()
+    meta = box_meta(box_id)
+    result = definition.result
+
+    consumes = []
+    for task in definition.task:
+        schema = definition.get_schema(task.task_schema)
+        consumes.append({
+            "task_type": task.type,
+            "task_schema": task.task_schema,
+            "required": [
+                {"name": f.name, "type": f.type}
+                for f in (schema.fields if schema else [])
+                if f.required
+            ],
+        })
+
+    result_schema = definition.get_schema(result.result_schema)
+    return {
+        "value_stream": meta.get("value_stream", ""),
+        "role": meta.get("role", ""),
+        "self_name": meta.get("display_name", box_id),
+        # 上游从别人的 feeds_into 反推——BOX_META 只声明了「投给谁」，
+        # 「谁投给我」是同一条声明的另一边，不该在两处各写一遍
+        "fed_by": [
+            _hop(src) for src, m in BOX_META.items()
+            if box_id in m.get("feeds_into", [])
+        ],
+        "feeds_into": [_hop(dst) for dst in meta.get("feeds_into", [])],
+        "consumes": consumes,
+        "produces": {
+            "type": result.type,
+            "result_schema": result.result_schema,
+            "fields": [
+                f.name for f in (result_schema.fields if result_schema else [])
+            ],
+        },
+    }
+
+
 def trigger_task(
     box_id: str,
     task_type: str,

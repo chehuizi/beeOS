@@ -309,6 +309,27 @@ class TestKanbanServer:
         assert "pos._acc" not in body
         assert "_scene2d.setAcceptance" not in body
 
+    def test_domain_context_exposes_box_level_facts(self, server_url: tuple[str, TaskRunStore]):
+        """领域上下文是盒子级事实，跟 task run 无关——所以它不在四栏里，
+        是盒子外面的一条 band。上游从别人的 feeds_into 反推，不另写一遍。"""
+        url, _ = server_url
+        conn = HTTPConnection(url.replace("http://", ""))
+        conn.request("GET", "/api/data?box=business_modeling_box")
+        body = json.loads(conn.getresponse().read().decode("utf-8"))
+        conn.close()
+        ctx = body["box_stats"][0]["domain_context"]
+        assert ctx["self_name"] == "Business Modeling Box"
+        # 上游 = 声明了 feeds_into 包含本盒的那只盒
+        assert [h["id"] for h in ctx["fed_by"]] == ["requirement_capture_box"]
+        # 上游名字必须跟着 id 出，不能让前端自己补——单盒过滤时它只有一只盒的名字表
+        assert ctx["fed_by"][0]["name"] == "Requirement Capture Box"
+        assert ctx["feeds_into"] == []
+        assert ctx["consumes"][0]["task_type"] == "handle_modeling_request"
+        assert ctx["produces"]["type"] == "business_model_produced"
+        assert "model_elements" in ctx["produces"]["fields"]
+        # 判据不进上下文：声明值和实测值都归 ACCEPTANCE 栏
+        assert "acceptance" not in ctx
+
 
 # ============================================================
 # POST /api/trigger（task 投料口）

@@ -366,26 +366,12 @@ HTML_PAGE = f"""<!DOCTYPE html>
     border: 1px solid #d8a23a; border-radius: 10px; padding: 10px 10px 8px;
     background: rgba(255,251,235,0.55);
     display: flex; flex-direction: column; align-self: stretch;
-    position: relative;   /* 尖角的定位基准。overflow 只能留给判据区——
-      放在 .lane-acc 上会把露在左缘外的尖角自己裁掉 */
   }}
   .lane-acc .lane-title {{ color: #b45309; }}
-  /* 从 BEELINE 栏交接过来的方向。跨栏本来就不连线（IN/OUT 也没有），
-     靠这个尖角交代「判定是从左边那栏算完之后过来的」。
-     只有四栏并排时 BEELINE 才真的在它左边——换行布局下它在上/在左，尖角会指空。 */
-  .lane-acc::before {{ display: none; }}
+  /* 交接方向不靠尖角交代。栏从左到右 IN → BEELINE → ACCEPTANCE → OUT
+     本身就在讲顺序，再挂一个指着左边的三角形只是把同一件事说第二遍，
+     而且换行布局下它指空、宽屏下它像块渲染毛刺。 */
   .acc-detail {{ flex: 1; min-height: 0; overflow-y: auto; }}
-  @media (min-width: 1461px) {{
-    /* 只有真四栏并排时 BEELINE 才在验收栏左边，尖角这时才指得对。
-       96px ≈ 栏标题(29) + 菱形中心在 stage 里的偏移，压在菱形腰线上。 */
-    .lane-acc::before {{
-      display: block;                 /* 基础规则是 display:none，这里必须显式翻回来 */
-      content: ''; position: absolute; left: -13px; top: 96px;
-      width: 0; height: 0;
-      border-top: 5px solid transparent; border-bottom: 5px solid transparent;
-      border-left: 8px solid #d8a23a;
-    }}
-  }}
   .acc-hint {{ font-size: 10px; color: #a16207; line-height: 1.7; }}
   .acc-hint code {{
     background: #fef3c7; padding: 0 3px; border-radius: 3px;
@@ -800,8 +786,9 @@ function initBox2D(container, ops) {{
 // ===== ACCEPTANCE 栏：菱形闸 + 它自己的令牌 =====
 // 它跟 BEELINE 平级（同一层、同样的黑盒粒度），但不是流水线的一步。
 // 代码路径本来就分开：evaluate_acceptance 在 BeelineExecutor.execute()
-// 返回之后单独调（kanban/trigger.py）。所以这里没有跨栏连线——
-// IN/OUT 三栏之间本来就没有线，方向靠 .lane-acc::before 的尖角交代。
+// 返回之后单独调（kanban/trigger.py）。这里不画跨栏连线——
+// IN / OUT / ACCEPTANCE 三栏之间本来就没有线，栏的左右顺序已经把
+// 「投料 → 算 → 判 → 出」讲完了。
 function initAccGate(container) {{
   let s = `<svg viewBox="0 0 200 118" style="width:100%;height:auto;display:block" preserveAspectRatio="xMidYMid meet">
     <g class="acc-gate" id="op-_acc">

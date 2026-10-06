@@ -369,6 +369,9 @@ HTML_PAGE = f"""<!DOCTYPE html>
     font-size: 11px; background: transparent; color: #64748b; cursor: pointer;
   }}
   .ghost-btn:hover {{ border-color: #94a3b8; color: #334155; }}
+  /* 会连用户自己写的字一起清掉的状态——看着就该多点一下鼠标 */
+  .ghost-btn.warn {{ border-color: #fca5a5; color: #b91c1c; }}
+  .ghost-btn.warn:hover {{ border-color: #ef4444; color: #991b1b; background: #fef2f2; }}
   .trigger-btn:hover {{ opacity: 0.9; }}
   .trigger-btn:disabled {{ opacity: 0.5; cursor: default; }}
   #task-payload {{
@@ -1049,6 +1052,7 @@ function applyRelayFromUrl() {{
   if (!el) return;
   onTaskTypeChange();   // 先按 payload_kind 铺好形态
   el.value = JSON.stringify(payload, null, 2);
+  _sampleBaseline = '';   // 接力来的是真实内容，不是示例 → 按钮该是「清空」
   if (res) {{
     res.className = 'trigger-result ok';
     res.textContent = `已接力 ${{payload.requirements ? payload.requirements.length : 0}} 条需求`
@@ -1064,6 +1068,10 @@ function updateCaption(box) {{
   el.innerHTML = captionHtml(box);
 }}
 
+// 最近一次由按钮写入的示例原文，用来区分「框里是原样示例」还是「用户改过」。
+// 声明必须在 onTaskTypeChange 之前——TDZ 会让先执行的赋值直接报错。
+let _sampleBaseline = '';
+
 function onTaskTypeChange() {{
   const typeEl = document.getElementById('task-type');
   const payloadEl = document.getElementById('task-payload');
@@ -1078,8 +1086,9 @@ function onTaskTypeChange() {{
   payloadEl.classList.toggle('payload-text', isText);
   // 故意不预填示例：预填内容看着像"已经有人在投料"，直接点履约会误以为
   // 那就是自己的数据。示例留在 placeholder（灰字，空框才显示）里，
-  // 另给一个「填入示例 / 清空」切换按钮按需取用。
+  // 另给一个「填入示例 / 清掉示例 / 清空」切换按钮按需取用。
   payloadEl.value = '';
+  _sampleBaseline = '';   // 换了 task type，旧的示例基准不再作数
   syncSampleBtn();
 
   const t = document.getElementById('port-title');
@@ -1095,14 +1104,40 @@ function sampleTextOf(entry) {{
     : JSON.stringify(sample, null, 2);
 }}
 
-// 框里有内容时按钮翻成「清空」：否则填进去就再也回不到空框状态，
-// 空了才会显示的 placeholder 也跟着丢，示例提示一起没了
+// 按钮文案要说清它会动什么。
+// 「清空」太吓人（像要清掉整个投料口），但改成「清空示例」在用户自己写过字时
+// 又是骗人的——它照样全清。正确的做法是分三种状态：
+//   ① 框空            → 「填入示例」：填
+//   ② 框里是原样示例   → 「清掉示例」：只回退示例，不碰别的东西
+//   ③ 用户改过 / 自己写 → 「清空」：明确警告这会连自己写的字一起没
+
+function isPristineSample() {{
+  const payloadEl = document.getElementById('task-payload');
+  if (!payloadEl) return false;
+  const cur = payloadEl.value;
+  return !!_sampleBaseline && cur === _sampleBaseline;
+}}
+
 function toggleSample() {{
   const typeEl = document.getElementById('task-type');
   const payloadEl = document.getElementById('task-payload');
   if (!typeEl || !payloadEl) return;
   const entry = (window._taskEntries || {{}})[typeEl.value] || {{}};
-  payloadEl.value = payloadEl.value.trim() ? '' : sampleTextOf(entry);
+
+  if (!payloadEl.value.trim()) {{
+    // ① 空 → 填入示例
+    _sampleBaseline = sampleTextOf(entry);
+    payloadEl.value = _sampleBaseline;
+  }} else if (isPristineSample()) {{
+    // ② 原样示例 → 撤掉示例，回到空框（这是可逆的，不用确认）
+    _sampleBaseline = '';
+    payloadEl.value = '';
+  }} else {{
+    // ③ 用户自己写过字 → 清掉是不可逆的，先问一句
+    if (!window.confirm('清空投料框？框里的内容会全部丢失，无法撤销。')) return;
+    _sampleBaseline = '';
+    payloadEl.value = '';
+  }}
   clearPayloadError();
   syncSampleBtn();
   payloadEl.focus();
@@ -1112,7 +1147,19 @@ function syncSampleBtn() {{
   const payloadEl = document.getElementById('task-payload');
   const btn = document.getElementById('sample-btn');
   if (!payloadEl || !btn) return;
-  btn.textContent = payloadEl.value.trim() ? '清空' : '填入示例';
+  if (!payloadEl.value.trim()) {{
+    btn.textContent = '填入示例';
+    btn.title = '把示例填进投料框';
+    btn.classList.remove('warn');
+  }} else if (isPristineSample()) {{
+    btn.textContent = '清掉示例';
+    btn.title = '撤掉刚填进去的示例，回到空框（你一个字都没改，放心清）';
+    btn.classList.remove('warn');
+  }} else {{
+    btn.textContent = '清空';
+    btn.title = '清掉整个投料框，包括你自己写的内容（不可撤销，会先问一句）';
+    btn.classList.add('warn');
+  }}
 }}
 
 function onPayloadInput() {{

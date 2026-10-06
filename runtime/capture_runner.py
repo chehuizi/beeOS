@@ -19,11 +19,7 @@ from typing import Any
 from uuid import uuid4
 
 # 业务枚举来自盒子（业务层），不从 runtime 复制一份
-from boxes.requirement_capture.schemas import (
-    EXTRACTORS,
-    REQUIREMENT_PRIORITIES,
-    REQUIREMENT_TYPES,
-)
+from boxes.requirement_capture.schemas import EXTRACTORS
 
 
 _TYPE_PREFIX = {
@@ -103,6 +99,8 @@ def _simulate_source_sentence_splitter(input_data: dict[str, Any]) -> dict[str, 
         "business_goal": "",
         "extractor": "rule",
         "source_sentences": _split_sentences(narrative),
+        "nodes": [],
+        "edges": [],
         "requirements": [],
         "requirement_count": 0,
         "narrative": narrative,
@@ -113,55 +111,268 @@ def _simulate_source_sentence_splitter(input_data: dict[str, Any]) -> dict[str, 
 # op 2: extract_requirements —— 唯一走 LLM 的 op
 # ============================================================
 
-_EXTRACT_PROMPT = """从下面这份中文业务表述里抽取结构化业务需求。只输出 JSON，不要解释。
+_EXTRACT_PROMPT = """从下面这份中文业务表述里抽出一张**流程图**。只输出 JSON，不要解释、不要分析、不要复述原文。
+
+业务方描述一件事，说的是流程图：节点（做什么）+ 边（走到哪）+ 守卫（什么条件下才走）。
+不要把它摊平成一串需求——摊平会把"哪个约束挂在哪个动作上"这个信息弄丢。
 
 原文已按句子切分，每句有 sentence_id。你要做的：
-1. 只抽取原文中真实存在的内容，绝对不要补充、推断或编造
-2. 每条需求必须写明它来自哪一句：trace_to 填该句的 sentence_id
-3. description 必须是原文中出现过的片段（可截取，不要改写）
-4. role=goal 的句子是业务目标，不产出需求
-5. requirement_type 只能是：object / rule / process / metric / event
+1. 只用原文中真实存在的内容，绝对不要补充、推断或编造
+2. nodes：每个业务动作一个节点。action 写原文里出现的片段，不要改写
+3. edges：把节点按原文的先后顺序串起来，from/to 用 node_id
+4. 同一句里如果既有动作又有约束，动作进 nodes，约束写进**那一步之后那条边的 guard**
+5. 动作产出或读入的实体写进 writes / reads；说要量的指标写进 measures
+6. 每个节点和边都填 trace_to，指向它依据的那一句的 sentence_id
+7. role=goal 的句子是业务目标，写进 goal，不产出节点
 
 输出格式：
-{{"requirements": [{{"description": "原文片段", "requirement_type": "rule", "trace_to": "sent_2"}}]}}
+{{"goal": "首句原文片段",
+ "nodes": [{{"action": "原文片段", "writes": [], "reads": [], "measures": [],
+              "trace_to": "sent_2"}}],
+ "edges": [{{"from": "node_1", "to": "node_2", "guard": "", "trace_to": "sent_3"}}]}}
 
-类型含义：
-- object：业务实体/对象（订单、库位、批次）
-- rule：业务规则或约束（必须/不得/只有…才 / 阈值限制）
-- process：业务流程或步骤（有先后顺序的动作）
-- metric：业务指标（时长、数量、比率，需要被度量）
-- event：已发生或应发出的业务事件（已XX / 通知 / 触发）
+注意：
+- 没有守卫时 guard 留空字符串，不要编一个
+- 没有产出实体时 writes / reads 留空数组
+- measures 只在原文明确说要度量什么时才填
+- 如果原文没有可抽取的业务事实，返回 {{"goal": "", "nodes": [], "edges": []}}
 
-如果原文没有可抽取的业务事实，返回 {{"requirements": []}}
-
+直接输出这段 JSON 就好，不要在 JSON 前后加任何文字。
 原文句子：
 {sentences}"""
 
 
-def _rule_extract(sentences: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """规则降级版抽取——纯关键词，只覆盖词面明显的类型"""
+def _rule_extract(sentences: list[dict[str, Any]]) -> dict[str, Any]:
+    """规则降级版抽图——纯词面分类，不猜语义
+
+    降级路径没有语言理解能力，所以只做能机械判定的映射：
+      rule  / metric  → 挂到边（guard）或节点（measures）
+      其余            → 节点动作
+    这不是"退化成全 process"——丢掉 rule / metric 会让下游建模盒
+    metrics_defined 恒假、整条链路必拒，宁可分类粗糙也不能丢类型。
+    """
     from kanban.trigger import _classify_sentence
 
-    out: list[dict[str, Any]] = []
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    # 规则 / 指标句子挂在它后面那个动作上——原文通常写「约束 + 动作」。
+    # 攒一个，等下一个非规则非指标的句子出现时挂上去。
+    pending: list[dict[str, str]] = []
+
     for s in sentences:
-        if s["role"] != "fact":
+        if s["role"] != "fact" or not s["text"].strip():
             continue
         rtype = _classify_sentence(s["text"])
-        if rtype == "object" and not s["text"].strip():
+        if rtype in ("rule", "metric"):
+            # 这两类不是流程的一步：rule 是转移的条件，metric 是动作要量的东西。
+            # 攒起来挂到它约束的那个动作上，别自己变成节点。
+            pending.append({
+                "kind": "guard" if rtype == "rule" else "measure",
+                "text": s["text"],
+                "trace_to": s["sentence_id"],
+            })
             continue
-        out.append({
-            "description": s["text"],
-            "requirement_type": rtype,
+
+        node_id = f"node_{len(nodes) + 1}"
+        prev_id = nodes[-1]["node_id"] if nodes else ""
+        # 攒着的约束管的是「怎么走到这一步」→ 挂到进入它的边上的 guard
+        guards = [p["text"] for p in pending if p["kind"] == "guard"]
+        guard = "".join(guards)
+        node = {
+            "node_id": node_id,
+            "action": s["text"],
+            "writes": [], "reads": [], "measures": [],
+            # 挂在节点身上的 guard / measures 各自来自哪一句——覆盖率靠它记账
+            "guard_sources": [p["trace_to"] for p in pending if p["kind"] == "guard"],
+            "measure_sources": [p["trace_to"] for p in pending if p["kind"] == "measure"],
             "trace_to": s["sentence_id"],
+        }
+        for p in pending:
+            if p["kind"] == "measure":
+                node["measures"].append(p["text"])
+        pending = []
+        nodes.append(node)
+
+        if prev_id:
+            edges.append({
+                "edge_id": f"edge_{len(edges) + 1}",
+                "from": prev_id, "to": node_id,
+                "guard": guard,
+                "trigger": "",
+                "trace_to": node["trace_to"],
+            })
+        elif guard:
+            # 图只有一个节点（原文是「一句约束 + 一个动作」）：没有边可挂，
+            # 守卫降级挂到节点自己的条件上，不静默丢
+            node["guard"] = guard
+
+    # 收尾：句子末尾还有没挂出去的（原文最后一句是指标，没有后继动作）
+    if pending and nodes:
+        for p in pending:
+            if p["kind"] == "measure":
+                nodes[-1]["measures"].append(p["text"])
+                nodes[-1]["measure_sources"].append(p["trace_to"])
+    elif pending:
+        # 一个动作都没有：把剩下的兜成节点，不静默丢内容
+        for p in pending:
+            nodes.append({
+                "node_id": f"node_{len(nodes) + 1}",
+                "action": p["text"],
+                "writes": [], "reads": [], "measures": [],
+                "guard_sources": [], "measure_sources": [],
+                "trace_to": p["trace_to"],
+            })
+    goal = next((s["text"] for s in sentences if s["role"] == "goal"), "")
+    return {"goal": goal, "nodes": nodes, "edges": edges}
+
+
+def _attach_sources(
+    fragments: list[str], sentences: list[dict[str, Any]]
+) -> list[tuple[str, str]]:
+    """把挂在节点身上的元素，逐个归到它真实出现的那一句上
+
+    覆盖率按「每句都有图上元素指向它」算。节点 action 之外的实体 / 指标
+    可能来自别的句子，不归位就会被误判成"这句没被覆盖"。
+    归不到任何一句 → 是编的，返回空丢掉。
+    """
+    out: list[tuple[str, str]] = []
+    for frag in fragments:
+        for s in sentences:
+            if s["role"] == "fact" and frag in s["text"]:
+                out.append((frag, s["sentence_id"]))
+                break
+    return out
+
+
+def _clean_graph(raw: Any, sentences: list[dict[str, Any]]) -> dict[str, Any]:
+    """LLM 图 → 机械清洗后的图
+
+    只收能溯源到真实句子、且文本在原文中出现过的内容——
+    幻觉在这一层就被挡掉，不留到 acceptance 才报。
+    """
+    if not isinstance(raw, dict):
+        raise ValueError(f"llm returned {type(raw).__name__}, want dict")
+    sent_by_id = {s["sentence_id"]: s for s in sentences}
+    goal = next((s["text"] for s in sentences if s["role"] == "goal"), "")
+
+    def ok_fragment(sid: Any, text: Any) -> bool:
+        """文本必须是它所溯源那一句的原文子串"""
+        src = sent_by_id.get(str(sid or ""))
+        frag = (text or "").strip() if isinstance(text, str) else ""
+        return bool(src and frag and frag in src["text"])
+
+    def str_list(v: Any) -> list[str]:
+        if not isinstance(v, list):
+            return []
+        return [x.strip() for x in v if isinstance(x, str) and x.strip()]
+
+    nodes: list[dict[str, Any]] = []
+    for c in (raw.get("nodes") or []):
+        if not isinstance(c, dict) or not ok_fragment(c.get("trace_to"), c.get("action")):
+            continue
+        writes = _attach_sources(str_list(c.get("writes")), sentences)
+        measures = _attach_sources(str_list(c.get("measures")), sentences)
+        reads = _attach_sources(str_list(c.get("reads")), sentences)
+        nodes.append({
+            "node_id": f"node_{len(nodes) + 1}",
+            "action": (c["action"] or "").strip(),
+            "writes": [t for t, _ in writes],
+            "reads": [t for t, _ in reads],
+            "measures": [t for t, _ in measures],
+            "guard_sources": [],
+            "measure_sources": [sid for _, sid in measures if sid],
+            "trace_to": str(c["trace_to"]),
         })
+
+    if not nodes:
+        raise ValueError("llm produced no traceable node")
+
+    node_ids = {n["node_id"] for n in nodes}
+    edges: list[dict[str, Any]] = []
+    for c in (raw.get("edges") or []):
+        if not isinstance(c, dict):
+            continue
+        frm, to = c.get("from"), c.get("to")
+        # 边的两端必须指向真实存在的节点——悬空边会让"按位置定类型"失效
+        if frm not in node_ids or to not in node_ids or frm == to:
+            continue
+        guard = (c.get("guard") or "").strip() if isinstance(c.get("guard"), str) else ""
+        trigger = (c.get("trigger") or "").strip() if isinstance(c.get("trigger"), str) else ""
+        trace = c.get("trace_to")
+        # 守卫 / 触发词同样要能在原文里找到，否则视为编造
+        if guard and not ok_fragment(trace, guard):
+            guard = ""
+        if trigger and not ok_fragment(trace, trigger):
+            trigger = ""
+        edges.append({
+            "edge_id": f"edge_{len(edges) + 1}",
+            "from": frm,
+            "to": to,
+            "guard": guard,
+            "trigger": trigger,
+            "trace_to": str(trace) if trace else "",
+        })
+
+    # 原文明写先后顺序而模型漏了边：补成链。图断成一堆孤点就没用了
+    if not edges and len(nodes) > 1:
+        for a, b in zip(nodes, nodes[1:]):
+            edges.append({
+                "edge_id": f"edge_{len(edges) + 1}",
+                "from": a["node_id"], "to": b["node_id"],
+                "guard": "", "trigger": "", "trace_to": b["trace_to"],
+            })
+
+    return {"goal": goal, "nodes": nodes, "edges": edges}
+
+
+def _graph_to_requirements(graph: dict[str, Any]) -> list[dict[str, Any]]:
+    """流程图 → 建模盒要的平铺列表（兼容投影，零业务判断）
+
+    这一步纯粹是把图摊平给还没升级的建模盒——它按 requirement_type 分组。
+    摊平后的 type 是**由位置推出来的**，不是模型猜的：
+      node          → process
+      node.writes   → object
+      node.measures → metric
+      edge.guard    → rule
+      edge.trigger  → event
+    建模盒升级成直接吃图之后，这个函数就退休。
+    """
+    out: list[dict[str, Any]] = []
+    for n in graph.get("nodes", []):
+        trace = n.get("trace_to", "")
+        guard_traces = n.get("guard_sources") or []
+        measure_traces = n.get("measure_sources") or []
+        if n.get("guard"):
+            out.append({
+                "description": n["guard"], "requirement_type": "rule",
+                "trace_to": guard_traces[0] if guard_traces else trace,
+            })
+        out.append({
+            "description": n["action"],
+            "requirement_type": "process",
+            "trace_to": trace,
+        })
+        for w in n.get("writes", []):
+            out.append({"description": w, "requirement_type": "object", "trace_to": trace})
+        for r in n.get("reads", []):
+            out.append({"description": r, "requirement_type": "object", "trace_to": trace})
+        for i, m in enumerate(n.get("measures", [])):
+            out.append({
+                "description": m, "requirement_type": "metric",
+                "trace_to": measure_traces[i] if i < len(measure_traces) else trace,
+            })
+    for e in graph.get("edges", []):
+        trace = e.get("trace_to", "")
+        if e.get("guard"):
+            out.append({"description": e["guard"], "requirement_type": "rule", "trace_to": trace})
+        if e.get("trigger"):
+            out.append({"description": e["trigger"], "requirement_type": "event", "trace_to": trace})
     return out
 
 
 def _simulate_requirement_extractor(input_data: dict[str, Any]) -> dict[str, Any]:
-    """LLM 抽取（含机械后处理 + 降级）"""
+    """LLM 抽图（含机械后处理 + 降级）"""
     from runtime import llm
-    from runtime.contract import validate_payload
-    from boxes.requirement_capture.definition import get_definition
 
     sentences = input_data.get("source_sentences", [])
     narrative = input_data.get("narrative", "")
@@ -175,45 +386,17 @@ def _simulate_requirement_extractor(input_data: dict[str, Any]) -> dict[str, Any
             f'{s["sentence_id"]} [{s["role"]}] {s["text"]}' for s in sentences
         )
         raw = llm.complete_json(
-            _EXTRACT_PROMPT.format(sentences=rendered), max_tokens=2000
+            _EXTRACT_PROMPT.format(sentences=rendered), max_tokens=8000
         )
-        cands = raw.get("requirements") if isinstance(raw, dict) else None
-        if not isinstance(cands, list):
-            raise llm.LLMError(f"llm returned no requirements list: {type(raw).__name__}")
-
-        # 只接受能溯源到真实句子、且 description 在原文中出现的
-        sent_by_id = {s["sentence_id"]: s for s in sentences}
-        cleaned: list[dict[str, Any]] = []
-        for c in cands:
-            if not isinstance(c, dict):
-                continue
-            sid = c.get("trace_to")
-            src = sent_by_id.get(sid or "")
-            if src is None:
-                continue
-            desc = (c.get("description") or "").strip()
-            if not desc or desc not in src["text"]:
-                continue
-            rtype = c.get("requirement_type")
-            if rtype not in REQUIREMENT_TYPES or rtype == "goal":
-                rtype = "object"
-            cleaned.append({
-                "description": desc,
-                "requirement_type": rtype,
-                "trace_to": sid,
-            })
-
-        if not cleaned:
-            raise llm.LLMError("llm produced no traceable requirement")
-
-        requirements = cleaned
+        graph = _clean_graph(raw, sentences)
         extractor = "llm"
     except Exception as e:   # noqa: BLE001 — 任何 LLM 侧问题都降级，不该让投料口瘫
-        requirements = _rule_extract(sentences)
+        graph = _rule_extract(sentences)
         extractor = "rule"
         degrade_reason = f"{type(e).__name__}: {str(e)[:160]}"
 
-    # 机械后处理：编号 + priority（LLM 不该决定系统标识）
+    # 图 → 兼容平铺列表，编号按 type 分别计数（建模盒按 type 分组）
+    requirements = _graph_to_requirements(graph)
     counters: Counter[str] = Counter()
     for r in requirements:
         rtype = r["requirement_type"]
@@ -224,6 +407,8 @@ def _simulate_requirement_extractor(input_data: dict[str, Any]) -> dict[str, Any
     result.update({
         "business_goal": goal,
         "extractor": extractor,
+        "nodes": graph["nodes"],
+        "edges": graph["edges"],
         "requirements": requirements,
         "requirement_count": len(requirements),
         "degrade_reason": degrade_reason,
@@ -272,6 +457,8 @@ def _simulate_source_fidelity_verifier(input_data: dict[str, Any]) -> dict[str, 
 
     sentences = input_data.get("source_sentences", [])
     requirements = input_data.get("requirements", [])
+    nodes = input_data.get("nodes", [])
+    edges = input_data.get("edges", [])
     narrative = re.sub(r"\s+", "", input_data.get("narrative", ""))
 
     result = dict(input_data)
@@ -305,10 +492,16 @@ def _simulate_source_fidelity_verifier(input_data: dict[str, Any]) -> dict[str, 
     if contract_errors:
         details["contract_errors"] = contract_errors[:5]
 
-    # ② 溯源：每条需求的 trace_to 指向真实句子
+    # ② 溯源：图上每个节点/边都要指向真实句子，边两端要指向真实节点
+    #    平铺列表也查一遍——它是图的投影，不该比图更可信
     sent_ids = {s["sentence_id"] for s in sentences}
-    broken = [r.get("requirement_id") for r in requirements
-              if r.get("trace_to") not in sent_ids]
+    node_ids = {n["node_id"] for n in nodes}
+    broken = [n["node_id"] for n in nodes if n.get("trace_to") not in sent_ids]
+    broken += [e["edge_id"] for e in edges if e.get("trace_to") not in sent_ids]
+    broken += [e["edge_id"] for e in edges
+               if e.get("from") not in node_ids or e.get("to") not in node_ids]
+    broken += [r.get("requirement_id") for r in requirements
+               if r.get("trace_to") not in sent_ids]
     result["trace_integrity"] = not broken
     if broken:
         details["broken_traces"] = broken
@@ -320,9 +513,18 @@ def _simulate_source_fidelity_verifier(input_data: dict[str, Any]) -> dict[str, 
     if hallucinated:
         details["hallucinated"] = hallucinated
 
-    # ④ 覆盖：每句 fact 要么被至少一条需求覆盖
+    # ④ 覆盖：每句 fact 都要在图上留下痕迹
+    #    节点 action / 节点 guard / 节点 measures / 边 guard / 边 trigger
+    #    都被原文的某一句支撑——挂在节点身上的也要单独记账，
+    #    否则「一句约束 + 一个动作」这种写法会被误判成没覆盖
     fact_ids = {s["sentence_id"] for s in sentences if s["role"] == "fact"}
-    traced = {r.get("trace_to") for r in requirements}
+    traced: set[Any] = set()
+    for n in nodes:
+        traced.add(n.get("trace_to"))
+        traced |= set(n.get("guard_sources", []))
+        traced |= set(n.get("measure_sources", []))
+    for e in edges:
+        traced.add(e.get("trace_to"))
     uncovered = sorted(fact_ids - traced)
     result["source_coverage"] = (
         round(100.0 * (len(fact_ids) - len(uncovered)) / len(fact_ids), 2)
@@ -349,6 +551,8 @@ def _simulate_requirement_set_packager(input_data: dict[str, Any]) -> dict[str, 
         "context": input_data.get("context", ""),
         "extractor": input_data.get("extractor", "rule"),
         "source_sentences": input_data.get("source_sentences", []),
+        "nodes": input_data.get("nodes", []),
+        "edges": input_data.get("edges", []),
         "requirements": input_data.get("requirements", []),
         "requirement_count": input_data.get("requirement_count", 0),
         "contract_compliance": input_data.get("contract_compliance", False),

@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from boxes.modeling import BUSINESS_MODELING_BOX, get_definition
+from boxes.modeling.schemas import REQUIREMENT_TYPES
 from beelines.modeling import BUSINESS_MODELING_BEELINE, get_beeline
 from beelines import get_inventory_shortage_beeline
 from runtime import (
@@ -20,6 +21,7 @@ from runtime import (
     create_task_run,
     evaluate_acceptance,
 )
+from runtime.contract import validate_payload
 
 
 # ============================================================
@@ -325,7 +327,7 @@ class TestModelingMockSemantics:
         assert by_type["object"] == ["req_7"]
 
     def test_five_types_all_present_accepted(self):
-        """五类需求齐全（含 goal）：goal 不计入覆盖率，4 类全覆盖 → ACCEPTED"""
+        """五类需求齐全（含 goal）：goal 不计入覆盖率，5 类全覆盖 → ACCEPTED"""
         reqs = [
             {"requirement_id": f"r_{t}", "description": "x", "requirement_type": t, "priority": "must_have"}
             for t in ("object", "rule", "process", "metric", "goal")
@@ -335,6 +337,27 @@ class TestModelingMockSemantics:
         assert task_run.result["requirement_coverage"] == 100.0
         assert task_run.result["metrics_defined"] is True
         assert evaluate_acceptance(task_run, box.result).status == AcceptanceStatus.ACCEPTED
+
+    def test_by_type_schema_declares_every_requirement_type(self):
+        """by_type 的 schema 必须覆盖全部 6 类 type（含 event / goal）
+
+        runtime/classify 按 REQUIREMENT_TYPES 建全部 key；schema 少列一类，
+        声明就名存实亡——契约校验形同虚设，且没人会发现 event 组悄悄丢了。
+        """
+        schema = get_definition().get_schema("schema_classified_requirements")
+        by_type = next(f for f in schema.fields if f.name == "by_type")
+        declared = {p.name for p in by_type.properties}
+        assert declared == set(REQUIREMENT_TYPES)
+
+    def test_by_type_output_passes_contract_validation(self):
+        """classify 的真实输出能过 schema_classified_requirements 校验"""
+        schema = get_definition().get_schema("schema_classified_requirements")
+        task_run = self._run([
+            {"requirement_id": f"r_{t}", "description": "x", "requirement_type": t, "priority": "must_have"}
+            for t in ("object", "rule", "process", "metric", "event", "goal")
+        ])
+        out = task_run.operations["classify_requirements"].output
+        assert validate_payload(out, schema) == []
 
     def test_no_metric_requirement_rejected(self):
         """无 metric 类需求 → metrics_defined=False → REJECTED"""

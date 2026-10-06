@@ -437,20 +437,38 @@ HTML_PAGE = f"""<!DOCTYPE html>
     padding: 5px 8px; border-radius: 5px; font-size: 11px;
     margin-bottom: 6px; line-height: 1.45; cursor: help;
   }}
-  .rs-hint {{ font-size: 10px; color: #94a3b8; margin-bottom: 6px; font-style: italic; }}
-  .rs-row {{
-    display: flex; align-items: center; gap: 6px; padding: 2px 4px;
-    border-radius: 4px; font-size: 11px; line-height: 1.5;
+  .rs-hint {{ font-size: 10px; color: #94a3b8; margin-bottom: 8px; font-style: italic; }}
+  /* 流程图：节点 + 边 + 守卫。竖排单链——看板列窄，横排会被挤断 */
+  .fg {{ display: flex; flex-direction: column; align-items: stretch; }}
+  .fg-node {{
+    display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
+    padding: 5px 8px; border-radius: 6px; font-size: 12px; line-height: 1.5;
+    background: #f0fdf4; border: 1px solid #bbf7d0;
   }}
-  .rs-row:hover {{ background: #f8fafc; }}
-  .rs-id {{ font-size: 10px; color: #94a3b8; min-width: 62px; font-family: monospace; }}
-  .rs-type {{
-    font-size: 10px; padding: 1px 2px; border: 1px solid #cbd5e1;
-    border-radius: 3px; background: white; flex: 0 0 auto; width: auto;
+  .fg-node:hover {{ background: #dcfce7; }}
+  .fg-seq {{
+    flex: 0 0 auto; min-width: 16px; height: 16px; border-radius: 50%;
+    background: #16a34a; color: white; font-size: 10px; font-weight: 700;
+    display: inline-flex; align-items: center; justify-content: center;
   }}
-  .rs-type.edited {{ border-color: #f59e0b; background: #fffbeb; color: #b45309; font-weight: 600; }}
-  .rs-desc {{ color: #0f172a; flex: 1 1 auto; min-width: 0; }}
-  .rs-trace {{ font-size: 10px; color: #94a3b8; font-family: monospace; }}
+  .fg-action {{ color: #0f172a; flex: 1 1 140px; min-width: 0; }}
+  .fg-tag {{
+    flex: 0 0 auto; font-size: 10px; padding: 1px 5px; border-radius: 3px;
+    border: 1px solid transparent; line-height: 1.6;
+  }}
+  .fg-metric {{ background: #eff6ff; border-color: #bfdbfe; color: #1e40af; }}
+  .fg-obj {{ background: #faf5ff; border-color: #e9d5ff; color: #6b21a8; }}
+  .fg-edge {{ display: flex; align-items: center; gap: 6px; padding-left: 15px; min-height: 18px; }}
+  .fg-line {{ width: 2px; height: 18px; background: #86efac; flex: 0 0 auto; }}
+  .fg-guard {{
+    font-size: 10px; color: #15803d; background: #f0fdf4;
+    border: 1px dashed #86efac; border-radius: 3px; padding: 1px 5px; line-height: 1.6;
+  }}
+  .fg-dangling .fg-line {{ background: repeating-linear-gradient(
+    to bottom, #cbd5e1 0 3px, transparent 3px 6px); }}
+  .fg-orphan {{ background: #fef2f2; border-color: #fecaca; }}
+  .fg-empty {{ font-size: 11px; color: #94a3b8; font-style: italic; }}
+  .rs-trace {{ font-size: 10px; color: #94a3b8; font-family: monospace; flex: 0 0 auto; }}
   /* 纯文本投料框（task_schema 全是标量时）——等宽换成正常字体，读着像在写话 */
   #task-payload.payload-text {{
     font-family: inherit; font-size: 13px; line-height: 1.8; color: #0f172a;
@@ -766,13 +784,69 @@ function renderDddModel(r) {{
   return h;
 }}
 
-  // 需求集（捕获盒产出）——含 type 人工确认（human-in-the-loop）
-// 为什么要人工：type_boundary（rule vs metric vs process）实测 LLM 仍会错，
-// 且无法机械验证。投料前让人一眼确认，比事后 rejected 便宜得多。
-const REQ_TYPES = ['object', 'rule', 'process', 'metric', 'event', 'goal'];
+  // 流程图（捕获盒产出）——节点 + 边 + 守卫
+// 为什么不再有 type 下拉：抽取结果里的类型由**位置**决定，
+// 不在 nodes 里就是节点、在 edge.guard 上就是规则、在 measures 上就是指标。
+// 位置不是模型猜的标签，所以没有"猜错要人改"这回事——原先那个下拉
+// （rule vs metric vs process 实测仍会错）连同它的人工确认一起退休。
+function esc(s) {{
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}}
+
+function renderFlowGraph(r) {{
+  const nodes = Array.isArray(r.nodes) ? r.nodes : [];
+  const edges = Array.isArray(r.edges) ? r.edges : [];
+  if (!nodes.length) return '<div class="fg-empty">(未抽出流程节点)</div>';
+
+  // 每个节点的"下一个"是谁：先按 edges 找，没有出边就顺延到链上下一个
+  const nxt = {{}};
+  edges.forEach((e) => {{ (nxt[e.from] = nxt[e.from] || []).push(e); }});
+  const seen = new Set();
+  const guardOf = {{}};
+  edges.forEach((e) => {{ if (e.guard) guardOf[e.from + '>' + e.to] = e.guard; }});
+
+  function step(n, i) {{
+    const outs = nxt[n.node_id] || [];
+    const edge = outs[0];
+    const guard = (n.guard || (edge && edge.guard) || '');
+    const parts = [];
+    parts.push(`<div class="fg-node">
+      <span class="fg-seq">${{seen.size + 1}}</span>
+      <span class="fg-action">${{esc(n.action)}}</span>
+      ${{(n.measures || []).map((m) => `<span class="fg-tag fg-metric" title="要量的指标">度量 ${{esc(m)}}</span>`).join('')}}
+      ${{(n.writes || []).map((w) => `<span class="fg-tag fg-obj" title="产出实体">产出 ${{esc(w)}}</span>`).join('')}}
+      ${{(n.reads || []).map((rd) => `<span class="fg-tag fg-obj" title="读入实体">读入 ${{esc(rd)}}</span>`).join('')}}
+      <span class="rs-trace" title="溯源到原文句子">← ${{esc(n.trace_to || '?')}}</span>
+    </div>`);
+    if (guard) {{
+      parts.push(`<div class="fg-edge"><span class="fg-line"></span><span class="fg-guard" title="转移条件">${{esc(guard)}}</span></div>`);
+    }} else if (edge) {{
+      parts.push('<div class="fg-edge"><span class="fg-line"></span></div>');
+    }}
+    seen.add(n.node_id);
+    if (edge && edge.to && !seen.has(edge.to)) {{
+      const next = nodes.find((x) => x.node_id === edge.to);
+      if (next) parts.push(step(next));
+    }} else if (!edge && i + 1 < nodes.length) {{
+      // 断链（没有边）：按原文顺序顺延，画成一条虚线，不假装有边
+      parts.push('<div class="fg-edge fg-dangling"><span class="fg-line"></span></div>');
+      if (!seen.has(nodes[i + 1].node_id)) parts.push(step(nodes[i + 1], i + 1));
+    }}
+    return parts.join('');
+  }}
+
+  const chain = step(nodes[0], 0);
+  // 从 step 里没能走到的节点（分叉出去的）追加在末尾，不静默丢
+  const rest = nodes.filter((n) => !seen.has(n.node_id)).map((n) =>
+    `<div class="fg-node fg-orphan"><span class="fg-action">${{esc(n.action)}}</span></div>`
+  ).join('');
+
+  return `<div class="fg">${{chain}}${{rest}}</div>`;
+}}
 
 function renderRequirementSet(r) {{
-  if (!r || !Array.isArray(r.requirements)) return '';
+  if (!r) return '';
   const acc4 = [
     ['契约合规', r.contract_compliance],
     ['原文覆盖', r.source_coverage !== undefined ? r.source_coverage + '%' : '—'],
@@ -783,36 +857,21 @@ function renderRequirementSet(r) {{
     const ok = v === true || v === '100%';
     return `<span class="rs-check ${{ok ? 'ok' : 'bad'}}">${{ok ? '✓' : '✗'}} ${{k}} ${{v}}</span>`;
   }}).join('');
-  const rows = r.requirements.map((q) => {{
-    const opts = REQ_TYPES.map((t) =>
-      `<option value="${{t}}"${{t === q.requirement_type ? ' selected' : ''}}>${{t}}</option>`
-    ).join('');
-    return `<div class="rs-row">
-      <span class="rs-id">${{q.requirement_id}}</span>
-      <select class="rs-type" onchange="markTypeEdited(this)">${{opts}}</select>
-      <span class="rs-desc">${{q.description}}</span>
-      <span class="rs-trace" title="溯源到原文句子">← ${{q.trace_to || '?'}}</span>
-    </div>`;
-  }}).join('');
   const degraded = r.extractor !== 'llm';
   const degradeNote = degraded
     ? `<div class="rs-degrade" title="${{(r.evidence_detail && r.evidence_detail.degrade_reason) || 'LLM 未参与，退回规则抽取'}}">
-         ⚠ 降级：规则版抽取（LLM 未参与，type 判定质量下降，请人工核对）
+         ⚠ 降级：规则版抽取（LLM 未参与，守卫和指标靠词面识别，请人工核对）
        </div>`
     : '';
+  const nNodes = (r.nodes || []).length;
+  const nEdges = (r.edges || []).length;
   return `<div class="rs-pack">
-    <div class="rs-head">业务目标：${{r.business_goal || '—'}}</div>
+    <div class="rs-head">业务目标：${{esc(r.business_goal || '—')}}</div>
     ${{degradeNote}}
-    <div class="rs-checks">${{checks}}<span class="rs-check ${{degraded ? 'by warn' : 'by'}}">抽取者：${{r.extractor}}</span></div>
-    <div class="rs-hint">type 无法机械验证，确认一下再投料（改过的会高亮）</div>
-    ${{rows}}
+    <div class="rs-checks">${{checks}}<span class="rs-check ${{degraded ? 'by warn' : 'by'}}">抽取者：${{esc(r.extractor)}}</span></div>
+    <div class="rs-hint">流程图：${{nNodes}} 个节点${{nEdges ? ` · ${{nEdges}} 条转移` : ''}} —— 类型由所在位置决定，无需逐条确认</div>
+    ${{renderFlowGraph(r)}}
   </div>`;
-}}
-
-function markTypeEdited(sel) {{
-  sel.classList.add('edited');
-  const box = document.getElementById('rs-edited-note');
-  if (box) box.style.display = 'block';
 }}
 
 function renderArtifact() {{
@@ -823,8 +882,8 @@ function renderArtifact() {{
   const why = a.rejection_class
     ? `<div class="rej-why">未通过原因：<b>${{REJECT_LABEL[a.rejection_class] || a.rejection_class}}</b></div>`
     : '';
-  // 需求集（捕获盒）与 DDD 模型（建模盒）两种产出形态
-  const body = Array.isArray(a.result && a.result.requirements)
+  // 流程图（捕获盒）与 DDD 模型（建模盒）两种产出形态
+  const body = Array.isArray(a.result && a.result.nodes)
     ? renderRequirementSet(a.result)
     : renderDddModel(a.result);
   return `<div class="artifact-card">
@@ -887,11 +946,11 @@ function buildShell(boxId, box, entries) {{
           <div class="port-title" id="port-title">TASK IN · 投料口</div>
           <select id="task-type" onchange="onTaskTypeChange()">${{options}}</select>
           <textarea id="task-payload" rows="12" spellcheck="false"
-                    oninput="clearPayloadError()"
+                    oninput="onPayloadInput()"
                     placeholder="${{placeholder}}"></textarea>
           <div class="trigger-row">
             <button class="trigger-btn" id="trigger-btn" onclick="triggerTask('${{boxId}}')">▶ 履约</button>
-            <button class="ghost-btn" onclick="fillSample()">填入示例</button>
+            <button class="ghost-btn" id="sample-btn" onclick="toggleSample()">填入示例</button>
           </div>
           <div id="trigger-result" class="trigger-result"></div>
         </div>
@@ -927,6 +986,9 @@ function buildShell(boxId, box, entries) {{
   }}
   _lastArtifactKey = null;   // shell 重建后 slot 是新 DOM，强制重渲 artifact
   renderArtifactInto();
+  // 新建的按钮按当前履约状态同步一次：正在跑就禁着，跑完了才能再投
+  const btn2 = document.getElementById('trigger-btn');
+  if (btn2) btn2.disabled = !!_boxState.running;
 }}
 
 let _lastArtifactKey = null;   // 已渲染的 artifact 标识（内容没变就不重建 DOM，保留 details 开合状态）
@@ -1016,8 +1078,9 @@ function onTaskTypeChange() {{
   payloadEl.classList.toggle('payload-text', isText);
   // 故意不预填示例：预填内容看着像"已经有人在投料"，直接点履约会误以为
   // 那就是自己的数据。示例留在 placeholder（灰字，空框才显示）里，
-  // 另给一个「填入示例」按钮按需取用。
+  // 另给一个「填入示例 / 清空」切换按钮按需取用。
   payloadEl.value = '';
+  syncSampleBtn();
 
   const t = document.getElementById('port-title');
   if (t) t.textContent = isText
@@ -1025,17 +1088,37 @@ function onTaskTypeChange() {{
     : 'TASK IN · 投料口（结构化表达）';
 }}
 
-function fillSample() {{
+function sampleTextOf(entry) {{
+  const sample = entry.sample_payload || {{}};
+  return entry.payload_kind === 'text'
+    ? (sample.narrative || sample.text || '')
+    : JSON.stringify(sample, null, 2);
+}}
+
+// 框里有内容时按钮翻成「清空」：否则填进去就再也回不到空框状态，
+// 空了才会显示的 placeholder 也跟着丢，示例提示一起没了
+function toggleSample() {{
   const typeEl = document.getElementById('task-type');
   const payloadEl = document.getElementById('task-payload');
   if (!typeEl || !payloadEl) return;
   const entry = (window._taskEntries || {{}})[typeEl.value] || {{}};
-  const sample = entry.sample_payload || {{}};
-  payloadEl.value = entry.payload_kind === 'text'
-    ? (sample.narrative || sample.text || '')
-    : JSON.stringify(sample, null, 2);
+  payloadEl.value = payloadEl.value.trim() ? '' : sampleTextOf(entry);
   clearPayloadError();
+  syncSampleBtn();
   payloadEl.focus();
+}}
+
+function syncSampleBtn() {{
+  const payloadEl = document.getElementById('task-payload');
+  const btn = document.getElementById('sample-btn');
+  if (!payloadEl || !btn) return;
+  btn.textContent = payloadEl.value.trim() ? '清空' : '填入示例';
+}}
+
+function onPayloadInput() {{
+  // 一开始打字就把上一条报错撤掉，否则红字挂着会误导成"当前内容仍无效"
+  clearPayloadError();
+  syncSampleBtn();
 }}
 
 // 一开始打字/填示例就把上一条报错撤掉，否则红字挂着会误导成"当前内容仍无效"
@@ -1132,7 +1215,11 @@ async function triggerTask(boxId) {{
     resultEl.textContent = '请求失败: ' + e.message;
   }}
   _boxState.running = false;
-  btn.disabled = false;
+  // 按 id 重取，别用函数入口捕获的那个引用：
+  // 履约要跑几十秒（LLM 那条腿），期间 tick() 可能重建 shell 把按钮换掉，
+  // 解锁旧节点等于没解——按钮就永久卡在 disabled，投料口瘫掉
+  const btnNow = document.getElementById('trigger-btn');
+  if (btnNow) btnNow.disabled = false;
   tick();
 }}
 

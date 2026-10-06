@@ -358,70 +358,125 @@ def _run_capture(store, narrative, llm_result=None):
 
 class TestMechanicalGates:
     def test_llm_hallucination_is_dropped_not_trusted(self, store):
-        """LLM 编造原文没有的需求 → 被 sentence+原文双重校验剔除"""
+        """LLM 编造原文没有的动作 → 被 sentence+原文双重校验剔除"""
         r = _run_capture(
             store, "库存数量不能为负。",
-            llm_result={"requirements": [
-                {"description": "订单必须7天内退款", "requirement_type": "rule",
-                 "trace_to": "sent_1"},
+            llm_result={"nodes": [
+                {"action": "订单必须7天内退款", "trace_to": "sent_1"},
             ]},
         )
-        descs = [q["description"] for q in r["result"]["requirements"]]
-        assert "订单必须7天内退款" not in descs
+        actions = [n["action"] for n in r["result"]["nodes"]]
+        assert "订单必须7天内退款" not in actions
 
     def test_llm_untraceable_is_dropped(self, store):
         """trace_to 指向不存在的句子 → 剔除"""
         r = _run_capture(
             store, "库存数量不能为负。",
-            llm_result={"requirements": [
-                {"description": "库存数量不能为负", "requirement_type": "rule",
-                 "trace_to": "sent_999"},
+            llm_result={"nodes": [
+                {"action": "库存数量不能为负", "trace_to": "sent_999"},
             ]},
         )
-        assert r["result"]["requirements"] == []
+        assert r["result"]["nodes"] == []
 
     def test_llm_desc_not_in_source_is_dropped(self, store):
-        """description 不在原句里（模型改写）→ 剔除"""
+        """action 不在原句里（模型改写）→ 剔除"""
         r = _run_capture(
             store, "库存数量不能为负。",
-            llm_result={"requirements": [
-                {"description": "库存数量不可小于零", "requirement_type": "rule",
-                 "trace_to": "sent_1"},
+            llm_result={"nodes": [
+                {"action": "库存数量不可小于零", "trace_to": "sent_1"},
             ]},
         )
-        assert r["result"]["requirements"] == []
+        assert r["result"]["nodes"] == []
 
-    def test_llm_illegal_type_is_normalized(self, store):
+    def test_llm_guard_not_in_source_is_dropped(self, store):
+        """守卫文本不在原句里（模型编的）→ 边保留但守卫清空
+
+        不能整条边丢掉：from/to 可能是对的，只有 guard 是编的。
+        """
         r = _run_capture(
-            store, "库存数量不能为负。",
-            llm_result={"requirements": [
-                {"description": "库存数量不能为负", "requirement_type": "POLICY",
-                 "trace_to": "sent_1"},
+            store, "提交入库单。",
+            llm_result={
+                "nodes": [
+                    {"action": "提交入库单", "trace_to": "sent_1"},
+                    {"action": "提交入库单", "trace_to": "sent_1"},
+                ],
+                "edges": [
+                    {"from": "node_1", "to": "node_2",
+                     "guard": "必须经理审批", "trace_to": "sent_1"},
+                ],
+            },
+        )
+        assert r["result"]["edges"][0]["guard"] == ""
+
+    def test_llm_dangling_edge_is_dropped(self, store):
+        """边指向不存在的节点 → 丢弃（悬空边会让"按位置定类型"失效）"""
+        r = _run_capture(
+            store, "提交入库单。",
+            llm_result={
+                "nodes": [{"action": "提交入库单", "trace_to": "sent_1"}],
+                "edges": [{"from": "node_1", "to": "node_99", "trace_to": "sent_1"}],
+            },
+        )
+        assert r["result"]["edges"] == []
+
+    def test_llm_missing_edges_are_linked_into_chain(self, store):
+        """模型漏了边但给了多节点 → 机械补成链，不让图断成一堆孤点"""
+        r = _run_capture(
+            store, "创建入库单。扫码入库。提交入库单。",
+            llm_result={"nodes": [
+                {"action": "创建入库单", "trace_to": "sent_1"},
+                {"action": "扫码入库", "trace_to": "sent_2"},
+                {"action": "提交入库单", "trace_to": "sent_3"},
             ]},
         )
-        assert r["result"]["requirements"][0]["requirement_type"] == "object"
+        edges = r["result"]["edges"]
+        assert [(e["from"], e["to"]) for e in edges] == [
+            ("node_1", "node_2"), ("node_2", "node_3"),
+        ]
 
     def test_llm_accepted_path_reports_llm_extractor(self, store):
         r = _run_capture(
             store, "库存数量不能为负。",
-            llm_result={"requirements": [
-                {"description": "库存数量不能为负", "requirement_type": "rule",
-                 "trace_to": "sent_1"},
+            llm_result={"nodes": [
+                {"action": "库存数量不能为负", "trace_to": "sent_1"},
             ]},
         )
         assert r["result"]["extractor"] == "llm"
-        assert r["result"]["requirements"][0]["requirement_type"] == "rule"
+        # 节点 → 平铺成 process（type 由位置决定，不是模型给的）
+        assert r["result"]["requirements"][0]["requirement_type"] == "process"
+
+    def test_guard_maps_to_rule_and_measures_to_metric(self, store):
+        """图 → 平铺列表的映射：位置决定 type
+
+        edge.guard → rule；node.measures → metric。这是"不再猜 type"的证据。
+        """
+        r = _run_capture(
+            store, "保存入库单，允许入库数量和实入数量不一致。入库处理时长要可度量。",
+            llm_result={
+                "nodes": [
+                    {"action": "保存入库单", "measures": ["入库处理时长"],
+                     "trace_to": "sent_1"},
+                ],
+                "edges": [],
+            },
+        )
+        reqs = r["result"]["requirements"]
+        by_type = {q["requirement_type"]: q["description"] for q in reqs}
+        assert by_type["process"] == "保存入库单"
+        assert by_type["metric"] == "入库处理时长"
 
     def test_ids_are_system_generated_not_from_llm(self, store):
         """编号是系统标识，LLM 无权决定"""
         r = _run_capture(
             store, "库存数量不能为负。",
-            llm_result={"requirements": [
-                {"description": "库存数量不能为负", "requirement_type": "rule",
-                 "trace_to": "sent_1", "requirement_id": "i_try_to_choose_this"},
+            llm_result={"nodes": [
+                {"action": "库存数量不能为负", "trace_to": "sent_1",
+                 "node_id": "i_try_to_choose_this"},
             ]},
         )
-        assert r["result"]["requirements"][0]["requirement_id"] == "req_rule_1"
+        # node_id 由系统按顺序重编，模型给的原样丢掉
+        assert r["result"]["nodes"][0]["node_id"] == "node_1"
+        assert r["result"]["requirements"][0]["requirement_id"] == "req_proc_1"
 
     def test_partial_extraction_lowers_coverage(self, store):
         """LLM 只抽到部分事实句 → source_coverage 掉下来 → rejected
@@ -431,9 +486,8 @@ class TestMechanicalGates:
         """
         r = _run_capture(
             store, "建模退款流程。订单是核心实体。退款必须在 7 天内完成。",
-            llm_result={"requirements": [
-                {"description": "订单是核心实体", "requirement_type": "object",
-                 "trace_to": "sent_2"},
+            llm_result={"nodes": [
+                {"action": "订单是核心实体", "trace_to": "sent_2"},
             ]},
         )
         res = r["result"]

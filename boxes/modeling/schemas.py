@@ -133,15 +133,18 @@ CLASSIFIED_REQUIREMENTS = SchemaDef(
             name="modelable_ids",
             type="array",
             items=FieldDef(name="id", type="string"),
-        ),  # 可建模 4 类需求 id（覆盖率分母；goal 不计入）
+        ),  # 可建模 5 类需求 id（覆盖率分母；goal 不计入）
         FieldDef(
             name="by_type",
             type="object",
             properties=[
+                # 6 类全列：runtime/classify 按 REQUIREMENT_TYPES 建全部 key，
+                # schema 少列一类就成了"声明不管约束"，补不上契约就名存实亡。
                 FieldDef(name="object", type="array", items=FieldDef(name="r", type="string")),
                 FieldDef(name="rule", type="array", items=FieldDef(name="r", type="string")),
                 FieldDef(name="process", type="array", items=FieldDef(name="r", type="string")),
                 FieldDef(name="metric", type="array", items=FieldDef(name="r", type="string")),
+                FieldDef(name="event", type="array", items=FieldDef(name="r", type="string")),
                 FieldDef(name="goal", type="array", items=FieldDef(name="r", type="string")),
             ],
         ),

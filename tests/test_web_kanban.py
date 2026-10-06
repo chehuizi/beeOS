@@ -467,12 +467,23 @@ class TestStructureApi:
         assert payload["set_id"].startswith("req_set_nl_")
         assert data["extractor"] == "rule"
         types = [r["requirement_type"] for r in payload["requirements"]]
-        assert types == ["rule", "process", "event", "metric", "object"]
+        # 图 → 平铺列表的投影：规则挂到节点守卫、指标挂到节点 measures，
+        # 其余（流程、事件、实体）都是节点动作
+        assert types == ["rule", "process", "process", "process", "metric"]
         # requirement_id 唯一且带类型前缀
         ids = [r["requirement_id"] for r in payload["requirements"]]
         assert len(set(ids)) == len(ids)
         assert ids[0].startswith("req_rule_")
         assert data["requirement_count"] == 5
+        # 图本身：3 个节点串成链，规则兜底挂在首节点（原文首句就是约束，无前驱边）
+        assert [n["action"] for n in payload["nodes"]] == [
+            "退款申请走主管审批流程", "退款已完成要通知财务", "订单是核心实体",
+        ]
+        assert payload["nodes"][0]["guard"] == "退款必须在 7 天内完成"
+        assert payload["nodes"][2]["measures"] == ["退款处理时长要可度量"]
+        assert [(e["from"], e["to"]) for e in payload["edges"]] == [
+            ("node_1", "node_2"), ("node_2", "node_3"),
+        ]
 
     def test_structure_empty_text_400(self, server_url: tuple[str, TaskRunStore]):
         url, _ = server_url

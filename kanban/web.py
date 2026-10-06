@@ -549,19 +549,15 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .ac-actual {{ grid-column: 2; font-size: 10px; color: #475569; word-break: break-all; }}
   .ac-row.bad .ac-actual {{ color: #b91c1c; font-weight: 600; }}
   /* 验收闸：菱形，颜色随判定结果走 */
-  .acc-station {{ fill: #fef3c7; stroke: #f59e0b; stroke-width: 1.4; }}
+  /* 菱形不挂状态灯：填充色本身就是状态（待机米 / 判定中黄 / 通过绿 / 没过红），
+     再塞一个灯就是同一格两套编码，而且令牌 hold 时停在正中，灯躲不开。 */
+  .acc-gate .acc-station {{ fill: #fef3c7; stroke: #f59e0b; stroke-width: 1.4; }}
   .acc-gate.done .acc-station {{ fill: #dcfce7; stroke: #16a34a; }}
   .acc-gate.failed .acc-station {{ fill: #fee2e2; stroke: #dc2626; }}
   .acc-gate.active .acc-station {{ fill: #fef9c3; stroke: #eab308; }}
   .acc-gate text.op-label {{ font-size: 8px; font-weight: 700; fill: #92400e; }}
   .acc-gate.done text.op-label {{ fill: #15803d; }}
   .acc-gate.failed text.op-label {{ fill: #b91c1c; }}
-  /* 状态灯：菱形不在 .op-node 里，lamp 的底色得自己给一份，
-     不然 SVG 默认填充是黑的，看着像「已判定」。 */
-  .acc-gate .lamp {{ fill: #cbd5e1; transition: fill 0.25s; }}
-  .acc-gate.active .lamp {{ fill: #eab308; }}
-  .acc-gate.done .lamp {{ fill: #16a34a; }}
-  .acc-gate.failed .lamp {{ fill: #dc2626; }}
   .rs-trace {{ font-size: 10px; color: #94a3b8; font-family: monospace; flex: 0 0 auto; }}
   /* 纯文本投料框（task_schema 全是标量时）——等宽换成正常字体，读着像在写话 */
   #task-payload.payload-text {{
@@ -810,7 +806,6 @@ function initAccGate(container) {{
   let s = `<svg viewBox="0 0 200 118" style="width:100%;height:auto;display:block" preserveAspectRatio="xMidYMid meet">
     <g class="acc-gate" id="op-_acc">
       <polygon class="station acc-station" points="100,20 134,52 100,84 66,52" />
-      <circle class="lamp" cx="112" cy="38" r="4.2" />
       <text x="100" y="106" class="op-label">判定</text>
     </g>
     <g id="acc-token" class="token-2d" style="display:none"><rect x="-8" y="-6" width="16" height="12" rx="3" /></g>

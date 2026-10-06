@@ -310,15 +310,20 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .beebox-nameplate .spec {{ display: flex; gap: 18px; margin-top: 0; flex-wrap: wrap; }}
   .beebox-nameplate .spec-row {{ display: flex; gap: 6px; font-size: 10px; line-height: 1.8; }}
   .beebox-nameplate .spec-row .k {{ width: auto; text-align: left; padding-right: 0; }}
-  /* ===== DOMAIN CONTEXT：盒子是谁、跟谁接、边界在哪 =====
-     它跟下面四栏不是一类东西。四栏讲「这次履约发生了什么」，
-     这里讲「这只盒子是什么」。所以是横贯的一条 band，不是第五栏：
-     摆在四栏下面会被读成跑出来的第五步，而上下文在履约之前就在那儿。
-     样式刻意压低一档（灰底、发丝线、不加边框）——它是背景，不是舞台。 */
+  /* ===== DOMAIN CONTEXT：四栏都站在这上面 =====
+     它跟四栏不是先后关系，是依赖关系——四栏同时引用它，
+     没有哪一栏排在它前面或后面。所以是底座不是第五栏：
+     摆成第五个并列项，等于谎称「投料 → 算 → 判 → 出 → 上下文」这条链
+     里上下文排在最后一步，可它根本不在这条链上。
+
+     位置在四栏下面而不是上面，是因为履约完会往这里沉淀领域知识——
+     它是四栏读写的同一个底座，不是跑完之前的门牌。 */
   .ctx-band {{
-    padding: 9px 20px 11px;
-    background: rgba(148,163,184,0.11);
-    border-bottom: 1px solid #cbd5e1;
+    /* 缩进对齐四栏、上沿加重：读成托着它们的地板，不是第五块面板 */
+    margin: 0 16px 16px; padding: 11px 20px 12px;
+    background: rgba(148,163,184,0.16);
+    border-top: 1.5px solid #94a3b8;
+    border-radius: 0 0 10px 10px;
   }}
   .ctx-head {{
     font-size: 9px; font-weight: 700; color: #64748b;
@@ -1096,7 +1101,8 @@ const REJECT_LABEL = {{
 }};
 
 // ===== DOMAIN CONTEXT =====
-// 盒子级的事实，不随单次履约变化。四栏在它下面跑。
+// 四栏都站在这上面：投料口按消费契约投、op 按契约读写、验收按判据判、
+// 产出口按产出契约交。跟四栏是依赖不是先后，所以是底座不是第五栏。
 // 判据不在这里：声明值和实测值都归 ACCEPTANCE 栏，
 // 两处各留一份判据 = 每次改判据要改两个地方。
 function renderDomainContext(boxId, ctx) {{
@@ -1116,7 +1122,7 @@ function renderDomainContext(boxId, ctx) {{
   const p = ctx.produces || {{}};
   const outFields = (p.fields || []).map(esc).join(' · ');
   return `<div class="ctx-band">
-    <div class="ctx-head">DOMAIN CONTEXT · 领域上下文 — 这只盒子是谁、跟谁接、边界在哪</div>
+    <div class="ctx-head">DOMAIN CONTEXT · 领域上下文 — 四栏都站在这上面</div>
     <div class="ctx-cols">
       <div>
         <div class="ctx-k">价值流位置</div>
@@ -1172,7 +1178,6 @@ function buildShell(boxId, box, entries) {{
   document.getElementById('content').innerHTML = `<div class="section">
     <div class="beebox-frame">
       <div class="beebox-nameplate" id="cube-caption"></div>
-      ${{renderDomainContext(boxId, (box && box.domain_context) || null)}}
       <div class="beebox-body">
         <div class="port">
           <div class="port-title" id="port-title">TASK IN · 投料口</div>
@@ -1201,6 +1206,7 @@ function buildShell(boxId, box, entries) {{
           <div id="artifact-slot"></div>
         </div>
       </div>
+      ${{renderDomainContext(boxId, (box && box.domain_context) || null)}}
     </div>
   </div>`;
   onTaskTypeChange();

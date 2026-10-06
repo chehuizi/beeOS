@@ -310,8 +310,8 @@ class TestKanbanServer:
         assert "_scene2d.setAcceptance" not in body
 
     def test_domain_context_exposes_box_level_facts(self, server_url: tuple[str, TaskRunStore]):
-        """领域上下文是盒子级事实，跟 task run 无关——所以它不在四栏里，
-        是盒子外面的一条 band。上游从别人的 feeds_into 反推，不另写一遍。"""
+        """领域上下文是四栏共同依赖的底座——不是第五个先后步骤。
+        上游从别人的 feeds_into 反推，不另写一遍。"""
         url, _ = server_url
         conn = HTTPConnection(url.replace("http://", ""))
         conn.request("GET", "/api/data?box=business_modeling_box")

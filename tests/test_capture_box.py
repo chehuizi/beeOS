@@ -510,3 +510,58 @@ class TestMechanicalGates:
         r = _run_capture(store, "库存数量不能为负。")
         assert r["result"]["extractor"] == "rule"
         assert "no llm" in r["result"]["evidence_detail"]["degrade_reason"]
+
+
+class TestAcceptanceGate:
+    """acceptance 是盒内独立的一道闸，不在 beeline 里
+
+    它对应 BeelineExecutor.execute() 之后单独调的那次 evaluate_acceptance。
+    看板要按它决定放不放行，所以 trigger_task 必须把判据明细带出来——
+    只给一个 accepted 徽章等于把「哪条没过」藏起来了。
+    """
+
+    def _run(self, store, text):
+        return trigger_task(
+            "requirement_capture_box", "capture_business_requirement",
+            {"narrative": text}, store,
+        )
+
+    def test_detail_covers_every_declared_rule(self, store):
+        """每条声明的判据都要有一行，带上判据 / 实测 / 过没过"""
+        r = self._run(store, "建模退款流程。退款必须在 7 天内完成。退款申请走审批流程。")
+        declared = {rule.metric for rule in get_capture_definition().result.acceptance}
+        detail = r["acceptance_detail"]
+        assert {d["metric"] for d in detail} == declared
+        for d in detail:
+            assert set(d) == {"metric", "op", "expected", "actual", "passed"}
+
+    def test_rejected_points_at_the_failing_rule(self, store):
+        """拒时要能说出是哪条判据没过 + 期望多少 + 实际多少"""
+        r = self._run(store, "建模退款流程。")
+        assert r["acceptance_status"] == "rejected"
+        failed = [d for d in r["acceptance_detail"] if not d["passed"]]
+        assert failed, "rejected 却没有失败的判据行——看板会显示成全绿"
+        cov = next(d for d in failed if d["metric"] == "source_coverage")
+        assert cov["op"] == "gte"
+        assert cov["expected"] == 100.0
+        assert cov["actual"] < 100.0
+
+    def test_passed_rules_match_detail(self, store):
+        r = self._run(store, "建模退款流程。退款必须在 7 天内完成。退款申请走审批流程。")
+        assert r["acceptance_status"] == "accepted"
+        assert set(r["acceptance_passed"]) == {
+            d["metric"] for d in r["acceptance_detail"] if d["passed"]
+        }
+
+    def test_metrics_are_computed_by_beeline_verdict_is_not(self, store):
+        """算指标的 op 在 beeline 里，判定不在——两者别混为一谈
+
+        verify_graph_fidelity 产出的是 result 里的数；
+        acceptance_status 是拿着这些数跟判据比出来的结论。
+        """
+        r = self._run(store, "建模退款流程。")
+        assert r["status"] == "completed"
+        assert "verify_graph_fidelity" in [s["op_id"] for s in r["op_trace"]]
+        # beeline 里没有 acceptance op——判定是 execute() 之后单独调的
+        assert not any("accept" in s["op_id"] for s in r["op_trace"])
+        assert r["acceptance_status"] == "rejected"

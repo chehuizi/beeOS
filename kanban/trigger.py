@@ -294,12 +294,28 @@ def trigger_task(
 
     acceptance_status = None
     rejection_class = None
+    # acceptance 明细：盒内要单列一道闸，看板得能逐条显示判据 / 实测 / 过没过，
+    # 只给一个 accepted 徽章等于把"为什么不过"藏起来了。
+    acceptance_detail = []
+    acceptance_passed = []
     if task_run.status == TaskRunStatus.COMPLETED:
         evaluation = evaluate_acceptance(task_run, definition.result)
         acceptance_status = evaluation.status.value
+        acceptance_passed = list(evaluation.passed_rules)
         rejection_class = (
             evaluation.rejection_class.value if evaluation.rejection_class else None
         )
+        failed_map = {f.get("metric"): f for f in evaluation.failed_rules}
+        acceptance_detail = [
+            {
+                "metric": rule.metric,
+                "op": rule.op,
+                "expected": rule.value,
+                "actual": task_run.result.get(rule.metric),
+                "passed": rule.metric not in failed_map,
+            }
+            for rule in definition.result.acceptance
+        ]
 
     store.append(
         task_run,
@@ -314,6 +330,8 @@ def trigger_task(
         "task_type": task_type,
         "status": task_run.status.value,
         "acceptance_status": acceptance_status,
+        "acceptance_detail": acceptance_detail,
+        "acceptance_passed": acceptance_passed,
         "rejection_class": rejection_class,
         "result": task_run.result,
         # 真实执行轨迹（按执行顺序）——看板用来在盒子内部回放履约过程

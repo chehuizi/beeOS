@@ -471,6 +471,41 @@ HTML_PAGE = f"""<!DOCTYPE html>
     to bottom, #cbd5e1 0 3px, transparent 3px 6px); }}
   .fg-orphan {{ background: #fef2f2; border-color: #fecaca; }}
   .fg-empty {{ font-size: 11px; color: #94a3b8; font-style: italic; }}
+  /* ===== ACCEPTANCE 判据区 ===== */
+  .ac-block {{
+    margin: 8px 0; padding: 7px 9px; border-radius: 6px;
+    background: #f8fafc; border: 1px solid #e2e8f0;
+  }}
+  .ac-title {{
+    font-size: 10px; color: #64748b; font-weight: 700; letter-spacing: 0.5px;
+    margin-bottom: 5px;
+  }}
+  .ac-summary {{ font-size: 11px; font-weight: 600; margin-bottom: 5px; }}
+  .ac-summary.ok {{ color: #15803d; }}
+  .ac-summary.bad {{ color: #b91c1c; }}
+  .ac-summary.ac-unknown {{ color: #64748b; font-weight: 400; font-style: italic; }}
+  .ac-row {{
+    display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
+    font-size: 11px; line-height: 1.7;
+  }}
+  .ac-mark {{ font-weight: 700; flex: 0 0 auto; width: 10px; }}
+  .ac-row.ok .ac-mark {{ color: #16a34a; }}
+  .ac-row.bad .ac-mark {{ color: #dc2626; }}
+  .ac-metric {{ color: #0f172a; font-family: ui-monospace, monospace; font-size: 10px; }}
+  .ac-rule {{
+    flex: 0 0 auto; font-size: 10px; color: #64748b;
+    background: white; border: 1px solid #e2e8f0; border-radius: 3px; padding: 0 4px;
+  }}
+  .ac-actual {{ font-size: 10px; color: #475569; }}
+  .ac-row.bad .ac-actual {{ color: #b91c1c; font-weight: 600; }}
+  /* 验收闸：菱形，颜色随判定结果走 */
+  .acc-station {{ fill: #fef3c7; stroke: #f59e0b; stroke-width: 1.4; }}
+  .acc-gate.done .acc-station {{ fill: #dcfce7; stroke: #16a34a; }}
+  .acc-gate.failed .acc-station {{ fill: #fee2e2; stroke: #dc2626; }}
+  .acc-gate.active .acc-station {{ fill: #fef9c3; stroke: #eab308; }}
+  .acc-gate text.op-label {{ font-size: 8px; font-weight: 700; fill: #92400e; }}
+  .acc-gate.done text.op-label {{ fill: #15803d; }}
+  .acc-gate.failed text.op-label {{ fill: #b91c1c; }}
   .rs-trace {{ font-size: 10px; color: #94a3b8; font-family: monospace; flex: 0 0 auto; }}
   /* 纯文本投料框（task_schema 全是标量时）——等宽换成正常字体，读着像在写话 */
   #task-payload.payload-text {{
@@ -613,7 +648,9 @@ function layout2D(ops) {{
   const xs2 = spread(rest.length);
   for (let i = 0; i < rest.length; i++) pos[rest[i]] = {{ x: xs2[rest.length - 1 - i], y: 250 }};
   pos._in = {{ x: pos[ops[0]].x, y: 52 }};
-  pos._out = {{ x: pos[ops[n - 1]].x, y: 352 }};
+  // ACCEPTANCE 独占第三行（两排工位标签在 284，OUT 之前必须有空档）
+  pos._acc = {{ x: pos[ops[0]].x, y: 322 }};
+  pos._out = {{ x: pos[ops[n - 1]].x, y: 402 }};
   return pos;
 }}
 
@@ -623,15 +660,18 @@ function initBox2D(container, ops) {{
   // 盒子边界由外层 .beebox-frame 承担（这里不再画内框）
   // 对外 api：setOpState / moveToken / reset
   const pos = layout2D(ops);
-  let s = `<svg viewBox="0 0 560 420" style="width:100%;height:auto;display:block" preserveAspectRatio="xMidYMid meet">
+  // 画布高 460：两排工位(150/250) + 标签(284) + ACCEPTANCE 闸(322) + OUT(402)
+  let s = `<svg viewBox="0 0 560 460" style="width:100%;height:auto;display:block" preserveAspectRatio="xMidYMid meet">
     <defs>
       <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
         <path d="M 0 1.5 L 8 5 L 0 8.5" fill="none" stroke="#94a3b8" stroke-width="1.6"/>
       </marker>
     </defs>`;
 
-  // 流水线：IN（顶行，对齐首工位）→ op1 → ... → opN → OUT（底行，对齐末工位）
-  const chain = ['_in', ...ops, '_out'];
+  // 流水线：IN → op1 → ... → opN → _acc（验收闸）→ OUT
+  // _acc 是独立工位不是 op：它对应 BeelineExecutor.execute() 之后
+  // 单独调的那次 evaluate_acceptance，跟 beeline 的 op 不是一回事。
+  const chain = ['_in', ...ops, '_acc', '_out'];
   // 端口与工位同 x 时 L 形会退化成连续重复点，去掉，否则令牌多走一格空动画
   const tidy = (pts) => pts.filter((p, i) =>
     i === 0 || p[0] !== pts[i - 1][0] || p[1] !== pts[i - 1][1]);
@@ -639,7 +679,13 @@ function initBox2D(container, ops) {{
   for (let i = 0; i < chain.length - 1; i++) {{
     const a = pos[chain[i]], b = pos[chain[i + 1]];
     let pts;
-    if (chain[i + 1] === '_out') {{
+    if (chain[i + 1] === '_acc') {{
+      // 末工位 → 斜下方到验收闸（两排工位之间那格）
+      pts = [[a.x, a.y], [a.x, b.y], [b.x, b.y]];
+    }} else if (chain[i] === '_acc') {{
+      // 验收闸 → OUT：先下到底行，再横向进 OUT
+      pts = [[a.x, a.y], [a.x, b.y], [b.x, b.y]];
+    }} else if (chain[i + 1] === '_out') {{
       // 末工位 → 垂直下到 OUT 所在底行 → 沿底行横向 → 进 OUT
       pts = [[a.x, a.y], [a.x, b.y], [b.x, b.y]];
     }} else if (chain[i] === '_in') {{
@@ -651,6 +697,7 @@ function initBox2D(container, ops) {{
     pts = tidy(pts);
     s += `<polyline points="${{pts.map(p => p.join(',')).join(' ')}}" class="op-link" fill="none" marker-end="url(#arrow)" />`;
     if (chain[i + 1] === '_out') pathTo._out = pts.slice(1, -1);
+    if (chain[i + 1] === '_acc') pathTo._acc = pts.slice(1, -1);
   }}
 
   // IN / OUT 端口
@@ -666,6 +713,17 @@ function initBox2D(container, ops) {{
       <rect class="station" x="${{p.x - 34}}" y="${{p.y - 17}}" width="68" height="34" rx="8" />
       <circle class="lamp" cx="${{p.x + 26}}" cy="${{p.y - 9}}" r="4" />
       <text x="${{p.x}}" y="${{p.y + 34}}" class="op-label">${{op}}</text>
+    </g>`;
+  }}
+
+  // ACCEPTANCE 闸：菱形（区别于矩形工位），状态灯 + 标签。
+  // 半宽收窄到 32 —— 画布左缘 x=90，减到 40 会把 x=58 那条竖线切进去。
+  {{
+    const p = pos._acc;
+    s += `<g class="acc-gate" id="op-_acc">
+      <polygon class="station acc-station" points="${{p.x}},${{p.y - 16}} ${{p.x + 32}},${{p.y}} ${{p.x}},${{p.y + 16}} ${{p.x - 32}},${{p.y}}" />
+      <circle class="lamp" cx="${{p.x + 24}}" cy="${{p.y - 9}}" r="3.6" />
+      <text x="${{p.x}}" y="${{p.y + 30}}" class="op-label">ACCEPTANCE</text>
     </g>`;
   }}
 
@@ -689,7 +747,10 @@ function initBox2D(container, ops) {{
   return {{
     setOpState(opId, state) {{
       const g = container.querySelector('#op-' + opId);
-      if (g) g.setAttribute('class', 'op-node ' + state);
+      if (g) g.setAttribute('class', (opId === '_acc' ? 'acc-gate ' : 'op-node ') + state);
+    }},
+    setAcceptance(state) {{
+      this.setOpState('_acc', state);
     }},
     moveToken(key) {{
       if (key === null) {{
@@ -706,6 +767,7 @@ function initBox2D(container, ops) {{
     }},
     reset() {{
       for (const op of ops) this.setOpState(op, '');
+      this.setOpState('_acc', '');
       hideWhenDone = false;
       token.style.display = 'none';
     }},
@@ -850,16 +912,8 @@ function renderFlowGraph(r) {{
 
 function renderRequirementSet(r) {{
   if (!r) return '';
-  const acc4 = [
-    ['契约合规', r.contract_compliance],
-    ['原文覆盖', r.source_coverage !== undefined ? r.source_coverage + '%' : '—'],
-    ['溯源完整', r.trace_integrity],
-    ['无幻觉', r.no_hallucination],
-  ];
-  const checks = acc4.map(([k, v]) => {{
-    const ok = v === true || v === '100%';
-    return `<span class="rs-check ${{ok ? 'ok' : 'bad'}}">${{ok ? '✓' : '✗'}} ${{k}} ${{v}}</span>`;
-  }}).join('');
+  // 4 项判据不在这里画——它们跟上面 ACCEPTANCE 区是同一批数据。
+  // 重复一遍会让人误以为这是 beeline 的结论，而不是验收判定。
   const degraded = r.extractor !== 'llm';
   const degradeNote = degraded
     ? `<div class="rs-degrade" title="${{(r.evidence_detail && r.evidence_detail.degrade_reason) || 'LLM 未参与，退回规则抽取'}}">
@@ -871,9 +925,47 @@ function renderRequirementSet(r) {{
   return `<div class="rs-pack">
     <div class="rs-head">业务目标：${{esc(r.business_goal || '—')}}</div>
     ${{degradeNote}}
-    <div class="rs-checks">${{checks}}<span class="rs-check ${{degraded ? 'by warn' : 'by'}}">抽取者：${{esc(r.extractor)}}</span></div>
+    <div class="rs-checks"><span class="rs-check ${{degraded ? 'by warn' : 'by'}}">抽取者：${{esc(r.extractor)}}</span></div>
     <div class="rs-hint">流程图：${{nNodes}} 个节点${{nEdges ? ` · ${{nEdges}} 条转移` : ''}} —— 类型由所在位置决定，无需逐条确认</div>
     ${{renderFlowGraph(r)}}
+  </div>`;
+}}
+
+// ===== ACCEPTANCE：盒内第四道闸 =====
+// 它跟 beeline 不是一回事。beeline 的 op 是「算指标」，
+// acceptance 是「拿盒子声明的判据比对，定过不过」——代码路径本来就在
+// BeelineExecutor.execute() 返回之后单独调（kanban/trigger.py）。
+// 所以盒内画成 IN → BEELINE → ACCEPTANCE → OUT：
+// 没过的产出根本不该出现在产出口，也更不该被接力投给下游。
+function renderAcceptance(a) {{
+  const rows = Array.isArray(a.acceptance_detail) ? a.acceptance_detail : [];
+  const acc = a.acceptance_status;
+  const ok = acc === 'accepted';
+  if (!rows.length) {{
+    return `<div class="ac-summary ac-unknown">本次履约没有走 acceptance（${{esc(acc || '未判定')}}）</div>`;
+  }}
+  const fmt = (v) => {{
+    if (v === true) return 'true';
+    if (v === false) return 'false';
+    if (v === undefined || v === null) return '—';
+    if (typeof v === 'number') return String(v);
+    return esc(v);
+  }};
+  const items = rows.map((r) => {{
+    const passed = !!r.passed;
+    return `<div class="ac-row ${{passed ? 'ok' : 'bad'}}">
+      <span class="ac-mark">${{passed ? '✓' : '✗'}}</span>
+      <span class="ac-metric">${{esc(r.metric)}}</span>
+      <span class="ac-rule">${{esc(r.op)}} ${{fmt(r.expected)}}</span>
+      <span class="ac-actual">实测 ${{fmt(r.actual)}}</span>
+    </div>`;
+  }}).join('');
+  const nOk = rows.filter((r) => r.passed).length;
+  return `<div class="ac">
+    <div class="ac-summary ${{ok ? 'ok' : 'bad'}}">
+      ${{ok ? '✓ 全部通过' : '✗ 未通过'}} · ${{nOk}} / ${{rows.length}} 条判据
+    </div>
+    <div class="ac-rows">${{items}}</div>
   </div>`;
 }}
 
@@ -893,6 +985,7 @@ function renderArtifact() {{
     <span class="artifact-badge ${{badge}}">${{acc.toUpperCase()}}</span>
     <div class="tid">task_run ${{a.task_run_id}}</div>
     ${{why}}
+    <div class="ac-block"><div class="ac-title">ACCEPTANCE · 验收判据</div>${{renderAcceptance(a)}}</div>
     ${{body}}
     <details><summary>raw JSON</summary><pre>${{JSON.stringify(a.result, null, 2)}}</pre></details>
   </div>`;
@@ -983,9 +1076,10 @@ function buildShell(boxId, box, entries) {{
   _scene2d = ops.length > 0 ? initBox2D(stage, ops) : null;
   const laneOps = document.getElementById('lane-ops');
   if (laneOps) laneOps.textContent = ops.length > 0 ? ops.join(' · ') : '(该 task type 未绑定 beeline)';
-  // shell 重建后恢复工位状态
+  // shell 重建后恢复工位状态 + 验收闸状态
   if (_scene2d) {{
     for (const op of ops) _scene2d.setOpState(op, _boxState.opStates[op] || '');
+    _scene2d.setAcceptance(_boxState.opStates._acc || '');
   }}
   _lastArtifactKey = null;   // shell 重建后 slot 是新 DOM，强制重渲 artifact
   renderArtifactInto();
@@ -1017,6 +1111,17 @@ function renderRelayBar() {{
     box_id: t.box_id, display_name: names[t.box_id] || t.box_id,
   }}));
   if (!a || !targets.length) return '';
+  // 没验收过的产出不准往下游流——否则下游拿到一份判都没判过的输入，
+  // 上游的验收就白做了。REJECTED 时按钮禁用并说明卡在哪条判据上。
+  if (a.acceptance_status !== 'accepted') {{
+    const failed = (a.acceptance_detail || []).filter((r) => !r.passed)
+      .map((r) => r.metric);
+    const why = failed.length ? `（未过：${{failed.join('、')}}）` : '';
+    return `<div class="relay-bar">
+      <button class="relay-btn" disabled>→ 投给下游</button>
+      <span class="relay-note">未通过验收，不放行${{why}}</span>
+    </div>`;
+  }}
   const buttons = targets.map((t) =>
     `<button class="relay-btn" onclick="relayTo('${{t.box_id}}')">→ 投给 ${{t.display_name}}</button>`
   ).join('');
@@ -1026,6 +1131,17 @@ function renderRelayBar() {{
 function relayTo(boxId) {{
   const a = _boxState.artifact;
   if (!a) return;
+  // 双保险：按钮已禁用之外，函数入口再挡一次——
+  // URL 里塞 relay 参数也能绕过 UI
+  if (a.acceptance_status !== 'accepted') {{
+    const failed = (a.acceptance_detail || []).filter((r) => !r.passed)
+      .map((r) => r.metric);
+    window.alert(
+      '这份产出没通过验收，不能投给下游。'
+      + (failed.length ? `\\n未通过的判据：${{failed.join('、')}}` : '')
+    );
+    return;
+  }}
   // 投料口径由下游盒子的 task_schema 决定：
   // 下游只要 set_id / business_goal / requirements（建模盒的输入契约），
   // 不把本盒的 evidence / extractor 之类内部字段塞过去
@@ -1235,14 +1351,28 @@ async function triggerTask(boxId) {{
         _boxState.opStates[step.op_id] = st;
         if (_scene2d) _scene2d.setOpState(step.op_id, st);
       }}
-      // 令牌流向 OUT 口 → 产出 artifact
-      if (_scene2d) _scene2d.moveToken('_out');
-      await sleep(600);
+      // beeline 走完 → 撞验收闸。令牌在这一格停一下，
+      // 判定结果决定闸灯颜色，也决定它能不能继续流向 OUT。
+      _boxState.opStates._acc = 'active';
+      if (_scene2d) {{
+        _scene2d.setAcceptance('active');
+        _scene2d.moveToken('_acc');
+      }}
+      await sleep(700);
+      const accPassed = data.acceptance_status === 'accepted';
+      _boxState.opStates._acc = accPassed ? 'done' : 'failed';
+      if (_scene2d) _scene2d.setAcceptance(_boxState.opStates._acc);
+      if (accPassed) {{
+        // 过了闸才放产出出去
+        if (_scene2d) _scene2d.moveToken('_out');
+        await sleep(600);
+      }}
       if (_scene2d) _scene2d.moveToken(null);
       _boxState.artifact = {{
         task_run_id: data.task_run_id,
         status: data.status,
         acceptance_status: data.acceptance_status,
+        acceptance_detail: data.acceptance_detail || [],
         rejection_class: data.rejection_class,
         result: data.result,
       }};
@@ -1414,6 +1544,7 @@ class KanbanRequestHandler(BaseHTTPRequestHandler):
                 "task_run_id": result.get("task_run_id"),
                 "status": result.get("status"),
                 "acceptance_status": result.get("acceptance_status"),
+                "acceptance_detail": result.get("acceptance_detail") or [],
                 "rejection_class": result.get("rejection_class"),
                 "op_trace": result.get("op_trace"),
                 "payload": pkg,

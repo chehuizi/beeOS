@@ -288,6 +288,27 @@ class TestKanbanServer:
         assert "2000" in body  # 2 秒
         conn.close()
 
+    def test_html_wires_four_parallel_columns(self, server_url: tuple[str, TaskRunStore]):
+        """四栏都在：投料 / 流水线 / 验收闸 / 产出。
+
+        验收闸曾经被画成 BEELINE 栏里的一个菱形工位——跟单个 op 一样大，
+        读起来就成了流水线上的第 6 步，但它判的是整条链。这条测试盯的就是
+        别再退回去。
+        """
+        url, _ = server_url
+        conn = HTTPConnection(url.replace("http://", ""))
+        conn.request("GET", "/")
+        body = conn.getresponse().read().decode("utf-8")
+        conn.close()
+        assert 'id="box2d-stage"' in body
+        assert 'class="lane-acc"' in body
+        assert 'id="acc-stage"' in body
+        assert 'id="acc-detail"' in body
+        assert 'id="artifact-slot"' in body
+        # 闸不再挂在 beeline 那张图的坐标系上
+        assert "pos._acc" not in body
+        assert "_scene2d.setAcceptance" not in body
+
 
 # ============================================================
 # POST /api/trigger（task 投料口）

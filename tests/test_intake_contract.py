@@ -235,6 +235,21 @@ class TestRejectionClassification:
             {"requirement_count": 3, "requirement_coverage": 80},
         ) == RejectionClass.INSUFFICIENT_COVERAGE
 
+    def test_coverage_metric_name_is_not_hardcoded(self):
+        """覆盖率判据换个盒子就叫别的名字——写死名字会把真原因归成 STRUCTURAL"""
+        assert _classify_failure(
+            [{"metric": "source_coverage", "actual": 80}],
+            {"requirement_count": 3, "source_coverage": 80},
+        ) == RejectionClass.INSUFFICIENT_COVERAGE
+
+    def test_coverage_without_value_stays_structural(self):
+        """名字像覆盖率但没取到值（None）→ 不算覆盖率不足，落到结构类"""
+        assert _classify_failure(
+            [{"metric": "source_coverage", "actual": None},
+             {"metric": "trace_integrity", "actual": False}],
+            {"requirement_count": 3},
+        ) == RejectionClass.STRUCTURAL
+
     def test_remaining_metrics_are_structural(self):
         assert _classify_failure(
             [{"metric": "reference_integrity", "actual": False}],

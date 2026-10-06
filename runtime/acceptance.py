@@ -122,7 +122,8 @@ def _classify_failure(
     2. requirement_count == 0——明确没需求
     3. rule_consistency 判定为 false——规则自相矛盾（优先级高于覆盖率，
        因为规则矛盾时先修规则，补覆盖率没有意义）
-    4. 有具体覆盖率数值但没达标——模型没覆盖全
+    4. 有覆盖率判据失败且取到了具体数值——没覆盖全（判据名含 coverage 即可，
+       不同盒子叫法不同：requirement_coverage / source_coverage）
     5. 其余（引用 / 结构 / 指标）
     """
     # 1 + 2：什么都没取到 / 明确没需求
@@ -137,10 +138,13 @@ def _classify_failure(
     if "rule_consistency" in metrics_failed and result.get("rule_consistency") is False:
         return RejectionClass.CONFLICT
 
-    # 4：覆盖率有值但不够
-    coverage = result.get("requirement_coverage")
-    if "requirement_coverage" in metrics_failed and coverage is not None:
-        return RejectionClass.INSUFFICIENT_COVERAGE
+    # 4：覆盖率有值但不够。
+    #    按名字找 coverage 判据，不写死某一个：建模盒叫 requirement_coverage，
+    #    捕获盒叫 source_coverage。写死一个名字 = 别的盒子全部落进 STRUCTURAL，
+    #    归因错了比不归因更坏——人会被引去改错的东西。
+    for metric in sorted(metrics_failed):
+        if metric and "coverage" in metric and result.get(metric) is not None:
+            return RejectionClass.INSUFFICIENT_COVERAGE
 
     # 5：其余结构性判据
     return RejectionClass.STRUCTURAL

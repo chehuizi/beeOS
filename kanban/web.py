@@ -308,19 +308,36 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .beebox-nameplate .spec {{ display: flex; gap: 18px; margin-top: 0; flex-wrap: wrap; }}
   .beebox-nameplate .spec-row {{ display: flex; gap: 6px; font-size: 10px; line-height: 1.8; }}
   .beebox-nameplate .spec-row .k {{ width: auto; text-align: left; padding-right: 0; }}
+  /* 四栏：TASK IN · BEELINE · ACCEPTANCE · ARTIFACTS OUT。
+     ACCEPTANCE 跟 BEELINE 平级不是排版偏好，是粒度本来就对：中间那栏把 5 个 op
+     收成一个黑盒，验收栏把 N 条判据收成一个黑盒，两者粗细一致。
+     塞在 BEELINE 那栏里时它跟单个 op 一样大，读起来就成了链上的第 6 步——
+     但它判的是整条链，画法比说的话小。 */
   .beebox-body {{
-    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px;
+    display: grid;
+    grid-template-columns:
+      minmax(186px, 0.95fr) minmax(300px, 1.65fr)
+      minmax(172px, 0.80fr)  minmax(196px, 1.00fr);
+    gap: 12px;
     align-items: stretch; padding: 16px;
     /* 固定盒高：产出内容再多也不把盒子撑长，超出部分各自内部滚动。
        clamp 让矮屏不至于溢出。 */
     height: clamp(380px, 62vh, 560px);
   }}
   .beebox-body > * {{ min-width: 0; }}
+  @media (max-width: 1460px) {{
+    /* 四栏并排在笔记本屏上会把 BEELINE 的 560 画布压扁 → 2x2 换行。
+       盒高放开，否则两行端口撑破格。 */
+    .beebox-body {{ grid-template-columns: 1fr 1fr; height: auto; row-gap: 12px; }}
+    #box2d-stage, #acc-stage {{ max-width: 600px; margin: 0 auto; }}
+  }}
   @media (max-width: 1080px) {{
     /* 单列堆叠时不能沿用固定盒高：三个端口会挤在一格里并溢到盒外 */
     .beebox-body {{ grid-template-columns: 1fr; height: auto; }}
     #task-payload {{ min-height: 200px; max-height: 320px; }}
     .lane {{ padding-bottom: 8px; }}
+    /* 单列时整栏通宽，闸跟着撑大会白占掉半屏；钉死成一颗菱形的尺寸 */
+    #acc-stage {{ max-width: 240px; }}
   }}
   .port {{
     background: white; border: 1px solid #e2e8f0;
@@ -341,6 +358,38 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .lane-ops {{
     font-size: 10px; color: #94a3b8; text-align: center;
     margin-top: 4px; word-break: break-word; line-height: 1.6;
+  }}
+  /* ACCEPTANCE 栏：跟 BEELINE 同级，但形态刻意不同——边界是实线不是虚线。
+     虚线框读起来是「流水线的一段」，而它不是：它是对整条流水线下结论的
+     一个判定面，判完了产出才准出 OUT。 */
+  .lane-acc {{
+    border: 1px solid #d8a23a; border-radius: 10px; padding: 10px 10px 8px;
+    background: rgba(255,251,235,0.55);
+    display: flex; flex-direction: column; align-self: stretch;
+    position: relative;   /* 尖角的定位基准。overflow 只能留给判据区——
+      放在 .lane-acc 上会把露在左缘外的尖角自己裁掉 */
+  }}
+  .lane-acc .lane-title {{ color: #b45309; }}
+  /* 从 BEELINE 栏交接过来的方向。跨栏本来就不连线（IN/OUT 也没有），
+     靠这个尖角交代「判定是从左边那栏算完之后过来的」。
+     只有四栏并排时 BEELINE 才真的在它左边——换行布局下它在上/在左，尖角会指空。 */
+  .lane-acc::before {{ display: none; }}
+  .acc-detail {{ flex: 1; min-height: 0; overflow-y: auto; }}
+  @media (min-width: 1461px) {{
+    /* 只有真四栏并排时 BEELINE 才在验收栏左边，尖角这时才指得对。
+       96px ≈ 栏标题(29) + 菱形中心在 stage 里的偏移，压在菱形腰线上。 */
+    .lane-acc::before {{
+      display: block;                 /* 基础规则是 display:none，这里必须显式翻回来 */
+      content: ''; position: absolute; left: -13px; top: 96px;
+      width: 0; height: 0;
+      border-top: 5px solid transparent; border-bottom: 5px solid transparent;
+      border-left: 8px solid #d8a23a;
+    }}
+  }}
+  .acc-hint {{ font-size: 10px; color: #a16207; line-height: 1.7; }}
+  .acc-hint code {{
+    background: #fef3c7; padding: 0 3px; border-radius: 3px;
+    font-size: 9px; color: #92400e;
   }}
   .port-title {{
     font-size: 11px; font-weight: 700; color: #64748b;
@@ -471,32 +520,33 @@ HTML_PAGE = f"""<!DOCTYPE html>
     to bottom, #cbd5e1 0 3px, transparent 3px 6px); }}
   .fg-orphan {{ background: #fef2f2; border-color: #fecaca; }}
   .fg-empty {{ font-size: 11px; color: #94a3b8; font-style: italic; }}
-  /* ===== ACCEPTANCE 判据区 ===== */
-  .ac-block {{
-    margin: 8px 0; padding: 7px 9px; border-radius: 6px;
-    background: #f8fafc; border: 1px solid #e2e8f0;
-  }}
-  .ac-title {{
-    font-size: 10px; color: #64748b; font-weight: 700; letter-spacing: 0.5px;
-    margin-bottom: 5px;
-  }}
-  .ac-summary {{ font-size: 11px; font-weight: 600; margin-bottom: 5px; }}
+  /* ===== ACCEPTANCE 判据区 =====
+     判据条改成竖排：验收栏只有 ~200px 宽，横排四段会折成乱麻，
+     折行后「哪条没过」反而读不出来。 */
+  .ac-summary {{ font-size: 11px; font-weight: 600; margin-bottom: 6px; }}
   .ac-summary.ok {{ color: #15803d; }}
   .ac-summary.bad {{ color: #b91c1c; }}
   .ac-summary.ac-unknown {{ color: #64748b; font-weight: 400; font-style: italic; }}
   .ac-row {{
-    display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
-    font-size: 11px; line-height: 1.7;
+    display: grid; grid-template-columns: 10px 1fr; gap: 2px 6px;
+    padding: 5px 6px; margin-bottom: 4px; border-radius: 5px;
+    background: #fff; border: 1px solid #e2e8f0;
+    font-size: 11px; line-height: 1.55;
   }}
-  .ac-mark {{ font-weight: 700; flex: 0 0 auto; width: 10px; }}
+  .ac-row.ok {{ border-color: #bbf7d0; }}
+  .ac-row.bad {{ border-color: #fecaca; background: #fef2f2; }}
+  .ac-mark {{ font-weight: 700; }}
   .ac-row.ok .ac-mark {{ color: #16a34a; }}
   .ac-row.bad .ac-mark {{ color: #dc2626; }}
-  .ac-metric {{ color: #0f172a; font-family: ui-monospace, monospace; font-size: 10px; }}
-  .ac-rule {{
-    flex: 0 0 auto; font-size: 10px; color: #64748b;
-    background: white; border: 1px solid #e2e8f0; border-radius: 3px; padding: 0 4px;
+  .ac-metric {{
+    grid-column: 2; color: #0f172a; font-weight: 600;
+    font-family: ui-monospace, monospace; font-size: 10px; word-break: break-all;
   }}
-  .ac-actual {{ font-size: 10px; color: #475569; }}
+  .ac-rule {{
+    grid-column: 2; font-size: 10px; color: #64748b; word-break: break-all;
+  }}
+  .ac-rule::before {{ content: '判据 '; color: #94a3b8; }}
+  .ac-actual {{ grid-column: 2; font-size: 10px; color: #475569; word-break: break-all; }}
   .ac-row.bad .ac-actual {{ color: #b91c1c; font-weight: 600; }}
   /* 验收闸：菱形，颜色随判定结果走 */
   .acc-station {{ fill: #fef3c7; stroke: #f59e0b; stroke-width: 1.4; }}
@@ -506,6 +556,12 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .acc-gate text.op-label {{ font-size: 8px; font-weight: 700; fill: #92400e; }}
   .acc-gate.done text.op-label {{ fill: #15803d; }}
   .acc-gate.failed text.op-label {{ fill: #b91c1c; }}
+  /* 状态灯：菱形不在 .op-node 里，lamp 的底色得自己给一份，
+     不然 SVG 默认填充是黑的，看着像「已判定」。 */
+  .acc-gate .lamp {{ fill: #cbd5e1; transition: fill 0.25s; }}
+  .acc-gate.active .lamp {{ fill: #eab308; }}
+  .acc-gate.done .lamp {{ fill: #16a34a; }}
+  .acc-gate.failed .lamp {{ fill: #dc2626; }}
   .rs-trace {{ font-size: 10px; color: #94a3b8; font-family: monospace; flex: 0 0 auto; }}
   /* 纯文本投料框（task_schema 全是标量时）——等宽换成正常字体，读着像在写话 */
   #task-payload.payload-text {{
@@ -648,30 +704,26 @@ function layout2D(ops) {{
   const xs2 = spread(rest.length);
   for (let i = 0; i < rest.length; i++) pos[rest[i]] = {{ x: xs2[rest.length - 1 - i], y: 250 }};
   pos._in = {{ x: pos[ops[0]].x, y: 52 }};
-  // ACCEPTANCE 独占第三行（两排工位标签在 284，OUT 之前必须有空档）
-  pos._acc = {{ x: pos[ops[0]].x, y: 322 }};
-  pos._out = {{ x: pos[ops[n - 1]].x, y: 402 }};
+  pos._out = {{ x: pos[ops[n - 1]].x, y: 322 }};
   return pos;
 }}
 
 function initBox2D(container, ops) {{
-  // 2D 履约盒内部：IN/OUT 端口 + 流水线工位（矩形机器 + 状态灯）+ task 令牌
+  // BEELINE 栏内部：IN → op1 → ... → opN → OUT。
+  // 验收闸不在这里——它是同级的第四栏（见 initAccGate）。
   // 正交布线：横平竖直 + 盒底出口通道，无交叉；令牌沿折线轨道走
   // 盒子边界由外层 .beebox-frame 承担（这里不再画内框）
   // 对外 api：setOpState / moveToken / reset
   const pos = layout2D(ops);
-  // 画布高 460：两排工位(150/250) + 标签(284) + ACCEPTANCE 闸(322) + OUT(402)
-  let s = `<svg viewBox="0 0 560 460" style="width:100%;height:auto;display:block" preserveAspectRatio="xMidYMid meet">
+  // 画布高 372：两排工位(150/250) + 标签(284) + OUT(322) + OUT 标签(352)
+  let s = `<svg viewBox="0 0 560 372" style="width:100%;height:auto;display:block" preserveAspectRatio="xMidYMid meet">
     <defs>
       <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
         <path d="M 0 1.5 L 8 5 L 0 8.5" fill="none" stroke="#94a3b8" stroke-width="1.6"/>
       </marker>
     </defs>`;
 
-  // 流水线：IN → op1 → ... → opN → _acc（验收闸）→ OUT
-  // _acc 是独立工位不是 op：它对应 BeelineExecutor.execute() 之后
-  // 单独调的那次 evaluate_acceptance，跟 beeline 的 op 不是一回事。
-  const chain = ['_in', ...ops, '_acc', '_out'];
+  const chain = ['_in', ...ops, '_out'];
   // 端口与工位同 x 时 L 形会退化成连续重复点，去掉，否则令牌多走一格空动画
   const tidy = (pts) => pts.filter((p, i) =>
     i === 0 || p[0] !== pts[i - 1][0] || p[1] !== pts[i - 1][1]);
@@ -679,17 +731,8 @@ function initBox2D(container, ops) {{
   for (let i = 0; i < chain.length - 1; i++) {{
     const a = pos[chain[i]], b = pos[chain[i + 1]];
     let pts;
-    if (chain[i + 1] === '_acc') {{
-      // 末工位 → 斜下方到验收闸（两排工位之间那格）
-      pts = [[a.x, a.y], [a.x, b.y], [b.x, b.y]];
-    }} else if (chain[i] === '_acc') {{
-      // 验收闸 → OUT：先下到底行，再横向进 OUT
-      pts = [[a.x, a.y], [a.x, b.y], [b.x, b.y]];
-    }} else if (chain[i + 1] === '_out') {{
-      // 末工位 → 垂直下到 OUT 所在底行 → 沿底行横向 → 进 OUT
-      pts = [[a.x, a.y], [a.x, b.y], [b.x, b.y]];
-    }} else if (chain[i] === '_in') {{
-      // IN 在顶行：垂直下来对齐首工位那一行，再横向进首工位
+    if (chain[i + 1] === '_out' || chain[i] === '_in') {{
+      // 进 IN / 出 OUT：垂直落到目标行 → 横向进目标，同 x 时自动退化成一条竖线
       pts = [[a.x, a.y], [a.x, b.y], [b.x, b.y]];
     }} else {{
       pts = [[a.x, a.y], [b.x, b.y]];
@@ -697,7 +740,6 @@ function initBox2D(container, ops) {{
     pts = tidy(pts);
     s += `<polyline points="${{pts.map(p => p.join(',')).join(' ')}}" class="op-link" fill="none" marker-end="url(#arrow)" />`;
     if (chain[i + 1] === '_out') pathTo._out = pts.slice(1, -1);
-    if (chain[i + 1] === '_acc') pathTo._acc = pts.slice(1, -1);
   }}
 
   // IN / OUT 端口
@@ -713,17 +755,6 @@ function initBox2D(container, ops) {{
       <rect class="station" x="${{p.x - 34}}" y="${{p.y - 17}}" width="68" height="34" rx="8" />
       <circle class="lamp" cx="${{p.x + 26}}" cy="${{p.y - 9}}" r="4" />
       <text x="${{p.x}}" y="${{p.y + 34}}" class="op-label">${{op}}</text>
-    </g>`;
-  }}
-
-  // ACCEPTANCE 闸：菱形（区别于矩形工位），状态灯 + 标签。
-  // 半宽收窄到 32 —— 画布左缘 x=90，减到 40 会把 x=58 那条竖线切进去。
-  {{
-    const p = pos._acc;
-    s += `<g class="acc-gate" id="op-_acc">
-      <polygon class="station acc-station" points="${{p.x}},${{p.y - 16}} ${{p.x + 32}},${{p.y}} ${{p.x}},${{p.y + 16}} ${{p.x - 32}},${{p.y}}" />
-      <circle class="lamp" cx="${{p.x + 24}}" cy="${{p.y - 9}}" r="3.6" />
-      <text x="${{p.x}}" y="${{p.y + 30}}" class="op-label">ACCEPTANCE</text>
     </g>`;
   }}
 
@@ -747,10 +778,7 @@ function initBox2D(container, ops) {{
   return {{
     setOpState(opId, state) {{
       const g = container.querySelector('#op-' + opId);
-      if (g) g.setAttribute('class', (opId === '_acc' ? 'acc-gate ' : 'op-node ') + state);
-    }},
-    setAcceptance(state) {{
-      this.setOpState('_acc', state);
+      if (g) g.setAttribute('class', 'op-node ' + state);
     }},
     moveToken(key) {{
       if (key === null) {{
@@ -767,8 +795,51 @@ function initBox2D(container, ops) {{
     }},
     reset() {{
       for (const op of ops) this.setOpState(op, '');
-      this.setOpState('_acc', '');
       hideWhenDone = false;
+      token.style.display = 'none';
+    }},
+  }};
+}}
+
+// ===== ACCEPTANCE 栏：菱形闸 + 它自己的令牌 =====
+// 它跟 BEELINE 平级（同一层、同样的黑盒粒度），但不是流水线的一步。
+// 代码路径本来就分开：evaluate_acceptance 在 BeelineExecutor.execute()
+// 返回之后单独调（kanban/trigger.py）。所以这里没有跨栏连线——
+// IN/OUT 三栏之间本来就没有线，方向靠 .lane-acc::before 的尖角交代。
+function initAccGate(container) {{
+  let s = `<svg viewBox="0 0 200 118" style="width:100%;height:auto;display:block" preserveAspectRatio="xMidYMid meet">
+    <g class="acc-gate" id="op-_acc">
+      <polygon class="station acc-station" points="100,20 134,52 100,84 66,52" />
+      <circle class="lamp" cx="112" cy="38" r="4.2" />
+      <text x="100" y="106" class="op-label">判定</text>
+    </g>
+    <g id="acc-token" class="token-2d" style="display:none"><rect x="-8" y="-6" width="16" height="12" rx="3" /></g>
+  </svg>`;
+  container.innerHTML = s;
+  const token = container.querySelector('#acc-token');
+  const gate = container.querySelector('#op-_acc');
+  return {{
+    setState(state) {{
+      if (gate) gate.setAttribute('class', 'acc-gate ' + (state || ''));
+    }},
+    arrive() {{   // 令牌从左边滑进菱形——它是从 BEELINE 栏交接过来的
+      token.style.display = '';
+      token.style.transition = 'none';
+      token.style.transform = 'translate(24px, 52px)';
+      void token.offsetWidth;                      // 强制回流，让下面这格是真过渡
+      token.style.transition = '';
+      token.style.transform = 'translate(100px, 52px)';
+    }},
+    release() {{  // 放行：令牌往右滑出视野（往 ARTIFACTS OUT 那个方向）
+      token.style.transform = 'translate(186px, 52px)';
+      setTimeout(() => {{ token.style.display = 'none'; }}, 360);
+    }},
+    hold() {{     // 没通过：令牌留在闸上，不放行
+      token.style.display = '';
+      token.style.transform = 'translate(100px, 52px)';
+    }},
+    reset() {{
+      this.setState('');
       token.style.display = 'none';
     }},
   }};
@@ -931,7 +1002,7 @@ function renderRequirementSet(r) {{
   </div>`;
 }}
 
-// ===== ACCEPTANCE：盒内第四道闸 =====
+// ===== ACCEPTANCE：跟 TASK IN / BEELINE / ARTIFACTS OUT 平级的第四栏 =====
 // 它跟 beeline 不是一回事。beeline 的 op 是「算指标」，
 // acceptance 是「拿盒子声明的判据比对，定过不过」——代码路径本来就在
 // BeelineExecutor.execute() 返回之后单独调（kanban/trigger.py）。
@@ -985,21 +1056,34 @@ function renderArtifact() {{
     <span class="artifact-badge ${{badge}}">${{acc.toUpperCase()}}</span>
     <div class="tid">task_run ${{a.task_run_id}}</div>
     ${{why}}
-    <div class="ac-block"><div class="ac-title">ACCEPTANCE · 验收判据</div>${{renderAcceptance(a)}}</div>
     ${{body}}
     <details><summary>raw JSON</summary><pre>${{JSON.stringify(a.result, null, 2)}}</pre></details>
   </div>`;
 }}
 
+// 判据表落在 ACCEPTANCE 栏，不落在产出口：
+// 产出口回答「交出去什么」，验收栏回答「凭什么说它合格」。
+// 两处各留一份判据 = 两处都要跟着改，而它们不会一起变。
+function renderAcceptanceInto() {{
+  const el = document.getElementById('acc-detail');
+  if (!el) return;
+  const a = _boxState.artifact;
+  el.innerHTML = a
+    ? renderAcceptance(a)
+    : '<div class="empty" style="padding:18px 6px;">(等待判定)</div>';
+}}
+
 let _scene2d = null;      // 2D 场景 api（随 shell 持久，不被 2s 刷新重建）
+let _accGate = null;      // ACCEPTANCE 栏的闸（跟 _scene2d 同生命周期，独立 api）
 let _shellBox = null;   // 当前 shell 属于哪个 box
 
 // rejected 归因 → 中文标签（runtime.models.RejectionClass）
+// 文案按「为什么被拒」写，不写「哪个盒子被拒」：同一个类在不同盒子里指的事一样
 const REJECT_LABEL = {{
   empty_input: '投料里没有可建模的业务需求',
-  insufficient_coverage: '模型元素没覆盖全部需求',
+  insufficient_coverage: '没覆盖住投料里的全部内容',
   conflict: '业务规则之间自相矛盾',
-  structural: '模型结构 / 引用 / 指标不达标',
+  structural: '结构 / 引用 / 指标不达标',
 }};
 
 function buildShell(boxId, box, entries) {{
@@ -1055,6 +1139,11 @@ function buildShell(boxId, box, entries) {{
           <div id="box2d-stage"></div>
           <div class="lane-ops" id="lane-ops"></div>
         </div>
+        <div class="lane-acc">
+          <div class="lane-title">ACCEPTANCE · 验收闸</div>
+          <div id="acc-stage"></div>
+          <div class="acc-detail" id="acc-detail"></div>
+        </div>
         <div class="port">
           <div class="port-title" id="out-title">ARTIFACTS OUT · 产出口</div>
           <div id="artifact-slot"></div>
@@ -1074,13 +1163,14 @@ function buildShell(boxId, box, entries) {{
 
   const stage = document.getElementById('box2d-stage');
   _scene2d = ops.length > 0 ? initBox2D(stage, ops) : null;
+  _accGate = initAccGate(document.getElementById('acc-stage'));
   const laneOps = document.getElementById('lane-ops');
   if (laneOps) laneOps.textContent = ops.length > 0 ? ops.join(' · ') : '(该 task type 未绑定 beeline)';
   // shell 重建后恢复工位状态 + 验收闸状态
   if (_scene2d) {{
     for (const op of ops) _scene2d.setOpState(op, _boxState.opStates[op] || '');
-    _scene2d.setAcceptance(_boxState.opStates._acc || '');
   }}
+  if (_accGate) _accGate.setState(_boxState.opStates._acc || '');
   _lastArtifactKey = null;   // shell 重建后 slot 是新 DOM，强制重渲 artifact
   renderArtifactInto();
   // 新建的按钮按当前履约状态同步一次：正在跑就禁着，跑完了才能再投
@@ -1092,12 +1182,17 @@ let _lastArtifactKey = null;   // 已渲染的 artifact 标识（内容没变就
 
 function renderArtifactInto() {{
   const slot = document.getElementById('artifact-slot');
-  if (!slot) return;
-  const a = _boxState.artifact;
-  const key = a ? `${{a.task_run_id}}|${{a.acceptance_status}}` : 'none';
-  if (key === _lastArtifactKey) return;
-  _lastArtifactKey = key;
-  slot.innerHTML = renderArtifact() + renderRelayBar();
+  if (slot) {{
+    const a = _boxState.artifact;
+    const key = a ? `${{a.task_run_id}}|${{a.acceptance_status}}` : 'none';
+    // 判据表跟着 artifact 一起刷；key 变了才重建，保留 details 开合状态
+    if (key !== _lastArtifactKey) {{
+      _lastArtifactKey = key;
+      slot.innerHTML = renderArtifact() + renderRelayBar();
+    }}
+  }}
+  // 验收栏独立渲染：shell 重建后它是新 DOM，不能靠 _lastArtifactKey 短路
+  renderAcceptanceInto();
 }}
 
 // 接力：本盒产出 → 下游盒投料口
@@ -1339,6 +1434,7 @@ async function triggerTask(boxId) {{
         _scene2d.reset();
         _scene2d.moveToken('_in');
       }}
+      if (_accGate) _accGate.reset();
       await sleep(600);
       for (const step of trace) {{
         _boxState.opStates[step.op_id] = 'active';
@@ -1351,21 +1447,25 @@ async function triggerTask(boxId) {{
         _boxState.opStates[step.op_id] = st;
         if (_scene2d) _scene2d.setOpState(step.op_id, st);
       }}
-      // beeline 走完 → 撞验收闸。令牌在这一格停一下，
-      // 判定结果决定闸灯颜色，也决定它能不能继续流向 OUT。
+      // beeline 走完 → 把令牌交给 BEELINE 栏右边的验收闸（第四栏）。
+      // 闸自己亮灯：过 → 放行到 OUT；不过 → 令牌停在闸上，产出不出。
       _boxState.opStates._acc = 'active';
-      if (_scene2d) {{
-        _scene2d.setAcceptance('active');
-        _scene2d.moveToken('_acc');
+      if (_scene2d && trace.length) _scene2d.moveToken(trace[trace.length - 1].op_id);
+      if (_accGate) {{
+        _accGate.setState('active');
+        _accGate.arrive();
       }}
       await sleep(700);
       const accPassed = data.acceptance_status === 'accepted';
       _boxState.opStates._acc = accPassed ? 'done' : 'failed';
-      if (_scene2d) _scene2d.setAcceptance(_boxState.opStates._acc);
+      if (_accGate) _accGate.setState(_boxState.opStates._acc);
       if (accPassed) {{
         // 过了闸才放产出出去
+        if (_accGate) _accGate.release();
         if (_scene2d) _scene2d.moveToken('_out');
         await sleep(600);
+      }} else if (_accGate) {{
+        _accGate.hold();
       }}
       if (_scene2d) _scene2d.moveToken(null);
       _boxState.artifact = {{
@@ -1423,6 +1523,7 @@ function render(data) {{
   // 多盒视图 / 空态：重建 DOM（CSS 立方体，无 WebGL 状态）
   _shellBox = null;
   _scene2d = null;
+  _accGate = null;
   let html = '';
   if (data.box_stats && data.box_stats.length > 0) {{
     html += `<div class="section"><div class="section-title">beeBoxes in Flight (${{data.box_stats.length}})</div>`;

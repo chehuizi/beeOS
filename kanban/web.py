@@ -1086,7 +1086,7 @@ function onTaskTypeChange() {{
   payloadEl.classList.toggle('payload-text', isText);
   // 故意不预填示例：预填内容看着像"已经有人在投料"，直接点履约会误以为
   // 那就是自己的数据。示例留在 placeholder（灰字，空框才显示）里，
-  // 另给一个「填入示例 / 清掉示例 / 清空」切换按钮按需取用。
+  // 另给一个「填入示例 / 清空」切换按钮按需取用。
   payloadEl.value = '';
   _sampleBaseline = '';   // 换了 task type，旧的示例基准不再作数
   syncSampleBtn();
@@ -1104,12 +1104,10 @@ function sampleTextOf(entry) {{
     : JSON.stringify(sample, null, 2);
 }}
 
-// 按钮文案要说清它会动什么。
-// 「清空」太吓人（像要清掉整个投料口），但改成「清空示例」在用户自己写过字时
-// 又是骗人的——它照样全清。正确的做法是分三种状态：
-//   ① 框空            → 「填入示例」：填
-//   ② 框里是原样示例   → 「清掉示例」：只回退示例，不碰别的东西
-//   ③ 用户改过 / 自己写 → 「清空」：明确警告这会连自己写的字一起没
+// 按钮就两态：空 → 填入示例，有内容 → 清空。
+// 不再细分「清掉示例」——文案越细越像在说一件它做不到的事。
+// 真正的保护不靠措辞：框里不是原封不动的示例时，清空前先问一句。
+// 判据是 _sampleBaseline（按钮写入时留一份原文快照），跟文案无关。
 
 function isPristineSample() {{
   const payloadEl = document.getElementById('task-payload');
@@ -1125,16 +1123,13 @@ function toggleSample() {{
   const entry = (window._taskEntries || {{}})[typeEl.value] || {{}};
 
   if (!payloadEl.value.trim()) {{
-    // ① 空 → 填入示例
     _sampleBaseline = sampleTextOf(entry);
     payloadEl.value = _sampleBaseline;
-  }} else if (isPristineSample()) {{
-    // ② 原样示例 → 撤掉示例，回到空框（这是可逆的，不用确认）
-    _sampleBaseline = '';
-    payloadEl.value = '';
   }} else {{
-    // ③ 用户自己写过字 → 清掉是不可逆的，先问一句
-    if (!window.confirm('清空投料框？框里的内容会全部丢失，无法撤销。')) return;
+    // 只清原封不动的示例 → 可逆，直接撤。
+    // 清用户自己写的内容 → 不可逆，先问一句，不给误点留口子。
+    if (!isPristineSample()
+        && !window.confirm('清空投料框？框里的内容会全部丢失，无法撤销。')) return;
     _sampleBaseline = '';
     payloadEl.value = '';
   }}
@@ -1147,16 +1142,15 @@ function syncSampleBtn() {{
   const payloadEl = document.getElementById('task-payload');
   const btn = document.getElementById('sample-btn');
   if (!payloadEl || !btn) return;
-  if (!payloadEl.value.trim()) {{
-    btn.textContent = '填入示例';
+  const has = !!payloadEl.value.trim();
+  btn.textContent = has ? '清空' : '填入示例';
+  if (!has) {{
     btn.title = '把示例填进投料框';
     btn.classList.remove('warn');
   }} else if (isPristineSample()) {{
-    btn.textContent = '清掉示例';
-    btn.title = '撤掉刚填进去的示例，回到空框（你一个字都没改，放心清）';
+    btn.title = '撤掉刚填进去的示例，回到空框';
     btn.classList.remove('warn');
   }} else {{
-    btn.textContent = '清空';
     btn.title = '清掉整个投料框，包括你自己写的内容（不可撤销，会先问一句）';
     btn.classList.add('warn');
   }}

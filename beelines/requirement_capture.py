@@ -8,18 +8,18 @@ Software Line 第二只 beeline。
     ↓
   split_source_sentences   （规则：按句末标点 + 顿号枚举切句，每句带 sentence_id）
     ↓
-  extract_requirements     （LLM：抽取业务需求 + 判 type；不可用则降级规则版）
+  extract_requirements     （LLM：抽流程图——节点 / 边 / 守卫；不可用则降级规则版）
     ↓
-  build_requirement_set    （机械：组装 set_id、按 type 重编 requirement_id、绑定 trace_to）
+  build_requirement_set    （机械：组装 set_id、编号、绑定 trace_to）
     ↓
-  verify_source_fidelity   （机械：4 项 acceptance——契约 / 覆盖 / 溯源 / 幻觉）
+  verify_graph_fidelity    （机械：4 项 acceptance——契约 / 覆盖 / 溯源 / 幻觉）
     ↓
   package_requirement_set  （机械：合并成 RequirementSetPackage）
     ↓
   （终态）
 
 **为什么只有 1 个 op 走 LLM**：
-"哪些句子是业务事实、每条是什么类型"需要语义理解；
+"哪句是业务事实、它属于流程图里的哪个位置"需要语义理解；
 其余全部是集合运算 / 字符串匹配 / 编号——用模型做只会更慢更不稳。
 这条边界是本 beeline 最核心的设计决定。
 
@@ -79,26 +79,26 @@ REQUIREMENT_CAPTURE_BEELINE = Beeline(
             input_from="extract_requirements",
             input="schema_extracted_facts",
             output="schema_extracted_facts",
-            next=[NextRef(op_id="verify_source_fidelity")],
+            next=[NextRef(op_id="verify_graph_fidelity")],
             bee=Bee(type="requirement_set_builder_impl"),
             idempotency=IDEMPOTENT_BY_SET,
         ),
 
         Operation(
-            op_id="verify_source_fidelity",
-            type="source_fidelity_verifier",
+            op_id="verify_graph_fidelity",
+            type="graph_fidelity_verifier",
             input_from="build_requirement_set",
             input="schema_extracted_facts",
             output="schema_extracted_facts",
             next=[NextRef(op_id="package_requirement_set")],
-            bee=Bee(type="source_fidelity_verifier_impl"),
+            bee=Bee(type="graph_fidelity_verifier_impl"),
             idempotency=IDEMPOTENT_BY_SET,
         ),
 
         Operation(
             op_id="package_requirement_set",
             type="requirement_set_packager",
-            input_from="verify_source_fidelity",
+            input_from="verify_graph_fidelity",
             input="schema_extracted_facts",
             output="schema_requirement_set_package",
             next=[],

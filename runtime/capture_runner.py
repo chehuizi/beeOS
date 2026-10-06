@@ -443,11 +443,11 @@ def _simulate_requirement_set_builder(input_data: dict[str, Any]) -> dict[str, A
 
 
 # ============================================================
-# op 4: verify_source_fidelity —— 4 项机械 acceptance
+# op 4: verify_graph_fidelity —— 4 项机械 acceptance
 # ============================================================
 
 
-def _simulate_source_fidelity_verifier(input_data: dict[str, Any]) -> dict[str, Any]:
+def _simulate_graph_fidelity_verifier(input_data: dict[str, Any]) -> dict[str, Any]:
     """真算 4 项：契约 / 覆盖 / 溯源 / 幻觉
 
     全部是集合运算与字符串匹配——不需要模型，结果可复现。
@@ -571,6 +571,6 @@ CAPTURE_HANDLERS: dict[str, Any] = {
     "source_sentence_splitter": _simulate_source_sentence_splitter,
     "requirement_extractor": _simulate_requirement_extractor,
     "requirement_set_builder": _simulate_requirement_set_builder,
-    "source_fidelity_verifier": _simulate_source_fidelity_verifier,
+    "graph_fidelity_verifier": _simulate_graph_fidelity_verifier,
     "requirement_set_packager": _simulate_requirement_set_packager,
 }

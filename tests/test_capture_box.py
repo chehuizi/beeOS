@@ -93,7 +93,7 @@ class TestBeeline:
             "split_source_sentences",
             "extract_requirements",
             "build_requirement_set",
-            "verify_source_fidelity",
+            "verify_graph_fidelity",
             "package_requirement_set",
         ]
 
@@ -283,7 +283,7 @@ class TestCaptureEndToEnd:
         )
         assert [s["op_id"] for s in r["op_trace"]] == [
             "split_source_sentences", "extract_requirements",
-            "build_requirement_set", "verify_source_fidelity",
+            "build_requirement_set", "verify_graph_fidelity",
             "package_requirement_set",
         ]
 

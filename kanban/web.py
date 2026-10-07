@@ -1052,12 +1052,10 @@ function renderRequirementSet(r) {{
   if (!r) return '';
   // 4 项判据不在这里画——它们跟上面 ACCEPTANCE 区是同一批数据。
   // 重复一遍会让人误以为这是 beeline 的结论，而不是验收判定。
-  const degraded = r.extractor !== 'llm';
   const nNodes = (r.nodes || []).length;
   const nEdges = (r.edges || []).length;
   return `<div class="rs-pack">
     <div class="rs-head">业务目标：${{esc(r.business_goal || '—')}}</div>
-    <div class="rs-checks"><span class="rs-check ${{degraded ? 'by warn' : 'by'}}">抽取者：${{esc(r.extractor)}}</span></div>
     <div class="rs-hint">流程图：${{nNodes}} 个节点${{nEdges ? ` · ${{nEdges}} 条转移` : ''}} —— 类型由所在位置决定，无需逐条确认</div>
     ${{renderFlowGraph(r)}}
   </div>`;
@@ -1074,6 +1072,10 @@ function renderAcceptance(a) {{
   const rows = Array.isArray(a.acceptance_detail) ? a.acceptance_detail : [];
   const acc = a.acceptance_status;
   const ok = acc === 'accepted';
+  // 没产出就没得判。显示 0/0 条判据像「判了但全挂」，那是另一回事。
+  if (a.status === 'failed') {{
+    return `<div class="ac-summary ac-unknown">履约中止 · 未进入验收</div>`;
+  }}
   if (!rows.length) {{
     return `<div class="ac-summary ac-unknown">本次履约没有走 acceptance（${{esc(acc || '未判定')}}）</div>`;
   }}
@@ -1102,30 +1104,34 @@ function renderAcceptance(a) {{
   </div>`;
 }}
 
-// 降级是产物级事实，不属于「需求集」或「DDD 模型」任何一种视图，
-// 所以只在产物卡渲染一次、两个盒子共用。原先它挂在 renderRequirementSet 里，
-// 建模盒降级时看板一个字都不显示——降级静默比降级本身更糟。
-// 两种情况分开说，不能混成一句「降级了」：
-//   extractor=rule → LLM 压根没参与，退回规则抽取
-//   extractor=llm 但带 note → 模型参与了，只是部分处理按规则走
-//     （id 重编号、business_goal 取规则版——LLM 会改写原文）
-function degradeNotice(r) {{
+// 「有环节没走模型」是产物级事实，不属于「需求集」或「DDD 模型」任何一种
+// 视图，所以在产物卡渲染一次、两个盒子共用。
+// 只剩一种情况：模型参与了，但某些机械环节按规则走（business_goal 取规则版、
+// id 重编号）——那是"LLM 只做语义、机械做校验"的正确应用，不是降级。
+// 真正没模型参与的情况已经不存在了：那条腿删了，LLM 不可用就是履约中止。
+function ruleAppliedNotice(r) {{
   if (!r) return '';
-  const extractor = r.extractor || r._extractor || '';
-  const reason = r.degrade_reason || r._extractor_note || '';
-  const fellBack = !!extractor && extractor !== 'llm';
-  if (!fellBack && !reason) return '';
-  const title = fellBack ? '降级到规则版抽取' : '部分处理退回规则版';
-  const body = reason ? `原因：${{esc(reason)}}` : '原因未记录';
+  const note = r._extractor_note || '';
+  if (!note) return '';
   return `<div class="rs-degrade">
-    ⚠ ${{title}} · ${{body}}<br>
-    请人工核对产出
+    部分处理按规则走 · ${{esc(note)}}<br>
+    模型参与了产出，这些环节机械执行
   </div>`;
 }}
 
 function renderArtifact() {{
   const a = _boxState.artifact;
   if (!a) return `<div class="empty" style="padding:24px 8px;">(等待产出)</div>`;
+  // 履约中止：没有产出可摆。摆一张空卡片只会让人以为是「产出为空」，
+  // 而真实情况是「压根没跑到产出那一步」——失败原因才是唯一有用的信息。
+  if (a.status === 'failed') {{
+    return `<div class="artifact-card">
+      <span class="artifact-badge badge-failed">ABORTED</span>
+      <div class="tid">task_run ${{a.task_run_id}}</div>
+      <div class="rej-why">履约中止：<b>${{esc(a.failure || '执行失败')}}</b></div>
+      <div class="rs-hint">没有产出，也就没有验收判定。这轮投料不算数，可以直接重试。</div>
+    </div>`;
+  }}
   const acc = a.acceptance_status || a.status || 'unknown';
   const badge = acc === 'accepted' ? 'badge-accepted' : 'badge-rejected';
   const why = a.rejection_class
@@ -1139,7 +1145,7 @@ function renderArtifact() {{
     <span class="artifact-badge ${{badge}}">${{acc.toUpperCase()}}</span>
     <div class="tid">task_run ${{a.task_run_id}}</div>
     ${{why}}
-    ${{degradeNotice(a.result)}}
+    ${{ruleAppliedNotice(a.result)}}
     ${{body}}
     <details><summary>raw JSON</summary><pre>${{JSON.stringify(a.result, null, 2)}}</pre></details>
   </div>`;
@@ -1330,6 +1336,9 @@ function renderRelayBar() {{
   const a = _boxState.artifact;
   const targets = window._feedsInto || [];
   if (!a || !targets.length) return '';
+  // 履约中止没有产出，也就没有东西可放行。画一个禁用的放行口会读成
+  // "东西在这儿只是没过检"——实际是没有东西。别画。
+  if (a.status === 'failed') return '';
   // 没验收过的产出不准往下游流——否则下游拿到一份判都没判过的输入，
   // 上游的验收就白做了。REJECTED 时按钮禁用并说明卡在哪条判据上。
   if (a.acceptance_status !== 'accepted') {{
@@ -1571,6 +1580,31 @@ async function triggerTask(boxId) {{
         _boxState.opStates[step.op_id] = st;
         if (_scene2d) _scene2d.setOpState(step.op_id, st);
       }}
+      // 履约中止（LLM 不可用 / 某个 op 挂了）跟「跑完了但没过验收」是两件事，
+      // 必须长得不一样：中止没有产出，不摆产出口，也不进验收闸——
+      // 没有产出就没有可判的东西，让验收栏显示 0/0 条判据只会像「判了但全挂」。
+      const failed = data.status === 'failed';
+      if (failed) {{
+        const bad = (trace || []).filter((s) => s.status === 'failed').pop();
+        _boxState.artifact = {{
+          task_run_id: data.task_run_id,
+          status: 'failed',
+          acceptance_status: null,
+          acceptance_detail: [],
+          result: data.result,
+          failure: bad
+            ? `${{bad.op_id}}：${{bad.error || '执行失败'}}`
+            : '履约中止',
+        }};
+        renderArtifactInto();
+        await sleep(600);
+        if (_scene2d && bad) _scene2d.moveToken(bad.op_id);
+        // 验收闸不亮：这一轮压根没走到判定
+        _boxState.opStates._acc = 'skipped';
+        resultEl.className = 'trigger-result err';
+        resultEl.textContent =
+          `task_run ${{data.task_run_id.slice(0, 8)}}… → 履约中止 · ${{_boxState.artifact.failure}}`;
+      }} else {{
       // beeline 走完 → 令牌走到 OUT。先把产物摆出来，再判它过不过：
       // 产物确实是 beeline 算出来的，跟验收无关；验收发生在它之后，
       // 而且不拦它——不过的产出照样摆在这儿，只是接力按钮禁用。
@@ -1603,10 +1637,10 @@ async function triggerTask(boxId) {{
         // 不过：令牌停在闸上，产物留在产出口但投不出去
         _accGate.hold();
       }}
-      if (_scene2d) _scene2d.moveToken(null);
       resultEl.className = 'trigger-result ' + (data.acceptance_status === 'accepted' ? 'ok' : 'err');
       const why = data.rejection_class ? ` — ${{REJECT_LABEL[data.rejection_class] || data.rejection_class}}` : '';
       resultEl.textContent = `task_run ${{data.task_run_id.slice(0, 8)}}… → ${{data.status}} / ${{data.acceptance_status || 'n/a'}}${{why}}`;
+      }}
     }}
   }} catch (e) {{
     resultEl.className = 'trigger-result err';
@@ -1781,8 +1815,7 @@ class KanbanRequestHandler(BaseHTTPRequestHandler):
                 "op_trace": result.get("op_trace"),
                 "payload": pkg,
                 "requirement_count": pkg.get("requirement_count", 0),
-                "extractor": pkg.get("extractor", "rule"),
-                "note": pkg.get("degrade_reason") or "",
+                "note": pkg.get("_extractor_note") or "",
             })
             return
 

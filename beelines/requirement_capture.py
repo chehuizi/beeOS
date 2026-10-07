@@ -8,7 +8,7 @@ Software Line 第二只 beeline。
     ↓
   split_source_sentences   （规则：按句末标点 + 顿号枚举切句，每句带 sentence_id）
     ↓
-  extract_requirements     （LLM：抽流程图——节点 / 边 / 守卫；不可用则降级规则版）
+  extract_requirements     （LLM：抽流程图——节点 / 边 / 守卫；不可用则履约中止）
     ↓
   build_requirement_set    （机械：组装 set_id、编号、绑定 trace_to）
     ↓

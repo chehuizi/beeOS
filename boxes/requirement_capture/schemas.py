@@ -30,7 +30,9 @@ from core.models import FieldDef, SchemaDef
 REQUIREMENT_TYPES = ("object", "rule", "process", "metric", "goal", "event")
 REQUIREMENT_PRIORITIES = ("must_have", "should_have", "could_have")
 
-EXTRACTORS = ("llm", "rule")   # 需求抽取的执行者：模型 / 规则降级
+# 原 EXTRACTORS = ("llm", "rule") 已删：它的唯一作用是区分
+# 「模型抽」和「规则兜底」两条腿。兜底删掉后抽取只有一条腿，
+# 留一个恒为 "llm" 的枚举字段没有任何判别力。
 
 
 # ============================================================
@@ -145,7 +147,6 @@ EXTRACTED_FACTS = SchemaDef(
     fields=[
         FieldDef(name="set_id", type="string"),
         FieldDef(name="business_goal", type="string"),
-        FieldDef(name="extractor", type="enum", values=list(EXTRACTORS)),
         FieldDef(name="source_sentences", type="array", items=_SOURCE_SENTENCE),
         # ---- 流程图（主结构）----
         FieldDef(name="nodes", type="array", items=_FLOW_NODE),
@@ -168,7 +169,6 @@ REQUIREMENT_SET_PACKAGE = SchemaDef(
         FieldDef(name="set_id", type="string"),
         FieldDef(name="business_goal", type="string"),
         FieldDef(name="context", type="string", required=False),
-        FieldDef(name="extractor", type="enum", values=list(EXTRACTORS)),
         FieldDef(name="source_sentences", type="array", items=_SOURCE_SENTENCE),
         # ---- 流程图（主结构）：先看图，平铺列表只是它的兼容投影 ----
         FieldDef(name="nodes", type="array", items=_FLOW_NODE),
@@ -188,7 +188,6 @@ REQUIREMENT_SET_PACKAGE = SchemaDef(
                      items=FieldDef(name="b", type="string")),
             FieldDef(name="hallucinated", type="array",
                      items=FieldDef(name="h", type="string")),
-            FieldDef(name="degrade_reason", type="string", required=False),
         ]),
     ],
 )

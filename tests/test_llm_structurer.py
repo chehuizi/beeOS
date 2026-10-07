@@ -147,75 +147,79 @@ class TestNormalizeIds:
 # ============================================================
 
 
-class TestFallback:
-    def test_llm_failure_degrades_to_rule(self, monkeypatch):
-        """LLM 不可用（端点错/超时）时不能整个投料口挂掉"""
+class TestNoFallback:
+    """没有第二条腿。LLM 不履约就是履约中止，不产出东西。
+
+    这组测试原先叫 TestFallback，断言「LLM 挂了降级到规则版」。
+    那条路删掉了：词面版语义最差，却因为逐句切分不丢句子，
+    4 条判据（契约/覆盖率/追溯/无幻觉——测的都不是语义质量）必然全过，
+    于是拿绿灯、被放行下游。降级不是兜底，是绕过质量门禁的通道。
+    所以现在断言的是：抛错，且错误里说得清是哪一道没过。
+    """
+
+    def test_llm_failure_aborts_instead_of_degrading(self, monkeypatch):
         from runtime import llm
 
         def boom(*a, **kw):
             raise llm.LLMError("simulated outage")
 
         monkeypatch.setattr(llm, "complete_json", boom)
-        r = structure_business_text_with_llm("wms的流程有入库流程、出库流程。")
-        assert r["_extractor"] == "rule"
-        assert "llm unavailable" in r["_extractor_note"]
-        assert len(r["requirements"]) == 2
+        with pytest.raises(llm.LLMError):
+            structure_business_text_with_llm("wms的流程有入库流程、出库流程。")
 
-    def test_contract_violation_degrades(self, monkeypatch):
+    def test_contract_violation_aborts(self, monkeypatch):
         from runtime import llm
         monkeypatch.setattr(llm, "complete_json", lambda *a, **kw: {
             "set_id": "s", "business_goal": "g",
             "requirements": [{"requirement_id": "r1", "description": "d",
                               "requirement_type": "POLICY"}],
         })
-        r = structure_business_text_with_llm("库存数量不能为负。")
-        assert r["_extractor"] == "rule"
-        assert "task_schema" in r["_extractor_note"]
+        with pytest.raises(llm.LLMError, match="task_schema"):
+            structure_business_text_with_llm("库存数量不能为负。")
 
-    def test_hallucination_degrades(self, monkeypatch):
+    def test_hallucination_aborts(self, monkeypatch):
+        """幻觉的产出曾经会被降级路径"救"下来照常交出去——那不是救，是放行。"""
         from runtime import llm
         monkeypatch.setattr(llm, "complete_json", lambda *a, **kw: {
             "set_id": "s", "business_goal": "g",
             "requirements": [{"requirement_id": "r1", "description": "订单必须7天内退款",
                               "requirement_type": "rule", "priority": "must_have"}],
         })
-        r = structure_business_text_with_llm("库存数量不能为负。")
-        assert r["_extractor"] == "rule"
-        assert "hallucination" in r["_extractor_note"]
+        with pytest.raises(llm.LLMError, match="hallucination"):
+            structure_business_text_with_llm("库存数量不能为负。")
 
-    def test_zero_requirements_degrades(self, monkeypatch):
-        """模型说抽不出来时，规则版再试一次——两条路都空才算真空"""
+    def test_zero_requirements_aborts(self, monkeypatch):
+        """模型说抽不出来 = 它没履约。不再让规则版替它编一份出来。"""
         from runtime import llm
         monkeypatch.setattr(llm, "complete_json", lambda *a, **kw: {
             "set_id": "s", "business_goal": "g", "requirements": [],
         })
-        r = structure_business_text_with_llm("wms的流程有入库流程、出库流程。")
-        assert r["_extractor"] == "rule"
-        assert len(r["requirements"]) == 2
+        with pytest.raises(llm.LLMError, match="0 requirements"):
+            structure_business_text_with_llm("wms的流程有入库流程、出库流程。")
 
-    def test_non_dict_output_degrades(self, monkeypatch):
+    def test_non_dict_output_aborts(self, monkeypatch):
         from runtime import llm
         monkeypatch.setattr(llm, "complete_json", lambda *a, **kw: ["a", "list"])
-        r = structure_business_text_with_llm("wms的流程有入库流程。")
-        assert r["_extractor"] == "rule"
+        with pytest.raises(llm.LLMError):
+            structure_business_text_with_llm("wms的流程有入库流程。")
 
-    @pytest.mark.parametrize("text", [
-        "库存数量不能为负。",
-        "wms的流程有入库流程、出库流程、盘点流程",
-        "",
-    ])
-    def test_every_path_produces_contract_valid_payload(self, text, monkeypatch):
-        """无论走哪条路，产出都必须过结构契约——投料口下游不会再因结构被拒"""
-        from runtime.contract import validate_payload
-        from boxes.modeling import get_definition
+    @pytest.mark.parametrize("stub_kind", ["garbage", "raises"])
+    def test_no_path_produces_a_contract_valid_payload(self, stub_kind, monkeypatch):
+        """坏输出不许被"救"成好产出——没有能救的路径。
+
+        这条测试的断言方向和原来相反：以前是"无论走哪条路都该合法"，
+        现在是"两条都该失败"。降级路径存在的整个期间，它在给坏输出兜底。
+        """
         from runtime import llm
 
-        schema = get_definition().get_schema("schema_business_requirement_set")
-        for stub in (lambda *a, **kw: {"boom": 1},
-                     lambda *a, **kw: (_ for _ in ()).throw(llm.LLMError("x"))):
-            monkeypatch.setattr(llm, "complete_json", stub)
-            p = structure_business_text_with_llm(text)
-            assert validate_payload(p, schema) == [], f"契约不合法: {p}"
+        if stub_kind == "garbage":
+            stub = lambda *a, **kw: {"boom": 1}
+        else:
+            def stub(*a, **kw):
+                raise llm.LLMError("x")
+        monkeypatch.setattr(llm, "complete_json", stub)
+        with pytest.raises(llm.LLMError):
+            structure_business_text_with_llm("库存数量不能为负。")
 
     def test_rule_version_unchanged_and_has_no_extractor_keys(self):
         """规则版保持原样，不带 _extractor 等内部标记"""

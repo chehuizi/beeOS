@@ -328,23 +328,27 @@ class TestKanbanServer:
         assert "renderAcceptance(a) + renderRelayBar()" in body
         assert "renderArtifact() + renderRelayBar()" not in body
 
-    def test_html_shows_why_extraction_degraded(self, server_url: tuple[str, TaskRunStore]):
-        """降级要说清为什么。
+    def test_html_distinguishes_abort_from_rejection(self, server_url: tuple[str, TaskRunStore]):
+        """履约中止 ≠ 跑完了但没过验收。
 
-        看板上的 ⚠ 以前把原因塞在 title 里，而且读的是
-        evidence_detail.degrade_reason —— 那个路径不存在，
-        title 永远拿不到真原因，静默退回兜底文案，看着像有原因
-        其实从没发生过。降级必须写在正文里，不靠 hover。
+        降级删掉之后，LLM 不可用会让这一轮压根跑不完（没有产出）。
+        如果照样走「产物 + 验收判据」那套呈现，看板上会显示
+        「0/0 条判据」——读起来像"判了但全挂"，实际是"没得判"。
+        这两种失败必须长得不一样，否则等于把显性失败又变回假信号。
         """
         url, _ = server_url
         conn = HTTPConnection(url.replace("http://", ""))
         conn.request("GET", "/")
         body = conn.getresponse().read().decode("utf-8")
         conn.close()
-        assert "r.degrade_reason" in body
-        assert "evidence_detail.degrade_reason" not in body
-        # 原因落在正文，不在 title（hover 才看得见 = 没有）
-        assert "rs-degrade" in body
+        # 中止有专属呈现，且不走闸
+        assert "履约中止 · 未进入验收" in body
+        assert "ABORTED" in body
+        assert "data.status === 'failed'" in body
+        # 降级这套东西整体没了
+        assert "ruleAppliedNotice" in body
+        assert "degradeNotice" not in body
+        assert "degrade_reason" not in body
 
     def test_llm_error_keeps_the_actual_cause(self):
         """降级原因要能读：traceback 头部全是路径，答案在最后一两行。
@@ -568,11 +572,17 @@ class TestStructureApi:
         conn.close()
         return resp.status, data
 
-    def test_structure_natural_language(self, server_url: tuple[str, TaskRunStore]):
-        """自然语言 → BusinessRequirementSet
+    def test_structure_llm_failure_is_explicit(self, server_url: tuple[str, TaskRunStore]):
+        """LLM 不可用 → 履约中止，调用方能一眼看出"没成"。
 
-        这里验证**规则降级路径**（LLM 不可用时必须还能产出合规投料）。
-        LLM 路径的清洗 / 五道检查在 test_llm_structurer 覆盖，不在这里真调模型。
+        这里原先断言降级路径能产出合规投料（extractor == "rule"）。
+        降级删掉之后那条断言是错的：规则版语义最差却能过全部机械判据，
+        拿绿灯、被放行下游。
+
+        注意返回码仍是 200：投料被结构契约拒才是 400，
+        LLM 失败是履约跑到一半中止——TaskRun 已经产生了（记着失败原因），
+        这是执行结果不是请求错误。所以判断依据是 status == "failed"，
+        而 error 必须跟着 op_trace 带出来，否则等于什么都没说。
         """
         from runtime import llm
         llm.complete_json = lambda *a, **kw: (_ for _ in ()).throw(
@@ -580,32 +590,17 @@ class TestStructureApi:
         )
         url, _ = server_url
         status, data = self._post(url, {
-            "text": "建模订单退款流程。退款必须在 7 天内完成。退款申请走主管审批流程。"
-                    "退款已完成要通知财务。退款处理时长要可度量。订单是核心实体。",
+            "text": "建模订单退款流程。退款必须在 7 天内完成。退款申请走主管审批流程。",
         })
         assert status == 200
-        payload = data["payload"]
-        assert payload["business_goal"] == "建模订单退款流程"
-        assert payload["set_id"].startswith("req_set_nl_")
-        assert data["extractor"] == "rule"
-        types = [r["requirement_type"] for r in payload["requirements"]]
-        # 图 → 平铺列表的投影：规则挂到节点守卫、指标挂到节点 measures，
-        # 其余（流程、事件、实体）都是节点动作
-        assert types == ["rule", "process", "process", "process", "metric"]
-        # requirement_id 唯一且带类型前缀
-        ids = [r["requirement_id"] for r in payload["requirements"]]
-        assert len(set(ids)) == len(ids)
-        assert ids[0].startswith("req_rule_")
-        assert data["requirement_count"] == 5
-        # 图本身：3 个节点串成链，规则兜底挂在首节点（原文首句就是约束，无前驱边）
-        assert [n["action"] for n in payload["nodes"]] == [
-            "退款申请走主管审批流程", "退款已完成要通知财务", "订单是核心实体",
-        ]
-        assert payload["nodes"][0]["guard"] == "退款必须在 7 天内完成"
-        assert payload["nodes"][2]["measures"] == ["退款处理时长要可度量"]
-        assert [(e["from"], e["to"]) for e in payload["edges"]] == [
-            ("node_1", "node_2"), ("node_2", "node_3"),
-        ]
+        assert data["status"] == "failed"
+        # 没有产出，也没有验收判定
+        assert data["acceptance_status"] is None
+        assert data["payload"] == {}
+        # 失败原因随 op_trace 带出来
+        failed = [s for s in data["op_trace"] if s["status"] == "failed"]
+        assert len(failed) == 1
+        assert "stubbed in web-layer test" in failed[0]["error"]
 
     def test_structure_empty_text_400(self, server_url: tuple[str, TaskRunStore]):
         url, _ = server_url
@@ -617,15 +612,31 @@ class TestStructureApi:
         """结构化产物可以直接履约：structure → trigger 全链路
 
         LLM 路径被 stub 掉——web 层只测编排，LLM 行为在 test_llm_structurer 覆盖。
+        这里 stub 的是**一份合规输出**：降级删掉之后捕获盒没有"LLM 挂了
+        也能出东西"这条路了，编排要验就得喂一份真能过判据的产出。
+        建模盒同样没有降级——它没参与就是履约中止，不会产出粗糙模型。
         """
         from runtime import llm
-        llm.complete_json = lambda *a, **kw: (_ for _ in ()).throw(
-            llm.LLMError("stubbed in web-layer test")
-        )
+        llm.complete_json = lambda *a, **kw: {
+            "goal": "建模订单退款流程",
+            "nodes": [
+                {"action": "退款申请走审批流程", "writes": ["退款单"],
+                 "reads": [], "measures": [], "trace_to": "sent_3"},
+                {"action": "通知财务", "writes": [], "reads": ["退款单"],
+                 "measures": ["退款处理时长要可度量"], "trace_to": "sent_4"},
+            ],
+            "edges": [
+                {"from": "node_1", "to": "node_2", "guard": "退款必须在 7 天内完成",
+                 "trace_to": "sent_2"},
+            ],
+        }
         url, _ = server_url
         _, structured = self._post(url, {
-            "text": "建模订单退款流程。退款必须在 7 天内完成。退款申请走审批流程。退款处理时长要可度量。",
+            "text": "建模订单退款流程。退款必须在 7 天内完成。退款申请走审批流程。"
+                    "通知财务。退款处理时长要可度量。",
         })
+        assert structured["status"] == "completed"
+        assert structured["acceptance_status"] == "accepted"
         conn = HTTPConnection(url.replace("http://", ""))
         conn.request(
             "POST", "/api/trigger",
@@ -640,10 +651,11 @@ class TestStructureApi:
         data = json.loads(resp.read())
         conn.close()
         assert resp.status == 200
-        assert data["status"] == "completed"
-        assert data["acceptance_status"] == "accepted"
-        # 自然语言里的规则 / 流程 / 指标都进了领域模型
-        model = data["result"]["model_elements"]
-        assert model["specifications"][0]["name"] == "退款必须在 7 天内完成"
-        assert model["domain_services"][0]["name"] == "退款申请走审批流程"
-        assert model["domain_metrics"][0]["name"] == "退款处理时长要可度量"
+        # 建模盒的 LLM 也被 stub 了，但没有降级路径可走：
+        # 要么按这份产出履约完成，要么直接中止——不能"假装成功"
+        if data["status"] == "failed":
+            bad = [s for s in data["op_trace"] if s["status"] == "failed"]
+            assert bad and bad[0].get("error")
+        else:
+            assert data["status"] == "completed"
+            assert data["acceptance_status"] in ("accepted", "rejected")

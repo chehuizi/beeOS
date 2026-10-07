@@ -114,7 +114,7 @@ REQUIREMENT_CAPTURE_BOX = BeeBoxDefinition(
                 "forbidden": ["invent_requirements", "rewrite_business_goal"],
             },
             continuous_improvement={
-                "observe": ["manual_rewrite_rate", "llm_fallback_rate"],
+                "observe": ["manual_rewrite_rate", "llm_call_failure_rate"],
             },
         ),
     ),
@@ -142,9 +142,10 @@ REQUIREMENT_CAPTURE_BOX = BeeBoxDefinition(
                 target=0.10,
             ),
             MetricDef(
-                name="llm_fallback_rate",
-                definition="降级到规则版的比例（过高说明 LLM 链路不稳）",
-                target=0.05,
+                name="llm_call_failure_rate",
+                definition="LLM 调用失败导致履约中止的比例（降级已删，"
+                           "没有第二条腿兜着，失败就是失败）",
+                target=0.02,
             ),
         ],
         latency=[

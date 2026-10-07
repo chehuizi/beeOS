@@ -18,9 +18,6 @@ from collections import Counter
 from typing import Any
 from uuid import uuid4
 
-# 业务枚举来自盒子（业务层），不从 runtime 复制一份
-from boxes.requirement_capture.schemas import EXTRACTORS
-
 
 _TYPE_PREFIX = {
     "object": "obj",
@@ -97,7 +94,6 @@ def _simulate_source_sentence_splitter(input_data: dict[str, Any]) -> dict[str, 
     return {
         "set_id": input_data.get("set_id") or f"req_set_nl_{uuid4().hex[:8]}",
         "business_goal": "",
-        "extractor": "rule",
         "source_sentences": _split_sentences(narrative),
         "nodes": [],
         "edges": [],
@@ -140,90 +136,6 @@ _EXTRACT_PROMPT = """从下面这份中文业务表述里抽出一张**流程图
 直接输出这段 JSON 就好，不要在 JSON 前后加任何文字。
 原文句子：
 {sentences}"""
-
-
-def _rule_extract(sentences: list[dict[str, Any]]) -> dict[str, Any]:
-    """规则降级版抽图——纯词面分类，不猜语义
-
-    降级路径没有语言理解能力，所以只做能机械判定的映射：
-      rule  / metric  → 挂到边（guard）或节点（measures）
-      其余            → 节点动作
-    这不是"退化成全 process"——丢掉 rule / metric 会让下游建模盒
-    metrics_defined 恒假、整条链路必拒，宁可分类粗糙也不能丢类型。
-    """
-    from kanban.trigger import _classify_sentence
-
-    nodes: list[dict[str, Any]] = []
-    edges: list[dict[str, Any]] = []
-    # 规则 / 指标句子挂在它后面那个动作上——原文通常写「约束 + 动作」。
-    # 攒一个，等下一个非规则非指标的句子出现时挂上去。
-    pending: list[dict[str, str]] = []
-
-    for s in sentences:
-        if s["role"] != "fact" or not s["text"].strip():
-            continue
-        rtype = _classify_sentence(s["text"])
-        if rtype in ("rule", "metric"):
-            # 这两类不是流程的一步：rule 是转移的条件，metric 是动作要量的东西。
-            # 攒起来挂到它约束的那个动作上，别自己变成节点。
-            pending.append({
-                "kind": "guard" if rtype == "rule" else "measure",
-                "text": s["text"],
-                "trace_to": s["sentence_id"],
-            })
-            continue
-
-        node_id = f"node_{len(nodes) + 1}"
-        prev_id = nodes[-1]["node_id"] if nodes else ""
-        # 攒着的约束管的是「怎么走到这一步」→ 挂到进入它的边上的 guard
-        guards = [p["text"] for p in pending if p["kind"] == "guard"]
-        guard = "".join(guards)
-        node = {
-            "node_id": node_id,
-            "action": s["text"],
-            "writes": [], "reads": [], "measures": [],
-            # 挂在节点身上的 guard / measures 各自来自哪一句——覆盖率靠它记账
-            "guard_sources": [p["trace_to"] for p in pending if p["kind"] == "guard"],
-            "measure_sources": [p["trace_to"] for p in pending if p["kind"] == "measure"],
-            "trace_to": s["sentence_id"],
-        }
-        for p in pending:
-            if p["kind"] == "measure":
-                node["measures"].append(p["text"])
-        pending = []
-        nodes.append(node)
-
-        if prev_id:
-            edges.append({
-                "edge_id": f"edge_{len(edges) + 1}",
-                "from": prev_id, "to": node_id,
-                "guard": guard,
-                "trigger": "",
-                "trace_to": node["trace_to"],
-            })
-        elif guard:
-            # 图只有一个节点（原文是「一句约束 + 一个动作」）：没有边可挂，
-            # 守卫降级挂到节点自己的条件上，不静默丢
-            node["guard"] = guard
-
-    # 收尾：句子末尾还有没挂出去的（原文最后一句是指标，没有后继动作）
-    if pending and nodes:
-        for p in pending:
-            if p["kind"] == "measure":
-                nodes[-1]["measures"].append(p["text"])
-                nodes[-1]["measure_sources"].append(p["trace_to"])
-    elif pending:
-        # 一个动作都没有：把剩下的兜成节点，不静默丢内容
-        for p in pending:
-            nodes.append({
-                "node_id": f"node_{len(nodes) + 1}",
-                "action": p["text"],
-                "writes": [], "reads": [], "measures": [],
-                "guard_sources": [], "measure_sources": [],
-                "trace_to": p["trace_to"],
-            })
-    goal = next((s["text"] for s in sentences if s["role"] == "goal"), "")
-    return {"goal": goal, "nodes": nodes, "edges": edges}
 
 
 def _attach_sources(
@@ -285,6 +197,14 @@ def _clean_graph(raw: Any, sentences: list[dict[str, Any]]) -> dict[str, Any]:
         })
 
     if not nodes:
+        # 区分两件都表现为"抽不出东西"的事：
+        #   原文压根没有业务事实（只有一句业务目标）→ 盒子声明了
+        #     no_deliver 例外，产出空需求集，交给判据拒。这是正常的业务结果。
+        #   原文有事实、但模型产出全被幻觉校验剔掉 → 模型没履约，中止。
+        # 降级删掉之前这两种都被 except 吞成规则版，no_deliver 也就跟着失效了。
+        has_facts = any(s["role"] == "fact" and s["text"].strip() for s in sentences)
+        if not has_facts:
+            return {"goal": goal, "nodes": [], "edges": []}
         raise ValueError("llm produced no traceable node")
 
     node_ids = {n["node_id"] for n in nodes}
@@ -371,29 +291,27 @@ def _graph_to_requirements(graph: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _simulate_requirement_extractor(input_data: dict[str, Any]) -> dict[str, Any]:
-    """LLM 抽图（含机械后处理 + 降级）"""
+    """LLM 抽图 + 机械后处理。LLM 不可用就抛，不降级。
+
+    这里曾经有个 except 兜底：任何 LLM 侧问题都退成 `_rule_extract` 的
+    词面分类。看着是「投料口不瘫」，实际是开了条绕过质量门禁的通道——
+    词面版语义最差，却因为逐句切分不丢句子、每句都挂 trace_to，
+    4 条判据（契约/覆盖率/追溯/无幻觉，测的都不是语义质量）必然全过，
+    于是拿绿灯、被放行下游。降级不是兜底，是假信号。
+    所以这里让异常往上走：executor 会记原因并把 TaskRun 置 FAILED。
+    """
     from runtime import llm
 
     sentences = input_data.get("source_sentences", [])
-    narrative = input_data.get("narrative", "")
     goal = next((s["text"] for s in sentences if s["role"] == "goal"), "")
 
-    result = dict(input_data)
-    degrade_reason = ""
-
-    try:
-        rendered = "\n".join(
-            f'{s["sentence_id"]} [{s["role"]}] {s["text"]}' for s in sentences
-        )
-        raw = llm.complete_json(
-            _EXTRACT_PROMPT.format(sentences=rendered), max_tokens=8000
-        )
-        graph = _clean_graph(raw, sentences)
-        extractor = "llm"
-    except Exception as e:   # noqa: BLE001 — 任何 LLM 侧问题都降级，不该让投料口瘫
-        graph = _rule_extract(sentences)
-        extractor = "rule"
-        degrade_reason = f"{type(e).__name__}: {str(e)[:300]}"
+    rendered = "\n".join(
+        f'{s["sentence_id"]} [{s["role"]}] {s["text"]}' for s in sentences
+    )
+    raw = llm.complete_json(
+        _EXTRACT_PROMPT.format(sentences=rendered), max_tokens=8000
+    )
+    graph = _clean_graph(raw, sentences)
 
     # 图 → 兼容平铺列表，编号按 type 分别计数（建模盒按 type 分组）
     requirements = _graph_to_requirements(graph)
@@ -404,14 +322,13 @@ def _simulate_requirement_extractor(input_data: dict[str, Any]) -> dict[str, Any
         r["requirement_id"] = f"req_{_TYPE_PREFIX.get(rtype, 'obj')}_{counters[rtype]}"
         r["priority"] = "must_have"
 
+    result = dict(input_data)
     result.update({
         "business_goal": goal,
-        "extractor": extractor,
         "nodes": graph["nodes"],
         "edges": graph["edges"],
         "requirements": requirements,
         "requirement_count": len(requirements),
-        "degrade_reason": degrade_reason,
     })
     return result
 
@@ -426,8 +343,6 @@ def _simulate_requirement_set_builder(input_data: dict[str, Any]) -> dict[str, A
     result = dict(input_data)
     result.setdefault("context", "")
     result["set_id"] = result.get("set_id") or f"req_set_nl_{uuid4().hex[:8]}"
-    if result.get("extractor") not in EXTRACTORS:
-        result["extractor"] = "rule"
     # 去重（LLM 可能对同一句产出多条）
     seen: set[tuple[str, str]] = set()
     uniq = []
@@ -533,7 +448,6 @@ def _simulate_graph_fidelity_verifier(input_data: dict[str, Any]) -> dict[str, A
     if uncovered:
         details["uncovered_sentences"] = uncovered
 
-    details["degrade_reason"] = input_data.get("degrade_reason", "")
     result["evidence_detail"] = details
     return result
 
@@ -549,7 +463,6 @@ def _simulate_requirement_set_packager(input_data: dict[str, Any]) -> dict[str, 
         "set_id": input_data.get("set_id", ""),
         "business_goal": input_data.get("business_goal", ""),
         "context": input_data.get("context", ""),
-        "extractor": input_data.get("extractor", "rule"),
         "source_sentences": input_data.get("source_sentences", []),
         "nodes": input_data.get("nodes", []),
         "edges": input_data.get("edges", []),
@@ -560,10 +473,6 @@ def _simulate_requirement_set_packager(input_data: dict[str, Any]) -> dict[str, 
         "trace_integrity": input_data.get("trace_integrity", False),
         "no_hallucination": input_data.get("no_hallucination", False),
         "evidence_detail": input_data.get("evidence_detail", {}),
-        # schema 声明了这个字段，漏着不产出 = 声明了却拿不到。
-        # 丢了它，降级原因在最后一步被吞掉，看板和落盘都只能看到"降级了"，
-        # 看不到"为什么"——静默降级就是这么变成查不出来的。
-        "degrade_reason": input_data.get("degrade_reason", ""),
     }
 
 

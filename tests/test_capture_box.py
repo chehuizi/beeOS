@@ -30,25 +30,6 @@ from runtime.capture_runner import _split_sentences, _simulate_requirement_set_p
 from runtime.store import TaskRunStore
 
 
-def test_packager_keeps_degrade_reason():
-    """打包这步不许再把降级原因吞掉。
-
-    packager 是逐字段列举的白名单式重建，漏一个字段就等于静默丢一个事实。
-    degrade_reason 曾经就这么丢的：schema 声明了它（schemas.py 里它是
-    required=False 的正式字段），packager 没产出，于是看板和落盘都拿不到
-    「为什么降级」，每次只能靠 duration_ms 反推。声明了却拿不到 = 白声明。
-    """
-    out = _simulate_requirement_set_packager({
-        "extractor": "rule",
-        "degrade_reason": "LLMError: llm call timed out after 240.0s",
-        "business_goal": "wms 入库",
-    })
-    assert out["degrade_reason"] == "LLMError: llm call timed out after 240.0s"
-
-    # 没降级时也要有这个键（空串），schema 声明的字段不能时有时无
-    assert _simulate_requirement_set_packager({"extractor": "llm"})["degrade_reason"] == ""
-
-
 @pytest.fixture
 def store() -> TaskRunStore:
     return TaskRunStore(Path(tempfile.mktemp(suffix=".jsonl")))
@@ -281,6 +262,10 @@ class TestSentenceSplitting:
 
 class TestCaptureEndToEnd:
     TEXT = "wms的流程有入库流程、出库流程、盘点流程、库内作业流程"
+    # 编排测试不赌 LLM 输出质量，理由见 _stub_compliant_llm
+    @pytest.fixture(autouse=True)
+    def _use_compliant_llm(self, stub_llm):
+        pass
 
     def test_accepted_with_all_four_checks_passing(self, store: TaskRunStore):
         r = trigger_task(
@@ -364,6 +349,42 @@ class TestCaptureEndToEnd:
 # ============================================================
 
 
+def _stub_compliant_llm(prompt: str, **kw) -> dict:
+    """按 prompt 里的句子造一份逐句覆盖的"合规图"。
+
+    这几组测的是**编排**：五步 beeline、4 条判据、每条需求溯源到哪一句。
+    真调 LLM 有两个问题：抽图约 1/3 概率被幻觉判据全剔（模型改写了 action，
+    那是真实的产品缺陷，不该由编排测试承担），以及单次 10~120 秒。
+    LLM 输出的机械处理在 TestMechanicalGates 里真测，那组不 stub。
+    edges 留空——_clean_graph 会按原文明写顺序自动补成链。
+    """
+    import re
+
+    nodes, goal = [], ""
+    tail = prompt.split("原文句子：")[-1]
+    for line in tail.strip().split("\n"):
+        m = re.match(r"(\S+)\s+\[(\w+)\]\s+(.*)", line.strip())
+        if not m:
+            continue
+        sid, role, text = m.group(1), m.group(2), m.group(3)
+        if role == "goal":
+            goal = text
+            continue
+        nodes.append({
+            "node_id": f"node_{len(nodes) + 1}", "action": text,
+            "writes": [], "reads": [], "measures": [], "trace_to": sid,
+        })
+    return {"goal": goal, "nodes": nodes, "edges": []}
+
+
+@pytest.fixture
+def stub_llm(monkeypatch):
+    """把 LLM 换成按输入现造的合规产出（见 _stub_compliant_llm 的理由）"""
+    from runtime import llm
+    monkeypatch.setattr(llm, "complete_json", _stub_compliant_llm)
+    return _stub_compliant_llm
+
+
 def _run_capture(store, narrative, llm_result=None):
     """跑一次捕获盒；llm_result 不为 None 时假装 LLM 返回它"""
     if llm_result is not None:
@@ -376,36 +397,48 @@ def _run_capture(store, narrative, llm_result=None):
 
 
 class TestMechanicalGates:
-    def test_llm_hallucination_is_dropped_not_trusted(self, store):
-        """LLM 编造原文没有的动作 → 被 sentence+原文双重校验剔除"""
+    def test_llm_hallucination_is_not_trusted(self, store):
+        """LLM 编造原文没有的动作 → 不进产出；全被剔光就是履约中止。
+
+        编造内容绝不会出现在产出里（这条是硬要求）。至于"剔光之后怎么办"，
+        降级删掉后是中止，不再是"产出一份空图 + 判它 rejected"——
+        两者都不该被当成"跑完了"。
+        """
         r = _run_capture(
-            store, "库存数量不能为负。",
+            store, "库存管理。库存数量不能为负。",
             llm_result={"nodes": [
-                {"action": "订单必须7天内退款", "trace_to": "sent_1"},
+                {"action": "订单必须7天内退款", "trace_to": "sent_2"},
             ]},
         )
-        actions = [n["action"] for n in r["result"]["nodes"]]
-        assert "订单必须7天内退款" not in actions
+        assert r["status"] == "failed"
+        assert r["result"] is None
 
-    def test_llm_untraceable_is_dropped(self, store):
-        """trace_to 指向不存在的句子 → 剔除"""
+    def test_llm_untraceable_aborts_instead_of_yielding_empty_graph(self, store):
+        """trace_to 全指向不存在的句子 → 履约中止，不产出空图。
+
+        以前这里是"剔除掉，产出 nodes=[]"——然后 source_coverage 掉下去、
+        被判 rejected。降级删掉之后更进一步：抽不出任何可追溯的东西，
+        就没有产出可言，直接中止。这两种都不该算"跑完了"。
+        """
         r = _run_capture(
-            store, "库存数量不能为负。",
+            store, "库存管理。库存数量不能为负。",
             llm_result={"nodes": [
                 {"action": "库存数量不能为负", "trace_to": "sent_999"},
             ]},
         )
-        assert r["result"]["nodes"] == []
+        assert r["status"] == "failed"
+        bad = [s for s in r["op_trace"] if s["status"] == "failed"]
+        assert bad and "no traceable node" in bad[0]["error"]
 
-    def test_llm_desc_not_in_source_is_dropped(self, store):
-        """action 不在原句里（模型改写）→ 剔除"""
+    def test_llm_desc_not_in_source_aborts(self, store):
+        """action 被模型改写 → 剔掉；这是实跑最常见的失败原因（约 1/3）。"""
         r = _run_capture(
-            store, "库存数量不能为负。",
+            store, "库存管理。库存数量不能为负。",
             llm_result={"nodes": [
-                {"action": "库存数量不可小于零", "trace_to": "sent_1"},
+                {"action": "库存数量不可小于零", "trace_to": "sent_2"},
             ]},
         )
-        assert r["result"]["nodes"] == []
+        assert r["status"] == "failed"
 
     def test_llm_guard_not_in_source_is_dropped(self, store):
         """守卫文本不在原句里（模型编的）→ 边保留但守卫清空
@@ -453,14 +486,15 @@ class TestMechanicalGates:
             ("node_1", "node_2"), ("node_2", "node_3"),
         ]
 
-    def test_llm_accepted_path_reports_llm_extractor(self, store):
+    def test_accepted_path_flattens_node_to_process(self, store):
         r = _run_capture(
             store, "库存数量不能为负。",
             llm_result={"nodes": [
                 {"action": "库存数量不能为负", "trace_to": "sent_1"},
             ]},
         )
-        assert r["result"]["extractor"] == "llm"
+        # 抽取者字段整条删了：只剩 LLM 一条腿，"谁抽的"没有判别力了
+        assert "extractor" not in r["result"]
         # 节点 → 平铺成 process（type 由位置决定，不是模型给的）
         assert r["result"]["requirements"][0]["requirement_type"] == "process"
 
@@ -518,17 +552,32 @@ class TestMechanicalGates:
         """只被 goal 覆盖的句子不算漏——目标本身就是它"""
         r = _run_capture(
             store, "建模退款流程。",
-            llm_result={"requirements": []},
+            llm_result={"goal": "建模退款流程", "nodes": [], "edges": []},
         )
+        # 只有业务目标、没有可抽取的事实 → 这是正常业务结果，不是模型失职：
+        # 盒子声明了 no_deliver 例外，产出零需求，交给判据拒。
+        # （降级删掉时这条一度失效——空图和"模型没抽出来"曾经被混成中止）
         assert r["result"]["source_sentences"][0]["role"] == "goal"
-        # 没有 fact 句子 → 分母 0 → coverage 0.0，需求数为 0 → no_deliver
         assert r["result"]["requirement_count"] == 0
+        assert r["status"] == "completed"
         assert r["acceptance_status"] == "rejected"
 
-    def test_degrade_reason_recorded(self, store):
+    def test_llm_outage_aborts_with_reason(self, store, monkeypatch):
+        """LLM 不可用 → 中止，且原因随 op_trace 带出来。
+
+        原先这里断言的是"降级到规则版并记录降级原因"。降级删掉后，
+        替代物必须是"中止 + 说清为什么"——静默中止和静默降级一样是假信号。
+        """
+        from runtime import llm
+        monkeypatch.setattr(
+            llm, "complete_json",
+            lambda *a, **kw: (_ for _ in ()).throw(llm.LLMError("simulated outage")),
+        )
         r = _run_capture(store, "库存数量不能为负。")
-        assert r["result"]["extractor"] == "rule"
-        assert "no llm" in r["result"]["evidence_detail"]["degrade_reason"]
+        assert r["status"] == "failed"
+        assert r["acceptance_status"] is None
+        bad = [s for s in r["op_trace"] if s["status"] == "failed"]
+        assert bad and "simulated outage" in bad[0]["error"]
 
 
 class TestAcceptanceGate:
@@ -538,6 +587,10 @@ class TestAcceptanceGate:
     看板要按它决定放不放行，所以 trigger_task 必须把判据明细带出来——
     只给一个 accepted 徽章等于把「哪条没过」藏起来了。
     """
+
+    @pytest.fixture(autouse=True)
+    def _use_compliant_llm(self, stub_llm):
+        pass
 
     def _run(self, store, text):
         return trigger_task(

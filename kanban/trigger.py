@@ -397,9 +397,15 @@ def trigger_task(
         "acceptance_passed": acceptance_passed,
         "rejection_class": rejection_class,
         "result": task_run.result,
-        # 真实执行轨迹（按执行顺序）——看板用来在盒子内部回放履约过程
+        # 真实执行轨迹（按执行顺序）——看板用来在盒子内部回放履约过程。
+        # error 必须带上：降级删掉之后，LLM 不可用就是履约中止，
+        # 看板得能显示「哪个 op 因为什么挂了」，而不是只看到一个 failed 标签。
         "op_trace": [
-            {"op_id": rec.op_id, "status": rec.status}
+            {
+                "op_id": rec.op_id,
+                "status": rec.status,
+                **({"error": rec.error} if rec.error else {}),
+            }
             for rec in task_run.operations.values()
         ],
     }
@@ -594,29 +600,23 @@ def _normalize_requirement_ids(payload: dict[str, Any]) -> list[str]:
 
 
 def _structure_business_text_llm(text: str) -> dict[str, Any]:
-    """LLM 结构化：调模型 → 三道机械检查 → 不过就降级规则版
+    """LLM 结构化：调模型 → 机械检查 → 有一道不过就抛，不降级规则版
+
+    返回里带 _extractor_note 的，是「模型参与了、只是某些机械环节按规则走」
+    （id 重编号、business_goal 取规则版）——那是"LLM 只做语义、机械做校验"
+    的正确应用，不是降级。真正没模型参与的情况现在不存在了。
 
     Returns:
         {"set_id", "business_goal", "requirements", "_extractor", "_extractor_note"}
-        _extractor = "llm" 表示模型输出通过了全部检查
     """
     from runtime import llm
 
-    def _fallback(note: str) -> dict[str, Any]:
-        p = _structure_business_text_rule(text)
-        p["_extractor"] = "rule"
-        p["_extractor_note"] = note
-        return p
-
-    try:
-        raw = llm.complete_json(
-            _CAPTURE_PROMPT.format(text=text), max_tokens=2000
-        )
-    except llm.LLMError as e:
-        return _fallback(f"llm unavailable: {e}")
+    raw = llm.complete_json(_CAPTURE_PROMPT.format(text=text), max_tokens=2000)
 
     if not isinstance(raw, dict):
-        return _fallback(f"llm returned {type(raw).__name__}, expected object")
+        raise llm.LLMError(
+            f"llm returned {type(raw).__name__}, expected object"
+        )
 
     # 补齐可选字段，避免下游因缺 context/traceable_to 报错
     raw.setdefault("context", "")
@@ -626,7 +626,9 @@ def _structure_business_text_llm(text: str) -> dict[str, Any]:
     schema = get_definition().get_schema("schema_business_requirement_set")
     errors = validate_payload(raw, schema)
     if errors:
-        return _fallback("llm output violates task_schema: " + "; ".join(errors[:3]))
+        raise llm.LLMError(
+            "llm output violates task_schema: " + "; ".join(errors[:3])
+        )
 
     # set_id 是系统内部标识，必须由系统生成——LLM 编的（实测 req_set_001）
     # 既不保证唯一也不保证前缀，重复投料会撞 id
@@ -635,11 +637,13 @@ def _structure_business_text_llm(text: str) -> dict[str, Any]:
     # 第 2 道：幻觉
     errors = _no_hallucination(raw, text)
     if errors:
-        return _fallback("hallucination check failed: " + "; ".join(errors[:3]))
+        raise llm.LLMError(
+            "hallucination check failed: " + "; ".join(errors[:3])
+        )
 
-    # 第 3 道：空需求不算成功（模型说"抽不出来"时退回规则版再试一次）
+    # 第 3 道：空需求不算成功（模型说"抽不出来"就是它没履约）
     if not raw.get("requirements"):
-        return _fallback("llm returned 0 requirements")
+        raise llm.LLMError("llm returned 0 requirements")
 
     raw["_extractor"] = "llm"
     # 第 4 道：id 规范化（机械、不涉及语义，固定锚点格式）
@@ -661,14 +665,15 @@ def _structure_business_text_llm(text: str) -> dict[str, Any]:
     return raw
 
 
-# 保留规则版原名，供 LLM 版降级调用
+# 规则版仍被用，但只剩一处：business_goal 一律取它（LLM 会改写原文）。
+# 它不再是「LLM 挂掉时的兜底」——那条路已经删了。
 _structure_business_text_rule = structure_business_text
 
 
 def structure_business_text_with_llm(text: str, *, model: str = "minimax/MiniMax-M3") -> dict[str, Any]:
-    """投料口入口：优先 LLM 结构化，不可用则降级规则版
+    """投料口入口：只有 LLM 一条路
 
-    无论走哪条路，产出都保证满足 schema_business_requirement_set 的结构契约——
-    投料口下游（trigger_task）不会再因为结构问题被拒。
+    产出保证满足 schema_business_requirement_set 的结构契约——
+    不满足就抛（LLMError），不退回规则版。
     """
     return _structure_business_text_llm(text)

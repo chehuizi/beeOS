@@ -200,14 +200,43 @@ def extract_json(text: str) -> Any:
     raise LLMError(f"model output is not valid JSON: {cleaned[:200]!r}")
 
 
+def _readable_error(text: str, limit: int = 300) -> str:
+    """从子进程错误里挑出能读的那几行。
+
+    子进程异常时 stderr 是一整段 traceback，前 300 字符全是
+    "Traceback (most recent call last):" 加文件路径，而真正的原因
+    （httpx.ReadTimeout / 401 / JSON 解析失败…）在最后一两行。
+    按字符数截头部等于把答案切掉——降级原因照抄这段的话，
+    看板上显示的是路径，不是原因。
+    """
+    lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    if len(lines) <= 2:
+        picked = lines
+    elif lines[0].startswith("Traceback"):
+        picked = ["…"] + lines[-1:]
+    else:
+        picked = lines[:2] + ["…"] + lines[-1:]
+    return "\n".join(picked)[:limit]
+
+
 def complete(
     prompt: str,
     *,
     model: str = "minimax/MiniMax-M3",
     max_tokens: int = 2000,
-    timeout: float = 120.0,
+    timeout: float = 240.0,
 ) -> str:
-    """调用 LLM，返回原始文本（未剥杂质）"""
+    """调用 LLM，返回原始文本（未剥杂质）
+
+    timeout 默认 240s 不是保守，是实测出来的：MiniMax-M3 是推理模型，
+    抽取那条腿 prompt 只有 ~1k 字符，但 max_tokens=8000 会被吃满，
+    实测输出 28k 字符（大部分是 <think> 段）、耗时 118s。
+    原来的 120s 上限只剩 2 秒余量 —— 输入稍长就必然超时降级，
+    而超时会静默退成规则版抽取（capture_runner 捕所有异常）。
+    这是治标：真该做的是压输出，那是另一轮的事。
+    """
     if not _LLM_CALL_SCRIPT.exists():
         raise LLMError(f"llm_call.py not found at {_LLM_CALL_SCRIPT}")
 
@@ -233,8 +262,10 @@ def complete(
 
     out = (proc.stdout or "").strip()
     if proc.returncode != 0:
-        err = (proc.stderr or out).strip()[:300]
-        raise LLMError(f"llm call failed (exit {proc.returncode}): {err}")
+        raise LLMError(
+            f"llm call failed (exit {proc.returncode}): "
+            f"{_readable_error(proc.stderr or out)}"
+        )
     if not out:
         raise LLMError("llm returned empty output")
     return out

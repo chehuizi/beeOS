@@ -393,7 +393,7 @@ def _simulate_requirement_extractor(input_data: dict[str, Any]) -> dict[str, Any
     except Exception as e:   # noqa: BLE001 — 任何 LLM 侧问题都降级，不该让投料口瘫
         graph = _rule_extract(sentences)
         extractor = "rule"
-        degrade_reason = f"{type(e).__name__}: {str(e)[:160]}"
+        degrade_reason = f"{type(e).__name__}: {str(e)[:300]}"
 
     # 图 → 兼容平铺列表，编号按 type 分别计数（建模盒按 type 分组）
     requirements = _graph_to_requirements(graph)
@@ -560,6 +560,10 @@ def _simulate_requirement_set_packager(input_data: dict[str, Any]) -> dict[str, 
         "trace_integrity": input_data.get("trace_integrity", False),
         "no_hallucination": input_data.get("no_hallucination", False),
         "evidence_detail": input_data.get("evidence_detail", {}),
+        # schema 声明了这个字段，漏着不产出 = 声明了却拿不到。
+        # 丢了它，降级原因在最后一步被吞掉，看板和落盘都只能看到"降级了"，
+        # 看不到"为什么"——静默降级就是这么变成查不出来的。
+        "degrade_reason": input_data.get("degrade_reason", ""),
     }
 
 

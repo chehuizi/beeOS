@@ -94,6 +94,65 @@ class TestTaskRunStore:
         assert len(records) == 1
         assert records[0]["box_id"] == box.id
 
+    def test_degradation_reason_is_persisted(self, store: TaskRunStore):
+        """降级原因必须事后可查。
+
+        整份 result 不落盘（含 nodes / edges），但「为什么降级」这件事不落，
+        看板上的 ⚠ 就只能告诉你降级了、不告诉你原因——下次只能靠
+        duration_ms 反推。这里盯的就是别再退回那种状态。
+        """
+        box = get_inv_def()
+        beeline = get_inv_beeline()
+        tr = create_task_run(
+            "o", "i", box.result.result_schema, f"{box.id}@v{box.version}",
+            beeline.id, beeline.version, "rt", "in",
+        )
+        tr.result = {"extractor": "rule", "degrade_reason": "LLMError: timed out after 240.0s"}
+        store.append(tr, box_id=box.id, acceptance_status="rejected",
+                     rejection_class="insufficient_coverage")
+
+        record = store.list_recent()[0]
+        assert record["degradation"] == {
+            "extractor": "rule",
+            "degraded": True,
+            "reason": "LLMError: timed out after 240.0s",
+        }
+
+    def test_degradation_distinguishes_partial_rollback(self, store: TaskRunStore):
+        """LLM 参与了、只是部分处理按规则走，不等于降级。
+
+        建模盒在 id 重编号、business_goal 取规则版时会留 note，但那是
+        模型参与了。混进"降级"里，下次看统计就会把正常跑也算成降级。
+        """
+        box = get_mod_def()
+        beeline = get_mod_beeline()
+        tr = create_task_run(
+            "o", "i", box.result.result_schema, f"{box.id}@v{box.version}",
+            beeline.id, beeline.version, "rt", "in",
+        )
+        # 建模盒用 _extractor / _extractor_note 这套字段名
+        tr.result = {"_extractor": "llm", "_extractor_note": "business_goal 取规则版"}
+        store.append(tr, box_id=box.id, acceptance_status="accepted")
+
+        assert store.list_recent()[0]["degradation"] == {
+            "extractor": "llm",
+            "degraded": False,
+            "reason": "business_goal 取规则版",
+        }
+
+    def test_no_degradation_field_when_nothing_degraded(self, store: TaskRunStore):
+        """没降级就不该有 degradation 键值——空对象也是信号，会被误读成"降级过"。"""
+        box = get_inv_def()
+        beeline = get_inv_beeline()
+        tr = create_task_run(
+            "o", "i", box.result.result_schema, f"{box.id}@v{box.version}",
+            beeline.id, beeline.version, "rt", "in",
+        )
+        tr.result = {"extractor": "llm", "degrade_reason": ""}
+        store.append(tr, box_id=box.id, acceptance_status="accepted")
+
+        assert store.list_recent()[0]["degradation"] is None
+
     def test_list_recent_sorted_desc(self, store: TaskRunStore):
         box = get_inv_def()
         beeline = get_inv_beeline()

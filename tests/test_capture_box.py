@@ -26,8 +26,27 @@ from kanban.trigger import (
     registered_box_ids,
     trigger_task,
 )
-from runtime.capture_runner import _split_sentences
+from runtime.capture_runner import _split_sentences, _simulate_requirement_set_packager
 from runtime.store import TaskRunStore
+
+
+def test_packager_keeps_degrade_reason():
+    """打包这步不许再把降级原因吞掉。
+
+    packager 是逐字段列举的白名单式重建，漏一个字段就等于静默丢一个事实。
+    degrade_reason 曾经就这么丢的：schema 声明了它（schemas.py 里它是
+    required=False 的正式字段），packager 没产出，于是看板和落盘都拿不到
+    「为什么降级」，每次只能靠 duration_ms 反推。声明了却拿不到 = 白声明。
+    """
+    out = _simulate_requirement_set_packager({
+        "extractor": "rule",
+        "degrade_reason": "LLMError: llm call timed out after 240.0s",
+        "business_goal": "wms 入库",
+    })
+    assert out["degrade_reason"] == "LLMError: llm call timed out after 240.0s"
+
+    # 没降级时也要有这个键（空串），schema 声明的字段不能时有时无
+    assert _simulate_requirement_set_packager({"extractor": "llm"})["degrade_reason"] == ""
 
 
 @pytest.fixture

@@ -556,7 +556,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .rs-degrade {{
     background: #fffbeb; border: 1px solid #fcd34d; color: #92400e;
     padding: 5px 8px; border-radius: 5px; font-size: 11px;
-    margin-bottom: 6px; line-height: 1.45; cursor: help;
+    margin-bottom: 6px; line-height: 1.5;
   }}
   .rs-hint {{ font-size: 10px; color: #94a3b8; margin-bottom: 8px; font-style: italic; }}
   /* 流程图：节点 + 边 + 守卫。竖排单链——看板列窄，横排会被挤断 */
@@ -1053,16 +1053,10 @@ function renderRequirementSet(r) {{
   // 4 项判据不在这里画——它们跟上面 ACCEPTANCE 区是同一批数据。
   // 重复一遍会让人误以为这是 beeline 的结论，而不是验收判定。
   const degraded = r.extractor !== 'llm';
-  const degradeNote = degraded
-    ? `<div class="rs-degrade" title="${{(r.evidence_detail && r.evidence_detail.degrade_reason) || 'LLM 未参与，退回规则抽取'}}">
-         ⚠ 降级：规则版抽取（LLM 未参与，守卫和指标靠词面识别，请人工核对）
-       </div>`
-    : '';
   const nNodes = (r.nodes || []).length;
   const nEdges = (r.edges || []).length;
   return `<div class="rs-pack">
     <div class="rs-head">业务目标：${{esc(r.business_goal || '—')}}</div>
-    ${{degradeNote}}
     <div class="rs-checks"><span class="rs-check ${{degraded ? 'by warn' : 'by'}}">抽取者：${{esc(r.extractor)}}</span></div>
     <div class="rs-hint">流程图：${{nNodes}} 个节点${{nEdges ? ` · ${{nEdges}} 条转移` : ''}} —— 类型由所在位置决定，无需逐条确认</div>
     ${{renderFlowGraph(r)}}
@@ -1108,6 +1102,27 @@ function renderAcceptance(a) {{
   </div>`;
 }}
 
+// 降级是产物级事实，不属于「需求集」或「DDD 模型」任何一种视图，
+// 所以只在产物卡渲染一次、两个盒子共用。原先它挂在 renderRequirementSet 里，
+// 建模盒降级时看板一个字都不显示——降级静默比降级本身更糟。
+// 两种情况分开说，不能混成一句「降级了」：
+//   extractor=rule → LLM 压根没参与，退回规则抽取
+//   extractor=llm 但带 note → 模型参与了，只是部分处理按规则走
+//     （id 重编号、business_goal 取规则版——LLM 会改写原文）
+function degradeNotice(r) {{
+  if (!r) return '';
+  const extractor = r.extractor || r._extractor || '';
+  const reason = r.degrade_reason || r._extractor_note || '';
+  const fellBack = !!extractor && extractor !== 'llm';
+  if (!fellBack && !reason) return '';
+  const title = fellBack ? '降级到规则版抽取' : '部分处理退回规则版';
+  const body = reason ? `原因：${{esc(reason)}}` : '原因未记录';
+  return `<div class="rs-degrade">
+    ⚠ ${{title}} · ${{body}}<br>
+    请人工核对产出
+  </div>`;
+}}
+
 function renderArtifact() {{
   const a = _boxState.artifact;
   if (!a) return `<div class="empty" style="padding:24px 8px;">(等待产出)</div>`;
@@ -1124,6 +1139,7 @@ function renderArtifact() {{
     <span class="artifact-badge ${{badge}}">${{acc.toUpperCase()}}</span>
     <div class="tid">task_run ${{a.task_run_id}}</div>
     ${{why}}
+    ${{degradeNotice(a.result)}}
     ${{body}}
     <details><summary>raw JSON</summary><pre>${{JSON.stringify(a.result, null, 2)}}</pre></details>
   </div>`;
@@ -1766,7 +1782,7 @@ class KanbanRequestHandler(BaseHTTPRequestHandler):
                 "payload": pkg,
                 "requirement_count": pkg.get("requirement_count", 0),
                 "extractor": pkg.get("extractor", "rule"),
-                "note": (pkg.get("evidence_detail") or {}).get("degrade_reason") or "",
+                "note": pkg.get("degrade_reason") or "",
             })
             return
 

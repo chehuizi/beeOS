@@ -39,6 +39,23 @@ def task_run_to_record(
         if e.event == "op_finish" and (e.detail or {}).get("status") == "failed"
     )
 
+    # 降级显性化：整份 result 不落盘（含 nodes / edges，体积大且能从重放得到），
+    # 但降级这件事必须事后可查。少了这段，看板上标了 ⚠ 也只能告诉你
+    # "降级了"，不告诉你"为什么"——下次只能靠 duration_ms 反推。
+    # 两个盒子字段名不一样（捕获盒 degrade_reason / 建模盒 _extractor_note），
+    # 这里认两种，省得以后每加一个盒子就漏一次。
+    # degraded 区分两件不同的事：LLM 压根没参与 vs 模型参与了但部分处理按规则走。
+    degradation = None
+    if task_run.result:
+        extractor = task_run.result.get("extractor") or task_run.result.get("_extractor") or ""
+        reason = task_run.result.get("degrade_reason") or task_run.result.get("_extractor_note") or ""
+        if reason:
+            degradation = {
+                "extractor": extractor or "unknown",
+                "degraded": bool(extractor) and extractor != "llm",
+                "reason": reason,
+            }
+
     return {
         "task_run_id": task_run.identity.task_run_id,
         "box_id": box_id,
@@ -49,6 +66,7 @@ def task_run_to_record(
         "status": task_run.status.value,
         "acceptance_status": acceptance_status,
         "rejection_class": rejection_class,
+        "degradation": degradation,
         "started_at": task_run.identity.started_at.isoformat() if task_run.identity.started_at else None,
         "finished_at": task_run.identity.finished_at.isoformat() if task_run.identity.finished_at else None,
         "created_at": task_run.identity.created_at.isoformat(),

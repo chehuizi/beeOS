@@ -328,6 +328,48 @@ class TestKanbanServer:
         assert "renderAcceptance(a) + renderRelayBar()" in body
         assert "renderArtifact() + renderRelayBar()" not in body
 
+    def test_html_shows_why_extraction_degraded(self, server_url: tuple[str, TaskRunStore]):
+        """降级要说清为什么。
+
+        看板上的 ⚠ 以前把原因塞在 title 里，而且读的是
+        evidence_detail.degrade_reason —— 那个路径不存在，
+        title 永远拿不到真原因，静默退回兜底文案，看着像有原因
+        其实从没发生过。降级必须写在正文里，不靠 hover。
+        """
+        url, _ = server_url
+        conn = HTTPConnection(url.replace("http://", ""))
+        conn.request("GET", "/")
+        body = conn.getresponse().read().decode("utf-8")
+        conn.close()
+        assert "r.degrade_reason" in body
+        assert "evidence_detail.degrade_reason" not in body
+        # 原因落在正文，不在 title（hover 才看得见 = 没有）
+        assert "rs-degrade" in body
+
+    def test_llm_error_keeps_the_actual_cause(self):
+        """降级原因要能读：traceback 头部全是路径，答案在最后一两行。
+
+        按字符截前 300 会把真正的原因（httpx.ReadTimeout / 401）切掉，
+        看板上就只剩一串文件路径——那不叫原因。
+        """
+        from runtime.llm import _readable_error
+
+        tb = (
+            "Traceback (most recent call last):\n"
+            '  File "/venv/lib/httpx/_transports/default.py", line 101, in map_httpcore_exceptions\n'
+            "    yield\n"
+            "httpx.ReadTimeout: timed out\n"
+        )
+        out = _readable_error(tb)
+        assert "httpx.ReadTimeout: timed out" in out
+        assert "default.py" not in out          # 堆栈路径不该出现在原因里
+        assert "Traceback (most recent call last)" not in out
+
+        # 已经够短的就原样保留，别加省略号
+        assert _readable_error("401 Unauthorized") == "401 Unauthorized"
+        # 空输入不炸
+        assert _readable_error("   \n  ") == ""
+
     def test_html_ships_no_scroll_lock(self, server_url: tuple[str, TaskRunStore]):
         """四栏 + 底座要一屏装得下。
 

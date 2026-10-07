@@ -58,6 +58,15 @@ class LLMError(RuntimeError):
     """LLM 调用失败（端点错 / 凭证错 / 超时 / 输出无法解析为 JSON）"""
 
 
+class LLMParseError(LLMError):
+    """模型输出无法解析为 JSON（含输出为空）
+
+    单独一类，因为它是**随机性**故障：推理模型可能把 max_tokens 全花在
+    <think> 上，JSON 压根没轮到输出（实测有整轮返回空串）。换个采样重试
+    通常就正常了——所以值得自动重试，而 401 / 超时那类不值得。
+    """
+
+
 def _is_placeholder(key: str) -> bool:
     """判断 apiKey 是不是占位符（sk-xxx / your-api-key / ...）"""
     low = key.strip().lower()
@@ -197,7 +206,7 @@ def extract_json(text: str) -> Any:
                         return json.loads(cleaned[start : i + 1])
                     except json.JSONDecodeError:
                         break
-    raise LLMError(f"model output is not valid JSON: {cleaned[:200]!r}")
+    raise LLMParseError(f"model output is not valid JSON: {cleaned[:200]!r}")
 
 
 def _readable_error(text: str, limit: int = 300) -> str:
@@ -267,10 +276,28 @@ def complete(
             f"{_readable_error(proc.stderr or out)}"
         )
     if not out:
-        raise LLMError("llm returned empty output")
+        # 整轮空输出和"输出了但解析不了"是同一类随机故障，同样可重试
+        raise LLMParseError("llm returned empty output")
     return out
 
 
-def complete_json(prompt: str, **kw: Any) -> Any:
-    """调用 LLM 并直接返回解析后的 JSON"""
-    return extract_json(complete(prompt, **kw))
+def complete_json(prompt: str, *, retries: int = 2, **kw: Any) -> Any:
+    """调用 LLM 并解析成 JSON；解析失败（含空输出）自动重试。
+
+    只对 `LLMParseError` 重试，这是刻意的：
+    - 空输出 / 不是 JSON：模型思考吃满了 max_tokens，JSON 没轮到输出。
+      换次采样通常就正常，重试走的是同一条腿，不引入任何假数据——
+      和"降级到规则版"性质完全相反，那条路已经删了。
+    - 401 / 凭证错：重试多少次都一样，白等。
+    - 超时：单次 240 秒，重试三次就是 12 分钟干等，该由调用方决定重投。
+
+    retries=2 即最多 3 次尝试。真的三次都解析不了，那是该失败，不是该兜底。
+    """
+    last: LLMParseError | None = None
+    for attempt in range(retries + 1):
+        try:
+            return extract_json(complete(prompt, **kw))
+        except LLMParseError as e:
+            last = e
+    assert last is not None
+    raise last

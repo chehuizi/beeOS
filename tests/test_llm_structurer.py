@@ -341,3 +341,90 @@ def _tmp_config(options: dict) -> Path:
         yaml.safe_dump({"provider": {"minimax": {"options": options}}})
     )
     return d / "config.yaml"
+
+
+# ============================================================
+# 输出解析失败的重试
+# ============================================================
+
+
+class TestParseRetry:
+    """只重试随机性故障，不重试确定性故障。
+
+    删掉降级之后，"模型没给出可用输出"会一路冒到履约中止。空输出是其中
+    最常见的一种（实测整轮返回空串：推理模型把 max_tokens 花在 <think>
+    上，JSON 没轮到输出）。这是随机的——换次采样通常就好，所以该重试。
+
+    但重试不是降级：走的还是同一条腿，产出的还是模型的东西。
+    以前那条"降级到规则版"的路已经删了，别再把它悄悄加回来。
+    """
+
+    def test_empty_output_is_retried_then_succeeds(self, monkeypatch):
+        from runtime import llm
+
+        calls = []
+
+        def flaky(prompt, **kw):
+            calls.append(1)
+            if len(calls) < 3:
+                return ""          # 整轮空输出
+            return '{"ok": true}'
+
+        monkeypatch.setattr(llm, "complete", flaky)
+        assert llm.complete_json("x") == {"ok": True}
+        assert len(calls) == 3
+
+    def test_unparseable_output_is_retried(self, monkeypatch):
+        from runtime import llm
+
+        calls = []
+
+        def flaky(prompt, **kw):
+            calls.append(1)
+            if len(calls) == 1:
+                return "<think>想了很久</think>"   # 只有推理段，没有 JSON
+            return '{"ok": 1}'
+
+        monkeypatch.setattr(llm, "complete", flaky)
+        assert llm.complete_json("x") == {"ok": 1}
+        assert len(calls) == 2
+
+    def test_gives_up_after_retries(self, monkeypatch):
+        """重试有上限：三次都空就是该失败，不该无限兜底"""
+        from runtime import llm
+
+        calls = []
+        monkeypatch.setattr(llm, "complete", lambda p, **kw: (calls.append(1), "")[1])
+        with pytest.raises(llm.LLMParseError):
+            llm.complete_json("x")
+        assert len(calls) == 3      # 首次 + 2 次重试
+
+    def test_credential_error_is_not_retried(self, monkeypatch):
+        """401 重试多少次都一样——白等，直接抛"""
+        from runtime import llm
+
+        calls = []
+
+        def unauthorized(prompt, **kw):
+            calls.append(1)
+            raise llm.LLMError("llm call failed (exit 1): 401 Unauthorized")
+
+        monkeypatch.setattr(llm, "complete", unauthorized)
+        with pytest.raises(llm.LLMError):
+            llm.complete_json("x")
+        assert len(calls) == 1
+
+    def test_timeout_is_not_retried(self, monkeypatch):
+        """超时单次 240 秒，重试三次就是 12 分钟干等——该由调用方决定重投"""
+        from runtime import llm
+
+        calls = []
+
+        def slow(prompt, **kw):
+            calls.append(1)
+            raise llm.LLMError("llm call timed out after 240.0s")
+
+        monkeypatch.setattr(llm, "complete", slow)
+        with pytest.raises(llm.LLMError):
+            llm.complete_json("x")
+        assert len(calls) == 1

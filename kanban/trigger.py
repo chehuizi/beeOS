@@ -611,7 +611,13 @@ def _structure_business_text_llm(text: str) -> dict[str, Any]:
     """
     from runtime import llm
 
-    raw = llm.complete_json(_CAPTURE_PROMPT.format(text=text), max_tokens=2000)
+    # max_tokens 同样要够 think + JSON 两段，理由同 capture_runner：
+    # 推理模型的 <think> 占 95% 以上（实测 JSON 本体只要几百字符，
+    # 原始输出几万字符）。2000 额度会被 think 吃干净、JSON 轮不到输出，
+    # 整轮返回空串。这里的 JSON 比抽取腿还小，本可以给更少，
+    # 但额度决定的是「think 能想多久」而不是「给多少就必须想多久」——
+    # 给足才不会两头落空。
+    raw = llm.complete_json(_CAPTURE_PROMPT.format(text=text), max_tokens=16000)
 
     if not isinstance(raw, dict):
         raise llm.LLMError(

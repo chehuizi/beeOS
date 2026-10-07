@@ -308,8 +308,12 @@ def _simulate_requirement_extractor(input_data: dict[str, Any]) -> dict[str, Any
     rendered = "\n".join(
         f'{s["sentence_id"]} [{s["role"]}] {s["text"]}' for s in sentences
     )
+    # max_tokens 必须够 think + JSON 两段：实测 JSON 本体只要 439~1121 字符，
+    # 而 <think> 占 95% 以上。给 8000 时，长输入会整轮吃满额度、JSON 没轮到
+    # 输出，剥掉 think 后是空串（长输入 3 次里空 2 次）。额度是上限不是消耗量，
+    # 给到 16000 不会让每次都变慢——模型 think 完就输出 JSON 了。
     raw = llm.complete_json(
-        _EXTRACT_PROMPT.format(sentences=rendered), max_tokens=8000
+        _EXTRACT_PROMPT.format(sentences=rendered), max_tokens=16000
     )
     graph = _clean_graph(raw, sentences)
 

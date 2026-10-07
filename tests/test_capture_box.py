@@ -637,3 +637,34 @@ class TestAcceptanceGate:
         # beeline 里没有 acceptance op——判定是 execute() 之后单独调的
         assert not any("accept" in s["op_id"] for s in r["op_trace"])
         assert r["acceptance_status"] == "rejected"
+
+
+def test_extractor_asks_for_enough_room_for_thinking():
+    """抽取腿的 max_tokens 要够 think + JSON 两段。
+
+    实测：JSON 本体只要 439~1121 字符，<think> 占 95% 以上。
+    给 8000 时长输入整轮吃满额度、JSON 没轮到输出，剥掉 think 后是空串
+    （长输入 3 次空 2 次）。额度是上限不是消耗量，给到 16000 不会变慢。
+    """
+    import inspect
+
+    from runtime import capture_runner
+
+    src = inspect.getsource(capture_runner._simulate_requirement_extractor)
+    assert "max_tokens=16000" in src
+
+
+def test_modeling_structurer_also_asks_for_enough_room():
+    """建模盒那条腿的 max_tokens 同样要够 think + JSON 两段。
+
+    它原来是 2000——比抽取腿的 8000 还小，而 JSON 本体比抽取腿还小。
+    额度决定的是 think 能想多久，给 2000 就会被推理吃干净、JSON 轮不到
+    输出。这条测试盯的是别为了"省 token"把额度调回去。
+    """
+    import inspect
+
+    from kanban import trigger
+
+    src = inspect.getsource(trigger._structure_business_text_llm)
+    assert "max_tokens=2000" not in src
+    assert "max_tokens=16000" in src

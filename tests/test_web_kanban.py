@@ -309,6 +309,25 @@ class TestKanbanServer:
         assert "pos._acc" not in body
         assert "_scene2d.setAcceptance" not in body
 
+    def test_html_ships_no_scroll_lock(self, server_url: tuple[str, TaskRunStore]):
+        """四栏 + 底座要一屏装得下。
+
+        之前 .beebox-body 写死 clamp(380px, 62vh, 560px)，加上 nameplate
+        和 domain context 底座之后总和超过一屏，页面开始滚——而看板的用处
+        就是一屏看完这盒子的全貌。整页 flex 锁高 + 四栏 min-height:0 是
+        这件事的全部机制，少一条矮屏上内容就压到底座上。
+        """
+        url, _ = server_url
+        conn = HTTPConnection(url.replace("http://", ""))
+        conn.request("GET", "/")
+        body = conn.getresponse().read().decode("utf-8")
+        conn.close()
+        assert "body.single-box" in body
+        assert "100vh" in body
+        # 四栏能被压扁：grid item 默认不许缩到内容高度以下
+        assert ".beebox-body > * { min-height: 0; }" in body
+        assert "single-box" in body
+
     def test_domain_context_exposes_box_level_facts(self, server_url: tuple[str, TaskRunStore]):
         """领域上下文是四栏共同依赖的底座——不是第五个先后步骤。
         上游从别人的 feeds_into 反推，不另写一遍。"""

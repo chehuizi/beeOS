@@ -310,6 +310,56 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .beebox-nameplate .spec {{ display: flex; gap: 18px; margin-top: 0; flex-wrap: wrap; }}
   .beebox-nameplate .spec-row {{ display: flex; gap: 6px; font-size: 10px; line-height: 1.8; }}
   .beebox-nameplate .spec-row .k {{ width: auto; text-align: left; padding-right: 0; }}
+  /* ===== 单盒视图：一屏装下整只盒子，不出页面滚动条 =====
+     之前 .beebox-body 写死 clamp(380px, 62vh, 560px)。加上 nameplate
+     和 domain context 底座之后总和超过一屏，页面开始滚——而看板的用处
+     就是一屏看完这盒子的全貌，滚了就等于把「四栏 + 底座并排对照」
+     这个核心读法拆开了。
+     改成整页 flex 吃满视口，盒子拿剩下的那份高度；四栏各自内部滚动
+     （产出可能很长），但页面本身不动。
+     只在四栏真并排时生效：换行布局下上下叠放，一屏装不下是物理事实。 */
+  @media (min-width: 1461px) {{
+    body.single-box {{
+      height: 100vh; min-height: 0; overflow: hidden;
+      display: flex; flex-direction: column;
+      padding: 16px 28px; box-sizing: border-box;
+    }}
+    body.single-box .page-head {{ flex: 0 0 auto; margin-bottom: 10px; }}
+    body.single-box h1 {{ font-size: 22px; margin-bottom: 3px; }}
+    body.single-box #content {{
+      flex: 1 1 auto; min-height: 0;
+      display: flex; flex-direction: column;
+    }}
+    body.single-box #content > .section {{
+      flex: 1 1 auto; min-height: 0;
+      display: flex; flex-direction: column; margin-bottom: 0;
+    }}
+    body.single-box .beebox-frame {{
+      flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+    }}
+    body.single-box .beebox-nameplate {{ flex: 0 0 auto; padding: 8px 20px; }}
+    body.single-box .beebox-body {{
+      flex: 1 1 auto; min-height: 0; height: auto; padding: 12px 14px 10px;
+    }}
+    /* 四栏要能被压扁。grid item 默认不许缩到内容高度以下，不给 min-height:0
+       的话矮屏上内容直接溢出、压到 domain context 底座上。
+       溢出内容由各栏自己收：投料框 / 判据区 / 产出槽本来就是内部滚动。 */
+    body.single-box .beebox-body > * {{ min-height: 0; }}
+    body.single-box .port, body.single-box .lane, body.single-box .lane-acc {{
+      overflow: hidden;
+    }}
+    body.single-box .lane-title, body.single-box .lane-ops {{
+      flex: 0 0 auto;
+    }}
+    /* 工位图吃掉 BEELINE 栏剩下的高度，不撑高整页。
+       svg 是 width:100% + height:auto，max-height 让它按比例缩，
+       preserveAspectRatio="xMidYMid meet" 居中留白。 */
+    body.single-box #box2d-stage {{ flex: 1 1 auto; min-height: 0; }}
+    body.single-box #box2d-stage svg {{ max-height: 100%; }}
+    body.single-box #acc-stage {{ flex: 0 0 auto; }}
+    body.single-box #acc-stage svg {{ max-height: 16vh; }}
+    body.single-box .ctx-band {{ flex: 0 0 auto; margin-bottom: 12px; }}
+  }}
   /* ===== DOMAIN CONTEXT：四栏都站在这上面 =====
      它跟四栏不是先后关系，是依赖关系——四栏同时引用它，
      没有哪一栏排在它前面或后面。所以是底座不是第五栏：
@@ -1556,6 +1606,10 @@ function render(data) {{
   _lastData = data;
   const box = data.box_filter;
   const isSingle = !!box;
+  // 单盒时整页锁成一屏（四栏 + 底座一屏看完）；多盒总览要滚，不锁
+  document.body.classList.toggle(
+    'single-box', isSingle && data.box_stats && data.box_stats.length > 0
+  );
 
   document.getElementById('filter-bar').innerHTML = renderFilters(data.boxes, box);
   document.getElementById('last-refresh').textContent =

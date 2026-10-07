@@ -309,6 +309,25 @@ class TestKanbanServer:
         assert "pos._acc" not in body
         assert "_scene2d.setAcceptance" not in body
 
+    def test_html_shows_artifact_before_it_is_judged(self, server_url: tuple[str, TaskRunStore]):
+        """链条是 IN → BEELINE → OUT → ACCEPTANCE：先明确产物，再判它过不过。
+
+        顺序和标签是同一个决定，挪不动。产出口排在验收前面，是因为闸
+        并没有拦住产物——REJECTED 的产出照样渲染在产出口里，禁用的只是
+        接力口。把菱形画在产出口前面，它就不像在拦任何东西。
+        """
+        url, _ = server_url
+        conn = HTTPConnection(url.replace("http://", ""))
+        conn.request("GET", "/")
+        body = conn.getresponse().read().decode("utf-8")
+        conn.close()
+        out_at = body.index("ARTIFACTS OUT · 产出口")
+        acc_at = body.index("ACCEPTANCE · 验收闸")
+        assert out_at < acc_at
+        # 接力口是「验收通过则交付」的最后两个字，跟着闸住，不住产物旁边
+        assert "renderAcceptance(a) + renderRelayBar()" in body
+        assert "renderArtifact() + renderRelayBar()" not in body
+
     def test_html_ships_no_scroll_lock(self, server_url: tuple[str, TaskRunStore]):
         """四栏 + 底座要一屏装得下。
 

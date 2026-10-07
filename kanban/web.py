@@ -390,16 +390,17 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .ctx-note {{ font-size: 10px; color: #64748b; }}
   .ctx-me {{ color: #b45309; font-weight: 700; }}
   .ctx-hop {{ color: #94a3b8; padding: 0 3px; }}
-  /* 四栏：TASK IN · BEELINE · ACCEPTANCE · ARTIFACTS OUT。
-     ACCEPTANCE 跟 BEELINE 平级不是排版偏好，是粒度本来就对：中间那栏把 5 个 op
-     收成一个黑盒，验收栏把 N 条判据收成一个黑盒，两者粗细一致。
-     塞在 BEELINE 那栏里时它跟单个 op 一样大，读起来就成了链上的第 6 步——
-     但它判的是整条链，画法比说的话小。 */
+  /* 四栏：TASK IN · BEELINE · ARTIFACTS OUT · ACCEPTANCE。
+     产出口排在验收前面：先明确产物，再判它过不过，交付受控。
+     验收是终点判定（菱形在最后），不是中途关卡——因为它确实没在拦：
+     REJECTED 的产出照样渲染在产出口，被禁用的是验收栏里的接力口。 */
   .beebox-body {{
     display: grid;
+    /* 四栏各自回答一个问题，互不重叠：投什么 / 怎么算 / 算出什么 / 过没过、能不能交。
+       验收栏最后一道也承担接力口（判完才谈交付），比产出口窄一点就够。 */
     grid-template-columns:
       minmax(186px, 0.95fr) minmax(300px, 1.65fr)
-      minmax(172px, 0.80fr)  minmax(196px, 1.00fr);
+      minmax(196px, 1.00fr) minmax(186px, 0.88fr);
     gap: 12px;
     align-items: stretch; padding: 16px;
     /* 固定盒高：产出内容再多也不把盒子撑长，超出部分各自内部滚动。
@@ -450,7 +451,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
     display: flex; flex-direction: column; align-self: stretch;
   }}
   .lane-acc .lane-title {{ color: #b45309; }}
-  /* 交接方向不靠尖角交代。栏从左到右 IN → BEELINE → ACCEPTANCE → OUT
+  /* 交接方向不靠尖角交代。栏从左到右 IN → BEELINE → OUT → ACCEPTANCE
      本身就在讲顺序，再挂一个指着左边的三角形只是把同一件事说第二遍，
      而且换行布局下它指空、宽屏下它像块渲染毛刺。 */
   .acc-detail {{ flex: 1; min-height: 0; overflow-y: auto; }}
@@ -631,10 +632,12 @@ HTML_PAGE = f"""<!DOCTYPE html>
   #task-payload.payload-text {{
     font-family: inherit; font-size: 13px; line-height: 1.8; color: #0f172a;
   }}
-  /* 接力：把本盒产出投给下游盒，避免手工复制粘贴投错方向 */
+  /* 接力：把本盒产出投给下游盒，避免手工复制粘贴投错方向。
+     住在验收栏底部 sticky：判据表再长，放行口也不该被滚出视野。 */
   .relay-bar {{
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
     margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e2e8f0;
+    position: sticky; bottom: 0; background: rgba(255,251,235,0.96);
   }}
   .relay-btn {{
     font-size: 11px; padding: 5px 10px; border-radius: 6px; cursor: pointer;
@@ -1070,8 +1073,9 @@ function renderRequirementSet(r) {{
 // 它跟 beeline 不是一回事。beeline 的 op 是「算指标」，
 // acceptance 是「拿盒子声明的判据比对，定过不过」——代码路径本来就在
 // BeelineExecutor.execute() 返回之后单独调（kanban/trigger.py）。
-// 所以盒内画成 IN → BEELINE → ACCEPTANCE → OUT：
-// 没过的产出根本不该出现在产出口，也更不该被接力投给下游。
+// 所以盒内画成 IN → BEELINE → OUT → ACCEPTANCE：产物先摆清楚，
+// 再判它过不过；不过的产出照样摆着（它确实是算出来的），
+// 但接力口在验收栏里，按钮禁用，下游拿不到没判过的输入。
 function renderAcceptance(a) {{
   const rows = Array.isArray(a.acceptance_detail) ? a.acceptance_detail : [];
   const acc = a.acceptance_status;
@@ -1125,15 +1129,17 @@ function renderArtifact() {{
   </div>`;
 }}
 
-// 判据表落在 ACCEPTANCE 栏，不落在产出口：
-// 产出口回答「交出去什么」，验收栏回答「凭什么说它合格」。
+// 判据表和接力口都落在 ACCEPTANCE 栏：
+// 产出口回答「算出了什么」，验收栏回答「凭什么说它合格、过没过能不能交出去」。
 // 两处各留一份判据 = 两处都要跟着改，而它们不会一起变。
+// 接力口也在这：它是「验收通过则交付」那句话里的最后两个字。
+// 挂在产出口会让一个被闸控制的动作住在闸左边。
 function renderAcceptanceInto() {{
   const el = document.getElementById('acc-detail');
   if (!el) return;
   const a = _boxState.artifact;
   el.innerHTML = a
-    ? renderAcceptance(a)
+    ? renderAcceptance(a) + renderRelayBar()
     : '<div class="empty" style="padding:18px 6px;">(等待判定)</div>';
 }}
 
@@ -1151,7 +1157,7 @@ const REJECT_LABEL = {{
 }};
 
 // ===== DOMAIN CONTEXT =====
-// 四栏都站在这上面：投料口按消费契约投、op 按契约读写、验收按判据判、
+// 四栏都站在这上面：投料口按消费契约投、op 按契约读写、验收栏按判据判、
 // 产出口按产出契约交。跟四栏是依赖不是先后，所以是底座不是第五栏。
 // 判据不在这里：声明值和实测值都归 ACCEPTANCE 栏，
 // 两处各留一份判据 = 每次改判据要改两个地方。
@@ -1196,13 +1202,11 @@ function renderDomainContext(boxId, ctx) {{
 function buildShell(boxId, box, entries) {{
   // 静态 shell：只建一次——工位图 DOM 不随 2s 刷新重建
   window._taskEntries = {{}};
-  // 接力目标：盒子之间的关系声明在后端 BOX_META.feeds_into（业务信息，不在前端硬编码）
-  // 显示名可能尚未就绪（_boxNames 在 refresh 里随后才填），所以重渲时再取一次
-  const names = window._boxNames || {{}};
-  window._feedsInto = ((box && box.meta && box.meta.feeds_into) || []).map((id) => ({{
-    box_id: id,
-    display_name: names[id] || id,
-  }}));
+  // 接力目标：盒子之间的关系声明在后端 BOX_META.feeds_into（业务信息，不在前端硬编码）。
+  // 显示名取 box_domain_context 随 id 一起给的那份——单盒过滤时前端手里只有
+  // 当前这一只盒的名字表，自己补会直接露出 business_modeling_box 这种原始 id。
+  window._feedsInto = ((box && box.domain_context && box.domain_context.feeds_into) || [])
+    .map((h) => ({{ box_id: h.id, display_name: h.name || h.id }}));
   let options = '';
   let ops = [];
   let placeholder = '在这里粘贴 task payload（JSON）。下方「填入示例」可取一份样例。';
@@ -1246,28 +1250,24 @@ function buildShell(boxId, box, entries) {{
           <div id="box2d-stage"></div>
           <div class="lane-ops" id="lane-ops"></div>
         </div>
+        <!-- 产出口排在验收前面：先明确产物，再判它过不过，最后才谈交付。
+             顺序不能反过来摆——闸并没有拦住产物，REJECTED 的产出照样渲染
+             在产出口里（renderArtifactInto 不看 acceptance_status），
+             禁用的只是接力按钮。把闸画在产出口前面，它就不像在拦东西了。 -->
+        <div class="port">
+          <div class="port-title">ARTIFACTS OUT · 产出口</div>
+          <div id="artifact-slot"></div>
+        </div>
         <div class="lane-acc">
           <div class="lane-title">ACCEPTANCE · 验收闸</div>
           <div id="acc-stage"></div>
           <div class="acc-detail" id="acc-detail"></div>
-        </div>
-        <div class="port">
-          <div class="port-title" id="out-title">ARTIFACTS OUT · 产出口</div>
-          <div id="artifact-slot"></div>
         </div>
       </div>
       ${{renderDomainContext(boxId, (box && box.domain_context) || null)}}
     </div>
   </div>`;
   onTaskTypeChange();
-
-  // 产出口标题按盒子区分（有下游的盒子标"可接力"）
-  const outTitle = document.getElementById('out-title');
-  if (outTitle) {{
-    outTitle.textContent = (window._feedsInto || []).length
-      ? 'ARTIFACTS OUT · 产出口（可接力投给下游）'
-      : 'ARTIFACTS OUT · 产出口（领域模型）';
-  }}
 
   const stage = document.getElementById('box2d-stage');
   _scene2d = ops.length > 0 ? initBox2D(stage, ops) : null;
@@ -1296,7 +1296,8 @@ function renderArtifactInto() {{
     // 判据表跟着 artifact 一起刷；key 变了才重建，保留 details 开合状态
     if (key !== _lastArtifactKey) {{
       _lastArtifactKey = key;
-      slot.innerHTML = renderArtifact() + renderRelayBar();
+      // 产出口只摆产物，不过的产出照样摆在这儿——它确实是 beeline 算出来的
+      slot.innerHTML = renderArtifact();
     }}
   }}
   // 验收栏独立渲染：shell 重建后它是新 DOM，不能靠 _lastArtifactKey 短路
@@ -1304,15 +1305,14 @@ function renderArtifactInto() {{
 }}
 
 // 接力：本盒产出 → 下游盒投料口
+// 渲染在 ACCEPTANCE 栏底部：这条链是「算 → 出 → 判 → 交」，
+// 「交」这个动作属于判完之后，不属于产物旁边。
 // 目标盒子来自后端 BOX_META.feeds_into（盒子之间的关系是业务信息，不在前端硬编码）。
 // 投料字段按下游 task_schema 裁剪——把捕获盒的 evidence / 抽取者等内部字段
 // 一起塞给下游会让人分不清哪些是对方需要的。
 function renderRelayBar() {{
   const a = _boxState.artifact;
-  const names = window._boxNames || {{}};
-  const targets = (window._feedsInto || []).map((t) => ({{
-    box_id: t.box_id, display_name: names[t.box_id] || t.box_id,
-  }}));
+  const targets = window._feedsInto || [];
   if (!a || !targets.length) return '';
   // 没验收过的产出不准往下游流——否则下游拿到一份判都没判过的输入，
   // 上游的验收就白做了。REJECTED 时按钮禁用并说明卡在哪条判据上。
@@ -1328,7 +1328,7 @@ function renderRelayBar() {{
   const buttons = targets.map((t) =>
     `<button class="relay-btn" onclick="relayTo('${{t.box_id}}')">→ 投给 ${{t.display_name}}</button>`
   ).join('');
-  return `<div class="relay-bar">${{buttons}}<span class="relay-note">一键投料，不用手工复制 JSON</span></div>`;
+  return `<div class="relay-bar">${{buttons}}<span class="relay-note">验收通过 · 放行下游</span></div>`;
 }}
 
 function relayTo(boxId) {{
@@ -1555,27 +1555,10 @@ async function triggerTask(boxId) {{
         _boxState.opStates[step.op_id] = st;
         if (_scene2d) _scene2d.setOpState(step.op_id, st);
       }}
-      // beeline 走完 → 把令牌交给 BEELINE 栏右边的验收闸（第四栏）。
-      // 闸自己亮灯：过 → 放行到 OUT；不过 → 令牌停在闸上，产出不出。
-      _boxState.opStates._acc = 'active';
-      if (_scene2d && trace.length) _scene2d.moveToken(trace[trace.length - 1].op_id);
-      if (_accGate) {{
-        _accGate.setState('active');
-        _accGate.arrive();
-      }}
-      await sleep(700);
-      const accPassed = data.acceptance_status === 'accepted';
-      _boxState.opStates._acc = accPassed ? 'done' : 'failed';
-      if (_accGate) _accGate.setState(_boxState.opStates._acc);
-      if (accPassed) {{
-        // 过了闸才放产出出去
-        if (_accGate) _accGate.release();
-        if (_scene2d) _scene2d.moveToken('_out');
-        await sleep(600);
-      }} else if (_accGate) {{
-        _accGate.hold();
-      }}
-      if (_scene2d) _scene2d.moveToken(null);
+      // beeline 走完 → 令牌走到 OUT。先把产物摆出来，再判它过不过：
+      // 产物确实是 beeline 算出来的，跟验收无关；验收发生在它之后，
+      // 而且不拦它——不过的产出照样摆在这儿，只是接力按钮禁用。
+      if (_scene2d) _scene2d.moveToken('_out');
       _boxState.artifact = {{
         task_run_id: data.task_run_id,
         status: data.status,
@@ -1585,6 +1568,26 @@ async function triggerTask(boxId) {{
         result: data.result,
       }};
       renderArtifactInto();
+      await sleep(700);
+      // 然后才轮到验收闸（最右一栏，终点判定）
+      _boxState.opStates._acc = 'active';
+      if (_accGate) {{
+        _accGate.setState('active');
+        _accGate.arrive();
+      }}
+      await sleep(700);
+      const accPassed = data.acceptance_status === 'accepted';
+      _boxState.opStates._acc = accPassed ? 'done' : 'failed';
+      if (_accGate) _accGate.setState(_boxState.opStates._acc);
+      if (accPassed) {{
+        // 过了闸才算交付完——接力按钮这时才可点
+        if (_accGate) _accGate.release();
+        await sleep(600);
+      }} else if (_accGate) {{
+        // 不过：令牌停在闸上，产物留在产出口但投不出去
+        _accGate.hold();
+      }}
+      if (_scene2d) _scene2d.moveToken(null);
       resultEl.className = 'trigger-result ' + (data.acceptance_status === 'accepted' ? 'ok' : 'err');
       const why = data.rejection_class ? ` — ${{REJECT_LABEL[data.rejection_class] || data.rejection_class}}` : '';
       resultEl.textContent = `task_run ${{data.task_run_id.slice(0, 8)}}… → ${{data.status}} / ${{data.acceptance_status || 'n/a'}}${{why}}`;

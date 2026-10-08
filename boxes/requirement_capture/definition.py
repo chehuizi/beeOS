@@ -7,7 +7,7 @@ boxes.requirement_capture.definition - 需求捕获履约盒 Definition 数据
 - 履约意图 Intent（task）
 - 履约合同 Contract（result + 4 条机械 acceptance + 2 条 exception）
 - 履约政策 Policy（queen authorization + rules）
-- 履约度量 Metrics
+- 履约度量 Metrics（每个指标都有实测采集算法，见 measure.py）
 
 为什么这 4 条 acceptance 能做到 0 主观：
 1. contract_compliance —— 复用 runtime.contract.validate_payload，形状校验是纯机械的
@@ -114,7 +114,10 @@ REQUIREMENT_CAPTURE_BOX = BeeBoxDefinition(
                 "forbidden": ["invent_requirements", "rewrite_business_goal"],
             },
             continuous_improvement={
-                "observe": ["manual_rewrite_rate", "llm_call_failure_rate"],
+                # 只 observe 真正有信号源的指标：
+                # 人工改写率（manual_rewrite_rate）没有人工改写这个事件，测不出来，
+                # 已经从 metrics 里拿掉——观察一个算不出来的数是自欺。
+                "observe": ["first_pass_capture_rate", "llm_call_failure_rate"],
             },
         ),
     ),
@@ -124,28 +127,28 @@ REQUIREMENT_CAPTURE_BOX = BeeBoxDefinition(
             MetricDef(
                 name="extraction_precision",
                 definition="抽出的需求中不 hallucinate 的比例（no_hallucination 通过率）",
-                target=0.98,
+                target=98.0,
+                unit="pct",
             ),
             MetricDef(
                 name="extraction_recall",
                 definition="原文事实被抽取覆盖的比例（source_coverage）",
                 target=100.0,
+                unit="pct",
             ),
             MetricDef(
                 name="first_pass_capture_rate",
                 definition="首次抽取即通过全部 acceptance 的比例",
-                target=0.85,
-            ),
-            MetricDef(
-                name="manual_rewrite_rate",
-                definition="人工改动 requirement_type 的比例（type_boundary 能力上限的度量）",
-                target=0.10,
+                target=85.0,
+                unit="pct",
             ),
             MetricDef(
                 name="llm_call_failure_rate",
                 definition="LLM 调用失败导致履约中止的比例（降级已删，"
                            "没有第二条腿兜着，失败就是失败）",
-                target=0.02,
+                target=2.0,
+                unit="pct",
+                direction="lower_is_better",
             ),
         ],
         latency=[
@@ -153,6 +156,8 @@ REQUIREMENT_CAPTURE_BOX = BeeBoxDefinition(
                 name="capture_latency",
                 definition="抽取端到端时长（秒）",
                 target=15.0,
+                unit="s",
+                direction="lower_is_better",
             ),
         ],
     ),

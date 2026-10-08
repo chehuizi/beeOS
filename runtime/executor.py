@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from core.beeline_models import Beeline, NextRef, Operation
+from runtime.llm import LLMError
 from runtime.mock_runner import MockRunner
 from runtime.models import OperationRecord, TaskRun, TaskRunStatus
 
@@ -177,10 +178,13 @@ class BeelineExecutor:
                 record.status = "failed"
                 record.finished_at = datetime.now(timezone.utc)
                 record.error = str(e)
+                # 中止归因：LLM 是基础设施设施，runtime 认得它；盒子据此统计
+                # 自己的调用失败率。判据不是业务知识，所以这层归类不算越界。
+                record.error_kind = "llm_call" if isinstance(e, LLMError) else "op_error"
                 task_run.event_log.append(
                     event="op_finish",
                     op_id=current_op.op_id,
-                    detail={"status": "failed", "error": str(e)},
+                    detail={"status": "failed", "error": str(e), "error_kind": record.error_kind},
                 )
                 task_run.transition_to(TaskRunStatus.FAILED, reason=f"op '{current_op.op_id}' failed: {e}")
                 return task_run

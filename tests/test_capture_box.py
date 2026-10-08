@@ -28,6 +28,7 @@ from kanban.trigger import (
 )
 from runtime.capture_runner import _split_sentences, _simulate_requirement_set_packager
 from runtime.store import TaskRunStore
+from tests.conftest import stub_compliant_llm
 
 
 @pytest.fixture
@@ -356,25 +357,11 @@ def _stub_compliant_llm(prompt: str, **kw) -> dict:
     真调 LLM 有两个问题：抽图约 1/3 概率被幻觉判据全剔（模型改写了 action，
     那是真实的产品缺陷，不该由编排测试承担），以及单次 10~120 秒。
     LLM 输出的机械处理在 TestMechanicalGates 里真测，那组不 stub。
-    edges 留空——_clean_graph 会按原文明写顺序自动补成链。
-    """
-    import re
 
-    nodes, goal = [], ""
-    tail = prompt.split("原文句子：")[-1]
-    for line in tail.strip().split("\n"):
-        m = re.match(r"(\S+)\s+\[(\w+)\]\s+(.*)", line.strip())
-        if not m:
-            continue
-        sid, role, text = m.group(1), m.group(2), m.group(3)
-        if role == "goal":
-            goal = text
-            continue
-        nodes.append({
-            "node_id": f"node_{len(nodes) + 1}", "action": text,
-            "writes": [], "reads": [], "measures": [], "trace_to": sid,
-        })
-    return {"goal": goal, "nodes": nodes, "edges": []}
+    实现挪到 tests/conftest.py 跟 test_metrics.py 共用——
+    各写各的必然漂移，改了一处挂掉的是没人动过的那组。
+    """
+    return stub_compliant_llm(prompt, **kw)
 
 
 @pytest.fixture

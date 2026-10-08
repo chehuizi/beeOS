@@ -14,12 +14,15 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Optional
 from uuid import uuid4
 
 from beelines import get_modeling_beeline, get_requirement_capture_beeline
 from boxes.modeling import get_definition as get_mod_definition
+from boxes.modeling.measure import COMPUTERS as MODELING_COMPUTERS
 from boxes.requirement_capture import get_definition as get_capture_definition
+from boxes.requirement_capture.measure import COMPUTERS as CAPTURE_COMPUTERS
+from core import metrics as core_metrics
 from core.beeline_models import Beeline
 from core.models import BeeBoxDefinition, FieldDef
 from runtime import BeelineExecutor, create_task_run, evaluate_acceptance
@@ -43,6 +46,14 @@ BOX_REGISTRY: dict[
         get_mod_definition,
         {"beeline_business_modeling_v1": get_modeling_beeline},
     ),
+}
+
+# box_id → 指标采集算法表。跟 BOX_REGISTRY 一一对应：
+# 在这里注册一只盒子，就必须同时给出它的指标采集算法，
+# 否则 definition.metrics 里声明的指标在看板上是拿不到的数字。
+METRIC_COMPUTERS: dict[str, dict[str, core_metrics.Computer]] = {
+    "requirement_capture_box": CAPTURE_COMPUTERS,
+    "business_modeling_box": MODELING_COMPUTERS,
 }
 
 # Box 元信息（声明式归属，不从 box_id 关键词推断）：
@@ -218,18 +229,39 @@ def _hop(box_id: str) -> dict[str, str]:
     return {"id": box_id, "name": box_meta(box_id).get("display_name", box_id)}
 
 
-def box_domain_context(box_id: str) -> dict[str, Any]:
-    """盒子的领域上下文——这只盒子是谁、跟谁接、边界在哪
+def box_metrics_readings(
+    box_id: str,
+    records: list[dict[str, Any]],
+    *,
+    window: int = core_metrics.WINDOW,
+) -> list[dict[str, Any]]:
+    """盒子声明的指标 + 履约历史实测 → 看板可渲染的读数"""
+    entry = BOX_REGISTRY.get(box_id)
+    computers = METRIC_COMPUTERS.get(box_id)
+    if entry is None or computers is None:
+        return []
+    return core_metrics.measure(entry[0](), records, computers, window=window)
+
+
+def box_domain_context(
+    box_id: str,
+    records: Optional[list[dict[str, Any]]] = None,
+) -> dict[str, Any]:
+    """盒子的领域上下文——这只盒子是谁、跟谁接、边界在哪、跑得怎么样
 
     跟 task run 无关。看板上那四栏（投料 / 流水线 / 验收 / 产出）讲的全是
     「这一次履约发生了什么」，这里讲的是「这只盒子是什么」：它在价值流的哪一段、
-    上下游是谁、吃进去的契约长什么样、吐出来的契约长什么样。
+    上下游是谁、吃进去的契约长什么样、吐出来的契约长什么样、真实指标如何。
 
     所以它不能在四栏里当第五栏——上下文在履约之前就在那儿，不是跑出来的。
     它是盒子外面的一条 band。
 
     只回看板要渲染的字段。判据不在这里：声明值和实测值都在 ACCEPTANCE 栏，
     两处各留一份判据 = 两处都要跟着改。
+
+    metrics 这一块是唯一带实测值的：definition.metrics 里写的是 target（承诺），
+    这里补的是 actual（事实），两者并排才看得出盒子兑现了多少。
+    records 传 None 表示「还没跑过」，读数里的 actual 会是 None 而不是 0.0。
     """
     entry = BOX_REGISTRY.get(box_id)
     if entry is None:
@@ -272,6 +304,7 @@ def box_domain_context(box_id: str) -> dict[str, Any]:
                 f.name for f in (result_schema.fields if result_schema else [])
             ],
         },
+        "metrics": box_metrics_readings(box_id, records or []),
     }
 
 
@@ -357,6 +390,11 @@ def trigger_task(
 
     acceptance_status = None
     rejection_class = None
+    # observed：本次履约实测到的判据原值。落盘它是为了让盒子能聚合自己的指标——
+    # 实测值原先只活在这次请求的响应体里，请求一关就没了，
+    # definition.metrics 里的 target 就永远只是个目标。
+    # 这里只搬运 definition 自己声明的判据名，不引入任何盒外词汇。
+    observed: dict[str, Any] = {}
     # acceptance 明细：盒内要单列一道闸，看板得能逐条显示判据 / 实测 / 过没过，
     # 只给一个 accepted 徽章等于把"为什么不过"藏起来了。
     acceptance_detail = []
@@ -379,12 +417,18 @@ def trigger_task(
             }
             for rule in definition.result.acceptance
         ]
+        observed = {
+            rule.metric: task_run.result[rule.metric]
+            for rule in definition.result.acceptance
+            if task_run.result.get(rule.metric) is not None
+        }
 
     store.append(
         task_run,
         box_id=box_id,
         acceptance_status=acceptance_status,
         rejection_class=rejection_class,
+        observed=observed,
     )
 
     return {

@@ -149,6 +149,10 @@ class OperationRecord(BaseModel):
     input: Optional[dict[str, Any]] = None
     output: Optional[dict[str, Any]] = None
     error: Optional[str] = None
+    # 中止归因：error 只说"报了什么错"，error_kind 说"是哪一类设施挂了"。
+    # 盒子要统计自己的 llm_call_failure_rate 就靠它——没有它只能去匹配错误字符串，
+    # 而字符串匹配是假信号的一种。取值由 runtime 分类，不含业务语义。
+    error_kind: Optional[str] = None
 
 
 # ============================================================

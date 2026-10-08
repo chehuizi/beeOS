@@ -9,7 +9,7 @@ Software Line 第一只盒子定义。
 - 履约意图 Intent（task）
 - 履约合同 Contract（result + 5 条机械 acceptance + 3 条 exception）
 - 履约政策 Policy（queen authorization + rules）
-- 履约度量 Metrics
+- 履约度量 Metrics（每个指标都有实测采集算法，见 measure.py）
 
 设计哲学：
 - acceptance 全部机械可验（5 条规则，0 条主观）
@@ -144,43 +144,38 @@ BUSINESS_MODELING_BOX = BeeBoxDefinition(
             MetricDef(
                 name="first_pass_acceptance_rate",
                 definition="首次建模即通过 acceptance 的比例",
-                target=0.90,
+                target=90.0,
+                unit="pct",
             ),
             MetricDef(
                 name="requirement_coverage_quality",
                 definition="requirement_coverage == 100 的比例",
-                target=0.95,
-            ),
-            MetricDef(
-                name="model_reuse_rate",
-                definition="新需求复用已有 model 元素的比例",
-                target=0.40,
+                target=95.0,
+                unit="pct",
             ),
         ],
         latency=[
             MetricDef(
                 name="modeling_turnaround_time",
-                definition="从需求提交到模型包产出时长",
-                target=3600,  # 1 hour
+                # 如实标注：这个盒子的 beeline 目前走 runtime/mock_runner，
+                # 测到的是 mock 执行耗时，不是真实建模耗时。
+                # 不这么写，看板上会显示一个 0.0s 的「建模时长」，读起来像建模极快。
+                definition="从需求提交到模型包产出时长（当前建模腿走 mock runner，"
+                           "此值是 mock 执行耗时，不等于真实建模耗时）",
+                target=3600.0,  # 1 hour
+                unit="s",
+                direction="lower_is_better",
             ),
             MetricDef(
                 name="p95_modeling_turnaround_time",
-                definition="95 分位建模时长",
-                target=7200,  # 2 hour
+                definition="95 分位建模时长（同上，mock 执行耗时）",
+                target=7200.0,  # 2 hour
+                unit="s",
+                direction="lower_is_better",
             ),
         ],
-        cost=[
-            MetricDef(
-                name="cost_per_modeling_request",
-                definition="单次建模请求成本（含人工折算）",
-                target=5.0,
-            ),
-            MetricDef(
-                name="human_escalation_rate",
-                definition="升级人工率",
-                target=0.20,
-            ),
-        ],
+        # cost 暂时空着：没有成本记账就不声明成本指标，
+        # 等于在看板上挂一个永远读不出数的槽。记账做起来再加回来。
     ),
 )
 

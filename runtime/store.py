@@ -9,7 +9,13 @@ runtime.store - TaskRun JSONL 持久化 + 查询
 
 Record 形状（精简版，比完整 TaskRun 小）：
   task_run_id, box_id, beeline_id, status, acceptance_status,
-  started_at, finished_at, op_count, exception_count, duration_ms
+  started_at, finished_at, op_count, exception_count, duration_ms,
+  observed（本次实测到的判据原值）, error_kind（中止归因）
+
+为什么要 observed：盒子在 definition.metrics 里声明了指标目标，
+但目标不是事实。事实得从每次履约的实测值里聚合出来，而实测值原先只活在
+当次请求的响应体里——请求一关就没了，声明就永远只是声明。
+落盘这一份，盒子才能在任意时刻回答「我最近跑得怎么样」。
 """
 
 from __future__ import annotations
@@ -28,6 +34,7 @@ def task_run_to_record(
     box_id: str,
     acceptance_status: Optional[str] = None,
     rejection_class: Optional[str] = None,
+    observed: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """TaskRun → 精简持久化 record"""
     duration_ms = 0
@@ -50,6 +57,13 @@ def task_run_to_record(
         if note:
             rule_applied = {"note": note}
 
+    # 中止归因：整轮跑挂在哪个设施上（llm_call / op_error / 没挂）。
+    error_kind = None
+    for op in task_run.operations.values():
+        if op.status == "failed":
+            error_kind = op.error_kind or "op_error"
+            break
+
     return {
         "task_run_id": task_run.identity.task_run_id,
         "box_id": box_id,
@@ -61,6 +75,8 @@ def task_run_to_record(
         "acceptance_status": acceptance_status,
         "rejection_class": rejection_class,
         "rule_applied": rule_applied,
+        "observed": observed or {},
+        "error_kind": error_kind,
         "started_at": task_run.identity.started_at.isoformat() if task_run.identity.started_at else None,
         "finished_at": task_run.identity.finished_at.isoformat() if task_run.identity.finished_at else None,
         "created_at": task_run.identity.created_at.isoformat(),
@@ -105,9 +121,12 @@ class TaskRunStore:
         box_id: str,
         acceptance_status: Optional[str] = None,
         rejection_class: Optional[str] = None,
+        observed: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """追加一条 task run 记录（同步落盘）"""
-        record = task_run_to_record(task_run, box_id, acceptance_status, rejection_class)
+        record = task_run_to_record(
+            task_run, box_id, acceptance_status, rejection_class, observed
+        )
         self._cache.append(record)
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")

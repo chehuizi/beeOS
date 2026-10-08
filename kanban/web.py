@@ -113,7 +113,7 @@ def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[s
             "last_run_at": latest["created_at"] if latest else None,
             "last_run_status": latest["acceptance_status"] if latest else None,
             "task_entries": list_task_entries(b),
-            "domain_context": box_domain_context(b),
+            "domain_context": box_domain_context(b, b_records),
         })
 
     return {
@@ -381,6 +381,27 @@ HTML_PAGE = f"""<!DOCTYPE html>
   }}
   .ctx-cols {{ display: grid; grid-template-columns: 1.1fr 1fr 1.4fr; gap: 18px; }}
   @media (max-width: 1080px) {{ .ctx-cols {{ grid-template-columns: 1fr; gap: 9px; }} }}
+  /* 履约度量：声明（target）跟实测（actual）并排。
+     排版原则：actual 是 None 时画成「未测」，绝不能画成 0——
+     0 是差，「还没测过」是没有，两回事。 */
+  .ctx-metrics {{
+    margin-top: 9px; padding-top: 8px;
+    border-top: 1px dashed #cbd5e1;
+    display: flex; flex-wrap: wrap; gap: 7px;
+  }}
+  .ctx-metric {{
+    display: flex; align-items: baseline; gap: 6px;
+    padding: 3px 8px; border-radius: 5px;
+    background: rgba(255,255,255,0.62); border: 1px solid #dbe2ea;
+  }}
+  .ctx-metric .ctx-mk {{ font-size: 10px; color: #475569; }}
+  .ctx-metric .ctx-ma {{
+    font-size: 12px; font-weight: 700; color: #0f172a;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }}
+  .ctx-metric .ctx-mt {{ font-size: 9px; color: #94a3b8; }}
+  .ctx-metric.off .ctx-ma {{ color: #b45309; }}
+  .ctx-metric.untested .ctx-ma {{ color: #b45309; font-weight: 500; }}
   .ctx-k {{ font-size: 9px; color: #94a3b8; letter-spacing: 0.5px; margin-bottom: 3px; }}
   .ctx-v {{
     font-size: 11px; color: #0f172a; line-height: 1.65;
@@ -1218,7 +1239,57 @@ function renderDomainContext(boxId, ctx) {{
         <div class="ctx-v ctx-note">${{outFields}}</div>
       </div>
     </div>
+    ${{renderBoxMetrics(ctx.metrics)}}
   </div>`;
+}}
+
+// 履约度量：definition.metrics 里写的 target（承诺）跟履约历史聚合出的 actual（事实）并排。
+// 没有 actual 的盒子，声明的指标就不会出现在这里——宁可空着，
+// 也不摆一个算不出来的指标名占位置。
+function fmtMetric(v, unit) {{
+  if (v === null || v === undefined) return null;
+  if (unit === 'pct') return v.toFixed(1) + '%';
+  if (unit === 'count') return String(v);
+  // 秒跨量级时换算：target 常是 3600 / 7200，直接显示 3600s 没人读得下去
+  if (v >= 3600) return (v / 3600).toFixed(1) + 'h';
+  if (v >= 60) return (v / 60).toFixed(1) + 'm';
+  // 亚 0.1 秒不四舍五入到 "0.0s"——那会把「快得没测出来」
+  // 显示成「零耗时」，是假信号的一种
+  if (v < 0.1) return '<0.1s';
+  return v.toFixed(1) + 's';
+}}
+
+function renderBoxMetrics(metrics) {{
+  if (!metrics || !metrics.length) return '';
+  // 方向由盒子自己声明（direction），不从 unit 反推：
+  // 达成率和失败率都是 pct，猜方向会把「失败率 0%」误判成没达标
+  const ok = (m) => m.direction === 'lower_is_better'
+    ? m.actual <= m.target
+    : m.actual >= m.target;
+  const cells = metrics.map((m) => {{
+    const actual = fmtMetric(m.actual, m.unit);
+    const target = fmtMetric(m.target, m.unit);
+    let cls = 'ctx-metric';
+    let shown;
+    if (actual === null) {{
+      // 还没测过：明确写「未测」，不能退化成 0——0 是差，未测是没有
+      cls += ' untested';
+      shown = '未测';
+    }} else {{
+      if (!ok(m)) cls += ' off';
+      shown = actual;
+    }}
+    const n = m.sample_size;
+    const sample = actual === null
+      ? '（还没跑过）'
+      : `（近 ${{n}} 次 / 窗口 ${{m.window}}）`;
+    return `<span class="${{cls}}" title="${{esc(m.definition)}}">
+      <span class="ctx-mk">${{esc(m.name)}}</span>
+      <span class="ctx-ma">${{esc(shown)}}</span>
+      <span class="ctx-mt">目标 ${{esc(target)}} · ${{esc(sample)}}</span>
+    </span>`;
+  }}).join('');
+  return `<div class="ctx-metrics">${{cells}}</div>`;
 }}
 
 function buildShell(boxId, box, entries) {{

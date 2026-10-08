@@ -11,9 +11,11 @@ from __future__ import annotations
 import pytest
 
 from boxes.modeling import BUSINESS_MODELING_BOX, get_definition
+from boxes.modeling.measure import COMPUTERS as MODEL_COMPUTERS
 from boxes.modeling.schemas import REQUIREMENT_TYPES
 from beelines.modeling import BUSINESS_MODELING_BEELINE, get_beeline
 from beelines import get_inventory_shortage_beeline
+from core import metrics as m
 from runtime import (
     BeelineExecutor,
     AcceptanceStatus,
@@ -110,11 +112,16 @@ class TestModelingBoxDefinition:
         for v in (a.task_routing, a.exception_handling, a.continuous_improvement):
             assert v in {"allow", "observe_only", "off"}
 
-    def test_metrics_three_dimensions(self):
+    def test_declared_metrics_all_have_a_collector(self):
+        """声明的每个指标都必须有实测采集算法
+
+        这条取代了旧的「三个维度都要有指标」——那个断言逼着盒子去声明
+        cost 指标，可成本压根没有记账信号源，只能声明一个算不出来的数字。
+        维度齐不齐无所谓，指标有没有出处才要紧。
+        """
         d = get_definition()
-        assert len(d.metrics.quality) >= 1
-        assert len(d.metrics.latency) >= 1
-        assert len(d.metrics.cost) >= 1
+        assert m.unwired(d, MODEL_COMPUTERS) == []
+        assert m.orphan_computers(d, MODEL_COMPUTERS) == []
 
 
 # ============================================================

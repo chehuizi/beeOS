@@ -159,6 +159,13 @@ class MetricDef(BaseModel):
     name: str
     definition: str
     target: float
+    # 单位是声明的一部分，不是渲染时的约定：target 和实测 actual 共用同一个 unit，
+    # 看板就不可能把「98.0%」和「98.0 秒」画成一样的东西。
+    # pct = 百分数（0~100），s = 秒，count = 次。
+    unit: Literal["pct", "s", "count"] = "pct"
+    # 方向也是声明，不能从 unit 反推：同样是 pct，达成率越高越好，
+    # 失败率越低越好。从单位猜方向会让「失败率 0%」被误判成没达标。
+    direction: Literal["higher_is_better", "lower_is_better"] = "higher_is_better"
 
 
 class MetricsDef(BaseModel):

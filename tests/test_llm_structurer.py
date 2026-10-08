@@ -262,76 +262,59 @@ class TestCredentialResolution:
         assert llm._ENV_KEY in msg, "错误里要给出可操作的修法"
 
     def test_real_key_passes_preflight(self, monkeypatch):
-        """真 key 通过预检（只验解析，不发网络请求）"""
+        """真 key 通过预检，解析出 /chat/completions 端点（不发网络请求）"""
         from runtime import llm
         monkeypatch.delenv(llm._ENV_KEY, raising=False)
         monkeypatch.delenv(llm._ENV_BASE_URL, raising=False)
-        path = _tmp_config({"apiKey": "sk-realkey123456"})
-        monkeypatch.setattr(llm, "_CONFIG_PATH", path)
-        resolved, tmpdir = llm._resolve_config_path()
-        assert resolved == path
-        assert tmpdir is None, "没有 env 覆盖时不该写临时 config"
+        monkeypatch.setattr(
+            llm, "_CONFIG_PATH",
+            _tmp_config({"apiKey": "sk-realkey123456",
+                         "baseURL": "https://api.example.invalid/v1"}),
+        )
+        url, key = llm._resolve_endpoint()
+        assert key == "sk-realkey123456"
+        assert url == "https://api.example.invalid/v1/chat/completions"
 
-    def test_env_key_writes_derived_config_and_cleans_up(self, monkeypatch):
-        """env 覆盖：派生 config 写到 0600 临时文件，用完即删"""
-        import os
+    def test_env_overrides_beat_config(self, monkeypatch):
+        """env 覆盖 config.yaml —— 这个文件是 MCode runtime 拥有的，会被重写"""
         from runtime import llm
         monkeypatch.setenv(llm._ENV_KEY, "sk-from-env-999")
+        monkeypatch.setenv(llm._ENV_BASE_URL, "https://env.example.invalid/v1")
+        monkeypatch.setattr(llm, "_CONFIG_PATH", _tmp_config({"apiKey": "sk-xxx"}))
+        url, key = llm._resolve_endpoint()
+        assert key == "sk-from-env-999"
+        assert url == "https://env.example.invalid/v1/chat/completions"
+
+    def test_env_key_is_never_written_to_disk(self, monkeypatch, tmp_path):
+        """凭证只留在内存里。
+
+        以前经由 CLI 时要把派生 config 写到 0600 临时文件、用完删除——
+        直连之后连临时文件都不需要了，这条测试盯的就是别退回去。
+        """
+        from runtime import llm
+        monkeypatch.setenv(llm._ENV_KEY, "sk-never-written-777")
         monkeypatch.setenv(llm._ENV_BASE_URL, "https://example.invalid/v1")
         monkeypatch.setattr(llm, "_CONFIG_PATH", _tmp_config({"apiKey": "sk-xxx"}))
-        resolved, tmpdir = llm._resolve_config_path()
-        try:
-            assert tmpdir is not None
-            assert resolved != llm._CONFIG_PATH
-            assert oct(os.stat(resolved).st_mode)[-3:] == "600"
-            import yaml
-            opts = yaml.safe_load(resolved.read_text())["provider"]["minimax"]["options"]
-            assert opts["apiKey"] == "sk-from-env-999"
-            assert opts["baseURL"] == "https://example.invalid/v1"
-        finally:
-            import shutil
-            shutil.rmtree(tmpdir, ignore_errors=True)
-        assert not os.path.exists(tmpdir), "临时 config 必须清理"
+        before = set(p for p in Path("/tmp").glob("beeos-*"))
+        llm._resolve_endpoint()
+        assert set(p for p in Path("/tmp").glob("beeos-*")) == before
 
     def test_env_empty_placeholder_rejected(self, monkeypatch):
         from runtime import llm
         monkeypatch.setenv(llm._ENV_KEY, "sk-xxx")
         monkeypatch.setattr(llm, "_CONFIG_PATH", _tmp_config({"apiKey": "sk-realkey"}))
         with pytest.raises(llm.LLMError):
-            llm._resolve_config_path()
+            llm._resolve_endpoint()
 
-    def test_npm_protocol_override(self, monkeypatch):
-        """协议覆盖：@ai-sdk/openai 决定 /chat/completions + Bearer，配错就是 401"""
-        import shutil
-        import yaml
+    def test_missing_endpoint_raises(self, monkeypatch):
+        """没有端点要说清，而不是拿空串去请求"""
         from runtime import llm
-        monkeypatch.setenv(llm._ENV_KEY, "sk-realkey-abc")
-        monkeypatch.setenv(llm._ENV_NPM, "@ai-sdk/openai")
-        monkeypatch.setattr(llm, "_CONFIG_PATH", _tmp_config({"apiKey": "sk-xxx"}))
-        resolved, tmpdir = llm._resolve_config_path()
-        try:
-            minimax = yaml.safe_load(resolved.read_text())["provider"]["minimax"]
-            assert minimax["npm"] == "@ai-sdk/openai"
-        finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
-
-    def test_npm_only_override_still_writes_config(self, monkeypatch):
-        """只覆盖协议时也要走派生 config（不能当成"无需覆盖"而跳过）"""
-        import shutil
-        import yaml
-        from runtime import llm
-        monkeypatch.delenv(llm._ENV_KEY, raising=False)
         monkeypatch.delenv(llm._ENV_BASE_URL, raising=False)
-        monkeypatch.setenv(llm._ENV_NPM, "@ai-sdk/openai")
         monkeypatch.setattr(llm, "_CONFIG_PATH", _tmp_config({"apiKey": "sk-realkey-abc"}))
-        resolved, tmpdir = llm._resolve_config_path()
-        try:
-            assert tmpdir is not None
-            minimax = yaml.safe_load(resolved.read_text())["provider"]["minimax"]
-            assert minimax["npm"] == "@ai-sdk/openai"
-            assert minimax["options"]["apiKey"] == "sk-realkey-abc"
-        finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
+        with pytest.raises(llm.LLMError) as ei:
+            llm._resolve_endpoint()
+        assert "no LLM endpoint" in str(ei.value)
+
 
 def _tmp_config(options: dict) -> Path:
     import tempfile

@@ -611,13 +611,12 @@ def _structure_business_text_llm(text: str) -> dict[str, Any]:
     """
     from runtime import llm
 
-    # max_tokens 同样要够 think + JSON 两段，理由同 capture_runner：
-    # 推理模型的 <think> 占 95% 以上（实测 JSON 本体只要几百字符，
-    # 原始输出几万字符）。2000 额度会被 think 吃干净、JSON 轮不到输出，
-    # 整轮返回空串。这里的 JSON 比抽取腿还小，本可以给更少，
-    # 但额度决定的是「think 能想多久」而不是「给多少就必须想多久」——
-    # 给足才不会两头落空。
-    raw = llm.complete_json(_CAPTURE_PROMPT.format(text=text), max_tokens=16000)
+    # 不关 thinking：这条腿要判断 requirement_type（哪句是规则、哪句是指标、
+    # 哪句是流程），那是真语义判断，不是照抄。抽取腿关 think 是因为它只做
+    # 结构化搬运；这里不能一刀切。
+    raw = llm.complete_json(
+        _CAPTURE_PROMPT.format(text=text), max_tokens=8000
+    )
 
     if not isinstance(raw, dict):
         raise llm.LLMError(

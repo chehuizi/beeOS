@@ -6,14 +6,18 @@ runtime.llm - LLM 调用客户端（最小可替换实现）
   不知道被建模的领域是什么
 - 业务提示词不属于本模块：它由调用方（结构化器）传入，本模块只管传输与解析
 
-为什么不直接用 HTTP 手搓：
-- 端点 / 协议 / 凭证都在 ~/.minimax/config.yaml 里（provider + model 引用），
-  本模块只依赖这一个契约，换 provider = 改配置，不改代码
+端点 / 协议 / 凭证仍来自 ~/.minimax/config.yaml（provider + model 引用），
+本模块只依赖这一个契约，换 provider = 改配置，不改代码。
+
+直连 HTTP 而不经过 llm-call skill 的 CLI：那个 CLI 只暴露
+prompt / model / max-tokens / temperature / timeout，thinking 参数传不进去，
+而 think 恰恰是这里最大的变量（见 complete() 的说明）。直连之后少一个
+subprocess 依赖，也不用再把派生 config 写到临时目录。
 
 模型返回的两种杂质（实测 MiniMax-M3）：
 1. <think>...</think> 推理段
 2. ```json ... ``` markdown 包裹
-两者都要剥掉才能拿到裸 JSON。
+两者都要剥掉才能拿到裸 JSON。（thinking=disabled 时不会有第 1 种。）
 """
 
 from __future__ import annotations
@@ -21,17 +25,10 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
-import subprocess
-import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
-# ~/.minimax/.builtin-skills/llm-call/scripts/llm_call.py
-_LLM_CALL_SCRIPT = (
-    Path.home() / ".minimax/.builtin-skills/llm-call/scripts/llm_call.py"
-)
+import httpx
 
 # ~/.minimax/config.yaml —— 注意：这是 MCode runtime 拥有的文件，它会重写
 # （实测引号风格被 YAML 库规范化写回），所以我们不假设里面的值是稳定的。
@@ -40,10 +37,6 @@ _CONFIG_PATH = Path.home() / ".minimax/config.yaml"
 # 覆盖凭证的环境变量：runtime 改写 config.yaml 时不至于把 LLM 腿打断
 _ENV_KEY = "BEEOS_LLM_API_KEY"
 _ENV_BASE_URL = "BEEOS_LLM_BASE_URL"
-# 协议：@ai-sdk/openai 走 /chat/completions + Bearer，@ai-sdk/anthropic 走
-# /messages + x-api-key。配错协议会得到 401，而不是一个能看懂的报错——实测
-# 内部代理只认前者，所以把它也纳入覆盖范围。
-_ENV_NPM = "BEEOS_LLM_NPM"
 
 # 占位符 key：不是"没配"，是"配了个假的"——必须区分，否则只会得到一个 401
 _PLACEHOLDER_HINTS = ("xxx", "your", "changeme", "placeholder", "dummy", "fake", "test")
@@ -92,66 +85,42 @@ def _provider_options(config: dict[str, Any]) -> dict[str, Any]:
     return options if isinstance(options, dict) else {}
 
 
-def _resolve_config_path() -> tuple[Path, Any]:
-    """决定传给 llm_call.py 的 config 路径
+def _resolve_endpoint() -> tuple[str, str]:
+    """决定端点和凭证：config.yaml 为底，env 可覆盖。
 
-    - 有 env 覆盖 → 写一份派生 config 到临时目录（凭证不入库、不回显、随用随删）
-    - 没有        → 用 ~/.minimax/config.yaml，但先做占位符预检
+    以前这里要把派生 config 写到临时目录再喂给 llm_call.py —— 那是"必须
+    经由 CLI 传参"的副作用。现在直连 API 了，临时文件那套整个不需要，
+    凭证也就不必落盘。
 
-    返回 (config 路径, 需要清理的临时目录 or None)
+    返回 (url, api_key)
     """
+    options = dict(_provider_options(_read_config()))
     env_key = (os.environ.get(_ENV_KEY) or "").strip()
     env_base = (os.environ.get(_ENV_BASE_URL) or "").strip()
-    env_npm = (os.environ.get(_ENV_NPM) or "").strip()
 
-    if not env_key and not env_base and not env_npm:
-        key = str(_provider_options(_read_config()).get("apiKey") or "").strip()
-        if _is_placeholder(key):
-            raise LLMError(
-                "no usable LLM credential: "
-                f"{_CONFIG_PATH} provider.minimax.options.apiKey is a placeholder. "
-                f"Set a real key in that file, or export {_ENV_KEY}=<key> "
-                "before starting beeOS (and restart the web server)."
-            )
-        return _CONFIG_PATH, None
-
-    config = _read_config()
-    options = dict(_provider_options(config))
+    key = str(options.get("apiKey") or "").strip()
     if env_key:
         if _is_placeholder(env_key):
             raise LLMError(
                 f"{_ENV_KEY} is set to a placeholder value, not a real key. "
-                "Export the actual API key, or clear it to fall back to "
-                f"{_CONFIG_PATH}."
+                f"Export the actual API key, or clear it to fall back to {_CONFIG_PATH}."
             )
-        options["apiKey"] = env_key
-    if env_base:
-        options["baseURL"] = env_base
-    if _is_placeholder(str(options.get("apiKey") or "")):
-        raise LLMError("resolved LLM apiKey is empty or a placeholder")
+        key = env_key
+    elif _is_placeholder(key):
+        raise LLMError(
+            "no usable LLM credential: "
+            f"{_CONFIG_PATH} provider.minimax.options.apiKey is a placeholder. "
+            f"Set a real key in that file, or export {_ENV_KEY}=<key> "
+            "before starting beeOS (and restart the web server)."
+        )
 
-    tmpdir = Path(tempfile.mkdtemp(prefix="beeos-llm-"))
-    try:
-        (tmpdir / "config.yaml").write_text(_dump_yaml(config, options, env_npm))
-        os.chmod(tmpdir / "config.yaml", 0o600)
-    except Exception as e:  # noqa: BLE001
-        raise LLMError(f"failed to write derived llm config: {e}") from e
-    return tmpdir / "config.yaml", tmpdir
-
-
-def _dump_yaml(
-    config: dict[str, Any], options: dict[str, Any], npm: str = ""
-) -> str:
-    import yaml
-    merged = dict(config)
-    provider = dict(merged.get("provider") or {})
-    minimax = dict(provider.get("minimax") or {})
-    if npm:
-        minimax["npm"] = npm
-    minimax["options"] = options
-    provider["minimax"] = minimax
-    merged["provider"] = provider
-    return yaml.safe_dump(merged, allow_unicode=True)
+    base = (env_base or str(options.get("baseURL") or "")).strip().rstrip("/")
+    if not base:
+        raise LLMError(
+            f"no LLM endpoint: neither {_ENV_BASE_URL} nor "
+            f"{_CONFIG_PATH} provider.minimax.options.baseURL is set"
+        )
+    return f"{base}/chat/completions", key
 
 
 def strip_noise(text: str) -> str:
@@ -234,48 +203,59 @@ def complete(
     prompt: str,
     *,
     model: str = "minimax/MiniMax-M3",
-    max_tokens: int = 2000,
-    timeout: float = 240.0,
+    max_tokens: int = 8000,
+    timeout: float = 120.0,
+    thinking: str | None = None,
 ) -> str:
     """调用 LLM，返回原始文本（未剥杂质）
 
-    timeout 默认 240s 不是保守，是实测出来的：MiniMax-M3 是推理模型，
-    抽取那条腿 prompt 只有 ~1k 字符，但 max_tokens=8000 会被吃满，
-    实测输出 28k 字符（大部分是 <think> 段）、耗时 118s。
-    原来的 120s 上限只剩 2 秒余量 —— 输入稍长就必然超时降级，
-    而超时会静默退成规则版抽取（capture_runner 捕所有异常）。
-    这是治标：真该做的是压输出，那是另一轮的事。
+    thinking 传给 API 的 `thinking.type`，只接受 "adaptive" / "disabled"，
+    传别的会被 API 拒（实测 allowed: adaptive, disabled）。None = 不传，
+    用模型默认值（M3 默认开）。
+
+    为什么需要它：M3 默认开推理，实测抽取那条腿的 JSON 本体只要
+    439~1121 字符，<think> 却占 95% 以上（原始输出 27k 字符）——
+    think 会把 max_tokens 用满，JSON 轮不到输出，整轮返回空串。
+    传 "disabled" 后：3 秒、296 token、正常 JSON（对照：33 秒、8000 token、
+    空输出）。抽取这种"照着原文抽结构"的任务本来不需要长时间推理。
+    需要真推理的调用点就别传 disabled。
+
+    以前这里是 subprocess 调 llm_call.py，所以只能用它暴露的参数，
+    thinking 传不进去。现在直连，参数自己说了算。
     """
-    if not _LLM_CALL_SCRIPT.exists():
-        raise LLMError(f"llm_call.py not found at {_LLM_CALL_SCRIPT}")
+    url, key = _resolve_endpoint()
+    body: dict[str, Any] = {
+        "model": model.split("/", 1)[-1],
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+    }
+    if thinking:
+        body["thinking"] = {"type": thinking}
 
-    config_path, tmpdir = _resolve_config_path()
-    cmd = [
-        sys.executable,
-        str(_LLM_CALL_SCRIPT),
-        "--config", str(config_path),
-        "--model", model,
-        "--max-tokens", str(max_tokens),
-        "--timeout", str(int(timeout)),
-        "--prompt", prompt,
-    ]
     try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout + 15
+        resp = httpx.post(
+            url,
+            json=body,
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            },
+            timeout=timeout,
         )
-    except subprocess.TimeoutExpired as e:
+    except httpx.TimeoutException as e:
         raise LLMError(f"llm call timed out after {timeout}s") from e
-    finally:
-        if tmpdir is not None:
-            shutil.rmtree(tmpdir, ignore_errors=True)
+    except httpx.HTTPError as e:
+        raise LLMError(f"llm request failed: {_readable_error(str(e))}") from e
 
-    out = (proc.stdout or "").strip()
-    if proc.returncode != 0:
+    if resp.status_code != 200:
         raise LLMError(
-            f"llm call failed (exit {proc.returncode}): "
-            f"{_readable_error(proc.stderr or out)}"
+            f"llm call failed (http {resp.status_code}): {_readable_error(resp.text)}"
         )
-    if not out:
+
+    try:
+        out = (resp.json()["choices"][0]["message"].get("content") or "").strip()
+    except (ValueError, KeyError, IndexError, TypeError) as e:
+        raise LLMError(f"unexpected response shape: {_readable_error(resp.text)}") from e
         # 整轮空输出和"输出了但解析不了"是同一类随机故障，同样可重试
         raise LLMParseError("llm returned empty output")
     return out
@@ -285,11 +265,11 @@ def complete_json(prompt: str, *, retries: int = 2, **kw: Any) -> Any:
     """调用 LLM 并解析成 JSON；解析失败（含空输出）自动重试。
 
     只对 `LLMParseError` 重试，这是刻意的：
-    - 空输出 / 不是 JSON：模型思考吃满了 max_tokens，JSON 没轮到输出。
-      换次采样通常就正常，重试走的是同一条腿，不引入任何假数据——
+    - 空输出 / 不是 JSON：随机故障（think 吃满额度、或采样没给全），
+      换次采样通常就正常。重试走的是同一条腿，不引入任何假数据——
       和"降级到规则版"性质完全相反，那条路已经删了。
     - 401 / 凭证错：重试多少次都一样，白等。
-    - 超时：单次 240 秒，重试三次就是 12 分钟干等，该由调用方决定重投。
+    - 超时：重试三次就是好几分钟干等，该由调用方决定重投。
 
     retries=2 即最多 3 次尝试。真的三次都解析不了，那是该失败，不是该兜底。
     """

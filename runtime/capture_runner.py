@@ -308,12 +308,16 @@ def _simulate_requirement_extractor(input_data: dict[str, Any]) -> dict[str, Any
     rendered = "\n".join(
         f'{s["sentence_id"]} [{s["role"]}] {s["text"]}' for s in sentences
     )
-    # max_tokens 必须够 think + JSON 两段：实测 JSON 本体只要 439~1121 字符，
-    # 而 <think> 占 95% 以上。给 8000 时，长输入会整轮吃满额度、JSON 没轮到
-    # 输出，剥掉 think 后是空串（长输入 3 次里空 2 次）。额度是上限不是消耗量，
-    # 给到 16000 不会让每次都变慢——模型 think 完就输出 JSON 了。
+    # thinking=disabled：这是"照着原文抽结构"，不需要长时间推理。
+    # M3 默认开着 think，实测它的 JSON 本体只要 439~1121 字符，<think> 却占
+    # 95% 以上（原始输出 27k 字符），会把 max_tokens 用满导致 JSON 轮不到
+    # 输出——整轮返回空串，长输入 3 次里空 2 次。关掉后：3 秒、296 token、
+    # 正常 JSON（对照 33 秒、8000 token、空输出）。质量不变（4 节点 3 边、
+    # coverage 100 实测一致）。
     raw = llm.complete_json(
-        _EXTRACT_PROMPT.format(sentences=rendered), max_tokens=16000
+        _EXTRACT_PROMPT.format(sentences=rendered),
+        max_tokens=8000,
+        thinking="disabled",
     )
     graph = _clean_graph(raw, sentences)
 

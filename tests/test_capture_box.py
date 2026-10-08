@@ -639,32 +639,31 @@ class TestAcceptanceGate:
         assert r["acceptance_status"] == "rejected"
 
 
-def test_extractor_asks_for_enough_room_for_thinking():
-    """抽取腿的 max_tokens 要够 think + JSON 两段。
+def test_extractor_disables_thinking():
+    """抽取腿关 think：照抄原文的任务不需要长时间推理。
 
-    实测：JSON 本体只要 439~1121 字符，<think> 占 95% 以上。
-    给 8000 时长输入整轮吃满额度、JSON 没轮到输出，剥掉 think 后是空串
-    （长输入 3 次空 2 次）。额度是上限不是消耗量，给到 16000 不会变慢。
+    M3 默认开着 think，实测它的 JSON 本体只要 439~1121 字符，<think> 占
+    95% 以上（原始输出 27k 字符），会把 max_tokens 用满导致 JSON 轮不到
+    输出——整轮返回空串，长输入 3 次里空 2 次。关掉后实测：
+    2~4 秒、296 token、正常 JSON，质量不变（4 节点 3 边 / coverage 100）。
     """
     import inspect
 
     from runtime import capture_runner
 
     src = inspect.getsource(capture_runner._simulate_requirement_extractor)
-    assert "max_tokens=16000" in src
+    assert 'thinking="disabled"' in src
 
 
-def test_modeling_structurer_also_asks_for_enough_room():
-    """建模盒那条腿的 max_tokens 同样要够 think + JSON 两段。
+def test_modeling_structurer_keeps_thinking():
+    """建模盒那条腿不关 think：它要判 requirement_type，是真语义判断。
 
-    它原来是 2000——比抽取腿的 8000 还小，而 JSON 本体比抽取腿还小。
-    额度决定的是 think 能想多久，给 2000 就会被推理吃干净、JSON 轮不到
-    输出。这条测试盯的是别为了"省 token"把额度调回去。
+    抽取腿关 think 是因为它只做结构化搬运；这条腿要分"哪句是规则、
+    哪句是指标、哪句是流程"，一刀切关掉会牺牲分类质量。
     """
     import inspect
 
     from kanban import trigger
 
     src = inspect.getsource(trigger._structure_business_text_llm)
-    assert "max_tokens=2000" not in src
-    assert "max_tokens=16000" in src
+    assert 'thinking=' not in src

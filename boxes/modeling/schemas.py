@@ -289,6 +289,17 @@ BUSINESS_MODEL_PACKAGE = SchemaDef(
             name="evidence",
             type="ref:schema_model_evidence",
         ),
+        # ---- 5 项 acceptance 判据（全部机械可验）----
+        # 这五个字段以前没声明，但 beeline 真的产出它们，acceptance 也真的读它们。
+        # 捕获盒早就是把判据写进产��� schema 的（见 schema_requirement_set_package）：
+        # 判据值不是「顺便算出来的副产品」，它属于产出契约的一部分——
+        # 不写进来，按 schema 生成的 API 消费方就永远拿不到判据字段，
+        # 而验收结论也只能靠猜。
+        FieldDef(name="requirement_coverage", type="number"),
+        FieldDef(name="rule_consistency", type="boolean"),
+        FieldDef(name="reference_integrity", type="boolean"),
+        FieldDef(name="structural_compliance", type="boolean"),
+        FieldDef(name="metrics_defined", type="boolean"),
     ],
 )
 

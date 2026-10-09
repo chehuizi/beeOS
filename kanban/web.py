@@ -32,19 +32,38 @@ from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from kanban.trigger import (
+    BOX_REGISTRY,
     TriggerError,
     box_domain_context,
+    box_manifest,
     box_meta,
     list_task_entries,
     order_boxes_by_flow,
     registered_box_ids,
+    resolve_text_intake,
     structure_business_text_with_llm,
     trigger_task,
 )
 from runtime.store import TaskRunStore
+
+
+def _single_text_field(schema) -> str:
+    """schema 里唯一的必填标量字段名（自然语言投料口用）
+
+    不写死 "narrative"：字段名归 schema 所有，调用方不该猜。
+    """
+    if schema is None:
+        raise TriggerError("task_schema is not declared in definition.schemas")
+    required = [f.name for f in schema.fields if f.required]
+    if len(required) != 1:
+        raise TriggerError(
+            f"text intake expects a schema with exactly one required field, "
+            f"got {required or 'none'} in {schema.id!r}"
+        )
+    return required[0]
 
 
 # ============================================================
@@ -1140,6 +1159,27 @@ function ruleAppliedNotice(r) {{
   </div>`;
 }}
 
+// ===== 产出视图注册表 =====
+// 盒子在 definition.result.view 里声明自己的产出形态，这里按声明分派。
+// 以前是「result 里有没有 nodes 字段」猜的——猜错会把一只盒子的产出
+// 渲染成另一只盒子的形状，而且不报错，看起来像渲染成功了。
+// 声明了 view 却没注册渲染器 → 落到 generic，如实显示 JSON，
+// 绝不掉进某个不相关的专用视图。
+const ARTIFACT_VIEWS = {{
+  flow_graph: renderRequirementSet,
+  ddd_model: renderDddModel,
+}};
+
+function renderArtifactBody(view, result) {{
+  const fn = ARTIFACT_VIEWS[view];
+  if (!fn) {{
+    return `<div class="rs-hint">该盒声明的产出形态 <b>${{esc(view || 'generic')}}</b> `
+      + `在看板没有专用视图，如实显示 JSON（看 raw JSON 段）。</div>`
+      + `<pre>${{esc(JSON.stringify(result, null, 2))}}</pre>`;
+  }}
+  return fn(result);
+}}
+
 function renderArtifact() {{
   const a = _boxState.artifact;
   if (!a) return `<div class="empty" style="padding:24px 8px;">(等待产出)</div>`;
@@ -1158,10 +1198,8 @@ function renderArtifact() {{
   const why = a.rejection_class
     ? `<div class="rej-why">未通过原因：<b>${{REJECT_LABEL[a.rejection_class] || a.rejection_class}}</b></div>`
     : '';
-  // 流程图（捕获盒）与 DDD 模型（建模盒）两种产出形态
-  const body = Array.isArray(a.result && a.result.nodes)
-    ? renderRequirementSet(a.result)
-    : renderDddModel(a.result);
+  // 产出的形态由盒子声明（definition.result.view），不靠猜
+  const body = renderArtifactBody(a.artifact_view, a.result);
   return `<div class="artifact-card">
     <span class="artifact-badge ${{badge}}">${{acc.toUpperCase()}}</span>
     <div class="tid">task_run ${{a.task_run_id}}</div>
@@ -1662,6 +1700,9 @@ async function triggerTask(boxId) {{
           status: 'failed',
           acceptance_status: null,
           acceptance_detail: [],
+          // 中止的产出没有视图可言，但字段得留着——省掉它会让
+          // 渲染层以为是「盒子声明了 generic」而不是「压根没产出」
+          artifact_view: data.artifact_view || 'generic',
           result: data.result,
           failure: bad
             ? `${{bad.op_id}}：${{bad.error || '执行失败'}}`
@@ -1686,6 +1727,8 @@ async function triggerTask(boxId) {{
         acceptance_status: data.acceptance_status,
         acceptance_detail: data.acceptance_detail || [],
         rejection_class: data.rejection_class,
+        // 产出的形态由盒子声明（后端 response 带过来），不在这儿猜
+        artifact_view: data.artifact_view || 'generic',
         result: data.result,
       }};
       renderArtifactInto();
@@ -1822,6 +1865,24 @@ class KanbanRequestHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/data":
             box_filter = (qs.get("box") or [None])[0] or None
             self._serve_json(box_filter)
+        elif parsed.path == "/api/boxes":
+            # 目录：所有已注册盒子 + 各自的 API 面
+            self._send_json(200, {
+                "boxes": [
+                    box_manifest(b) for b in order_boxes_by_flow(registered_box_ids())
+                ]
+            })
+        elif parsed.path.startswith("/api/boxes/"):
+            # 单盒自描述：调用方不读源码就能知道它是什么、怎么调、吐什么
+            bid = unquote(parsed.path[len("/api/boxes/"):])
+            manifest = box_manifest(bid)
+            if not manifest:
+                self._send_json(404, {
+                    "error": f"unknown box: {bid!r}",
+                    "registered": sorted(BOX_REGISTRY),
+                })
+                return
+            self._send_json(200, manifest)
         elif parsed.path.startswith("/vendor/"):
             self._serve_vendor(parsed.path[len("/vendor/"):])
         else:
@@ -1856,16 +1917,26 @@ class KanbanRequestHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/structure":
             # 自然语言业务表述 → 结构化表达
-            # 走**捕获盒的 task**（不再是影子函数）——每一次抽取都产生 TaskRun、
-            # 都过 4 项 acceptance、失败有 rejection_class 归因
+            # 走**盒子的 task**（不再是影子函数）——每一次抽取都产生 TaskRun、
+            # 都过 4 条 acceptance、失败有 rejection_class 归因。
+            # box_id / task_type 可以显式指定；不给时按「谁吃自然语言」解析。
+            # 以前这里是写死 requirement_capture_box 的——那让看板服务器
+            # 知道了某一只具体盒子的 task 类型，盒子就不再是可插拔单元。
             text = body.get("text")
             if not isinstance(text, str) or not text.strip():
                 self._send_json(400, {"error": "body must include text (non-empty string)"})
                 return
             try:
+                box_id, task_type = resolve_text_intake(
+                    body.get("box_id"), body.get("task_type")
+                )
+                # 投料字段名由 task_schema 决定（目前是 narrative），
+                # 不在这里写死——写死就是又一处跨盒硬编码
+                task = BOX_REGISTRY[box_id][0]().get_task(task_type)
+                schema = BOX_REGISTRY[box_id][0]().get_schema(task.task_schema)
+                field = _single_text_field(schema)
                 result = trigger_task(
-                    "requirement_capture_box", "capture_business_requirement",
-                    {"narrative": text}, self.store,
+                    box_id, task_type, {field: text}, self.store,
                 )
             except TriggerError as e:
                 self._send_json(400, {
@@ -1879,10 +1950,14 @@ class KanbanRequestHandler(BaseHTTPRequestHandler):
             pkg = result.get("result") or {}
             self._send_json(200, {
                 "task_run_id": result.get("task_run_id"),
+                "box_id": box_id,
+                "task_type": task_type,
                 "status": result.get("status"),
                 "acceptance_status": result.get("acceptance_status"),
                 "acceptance_detail": result.get("acceptance_detail") or [],
                 "rejection_class": result.get("rejection_class"),
+                "artifact_view": result.get("artifact_view"),
+                "artifact_type": result.get("artifact_type"),
                 "op_trace": result.get("op_trace"),
                 "payload": pkg,
                 "requirement_count": pkg.get("requirement_count", 0),

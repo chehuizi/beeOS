@@ -186,6 +186,65 @@ def _payload_kind(schema) -> str:
     return "json" if has_complex else "text"
 
 
+def resolve_text_intake(
+    box_id: Optional[str] = None,
+    task_type: Optional[str] = None,
+) -> tuple[str, str]:
+    """解析「一段自然语言」该投给哪只盒子的哪个 task
+
+    按**能力**解析（谁吃 text），不按 id 硬编码。以前这里是写死
+    requirement_capture_box + capture_business_requirement 的——那等于让
+    调用方知道某一只盒子的 task 类型名，盒子就不再是可插拔单元：
+    加一只吃自然语言的新盒，这条路不会跟着它走。
+
+    解析规则：
+    - box_id 和 task_type 都给了 → 直接用（调用方明确指定）
+    - 只给 box_id → 该盒第一个 payload_kind == "text" 的 task
+    - 都没给 → 全注册表里吃 text 的 task；有且仅有一个就用它，
+      有多个说明调用方必须指明（不猜——猜错会把业务表述投进错误的盒子）
+    """
+    if box_id is not None and task_type is not None:
+        return box_id, task_type
+
+    if box_id is None:
+        candidates: list[tuple[str, str]] = []
+        for bid in BOX_REGISTRY:
+            candidates.extend(
+                (bid, t.type) for t in _text_tasks(bid)
+            )
+        if not candidates:
+            raise TriggerError(
+                "no registered box accepts plain text input"
+            )
+        if len(candidates) > 1:
+            raise TriggerError(
+                "several registered boxes accept plain text "
+                f"({['/'.join(c) for c in candidates]}); "
+                "specify box_id and task_type"
+            )
+        return candidates[0]
+
+    tasks = _text_tasks(box_id)
+    if not tasks:
+        raise TriggerError(
+            f"box {box_id!r} has no task taking plain text input "
+            f"(available: {[t.type for t in BOX_REGISTRY[box_id][0]().task]})"
+        )
+    return box_id, tasks[0].type
+
+
+def _text_tasks(box_id: str):
+    """该盒所有 payload_kind == text 的 task（按声明顺序）"""
+    entry = BOX_REGISTRY.get(box_id)
+    if entry is None:
+        raise TriggerError(f"unknown box_id: {box_id!r}")
+    definition = entry[0]()
+    return [
+        t for t in definition.task
+        if _payload_kind(definition.get_schema(t.task_schema)) == "text"
+    ]
+
+
 def list_task_entries(box_id: str) -> list[dict[str, Any]]:
     """列出某 box 可接收的 task 入口（task_type + 触发说明 + 示例 payload + 内部工位）
 
@@ -227,6 +286,90 @@ def _hop(box_id: str) -> dict[str, str]:
     """价值流上的一跳：id + 显示名。显示名跟着 id 一起出，
     前端单盒过滤时手上只有一只盒的名字表，让它自己补下游名字会露出原始 id。"""
     return {"id": box_id, "name": box_meta(box_id).get("display_name", box_id)}
+
+
+def box_manifest(box_id: str) -> dict[str, Any]:
+    """盒子的完整自描述——它作为独立 API 单元时对外的全部契约
+
+    五个组件在这里各自成形，正好是看板五栏的投影：
+      task   → TASK IN 能接什么（类型 / schema / 必填 / 触发说明）
+      beeline→ BEELINE 跑哪条程序（id + 版本 + op 清单）
+      result → ARTIFACTS OUT 产出什么（形态 / schema / 字段 / 判据 / 例外）
+      acceptance 在 result 里，不另起一节
+      domain_context（含 metrics）→ DOMAIN CONTEXT 底座
+
+    为什么要这么一份东西：要把 beeBox 当作可独立提供的 API 单元，
+    调用方就得能在**不读源码、不看看板**的前提下知道这只盒子是什么、
+    怎么调它、它会吐出什么。以前的声明散在 definition / BOX_META /
+    measure.py 三处，调用方要凑齐得先读完整个 kanban 包。
+
+    records 传 None 表示「还没跑过」，metrics 里的 actual 会是 None。
+    """
+    entry = BOX_REGISTRY.get(box_id)
+    if entry is None:
+        return {}
+    get_definition, beeline_loaders = entry
+    definition = get_definition()
+    result = definition.result
+
+    tasks = []
+    beelines = []
+    for task in definition.task:
+        schema = definition.get_schema(task.task_schema)
+        tasks.append({
+            "type": task.type,
+            "schema": task.task_schema,
+            "beeline_id": task.beeline_id,
+            "beeline_version": task.beeline_version,
+            "trigger": task.trigger,
+            "payload_kind": _payload_kind(schema),
+            "required": [
+                {"name": f.name, "type": f.type}
+                for f in (schema.fields if schema else []) if f.required
+            ],
+        })
+        loader = beeline_loaders.get(task.beeline_id)
+        if loader is not None:
+            beeline = loader()
+            if beeline.id not in [b["id"] for b in beelines]:
+                beelines.append({
+                    "id": beeline.id,
+                    "version": beeline.version,
+                    "ops": [{"id": op.op_id, "type": op.type} for op in beeline.operations],
+                })
+
+    return {
+        "box_id": definition.id,
+        "version": definition.version,
+        "description": definition.description,
+        "display_name": box_meta(box_id).get("display_name", box_id),
+        "value_stream": box_meta(box_id).get("value_stream", ""),
+        "feeds_into": [
+            _hop(dst) for dst in box_meta(box_id).get("feeds_into", [])
+        ],
+        "tasks": tasks,
+        "beelines": beelines,
+        "produces": {
+            "type": result.type,
+            "view": result.view,
+            "schema": result.result_schema,
+            "fields": [
+                f.name for f in (
+                    definition.get_schema(result.result_schema).fields
+                    if definition.get_schema(result.result_schema) else []
+                )
+            ],
+        },
+        "acceptance": [
+            {"metric": r.metric, "op": r.op, "expected": r.value}
+            for r in result.acceptance
+        ],
+        "exceptions": [
+            {"condition": e.condition, "action": e.action}
+            for e in result.exceptions
+        ],
+        "metrics": box_metrics_readings(box_id, []),
+    }
 
 
 def box_metrics_readings(
@@ -440,6 +583,11 @@ def trigger_task(
         "acceptance_detail": acceptance_detail,
         "acceptance_passed": acceptance_passed,
         "rejection_class": rejection_class,
+        # 产出自描述：这只盒子声明的展示形态 + 结果类型。
+        # 消费方（看板渲染器、将来的 API 调用方）据此知道该拿哪种视图，
+        # 不需要去猜 result 里有没有某个字段。猜错会渲染成另一种形状还不报错。
+        "artifact_view": definition.result.view,
+        "artifact_type": definition.result.type,
         "result": task_run.result,
         # 真实执行轨迹（按执行顺序）——看板用来在盒子内部回放履约过程。
         # error 必须带上：降级删掉之后，LLM 不可用就是履约中止，

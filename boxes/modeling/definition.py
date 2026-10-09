@@ -61,6 +61,7 @@ BUSINESS_MODELING_BOX = BeeBoxDefinition(
     result=ResultDef(
         type="business_model_produced",
         result_schema="schema_business_model_package",
+        view="ddd_model",
         acceptance=[
             AcceptanceRule(
                 metric="requirement_coverage",

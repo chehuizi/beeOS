@@ -64,6 +64,7 @@ REQUIREMENT_CAPTURE_BOX = BeeBoxDefinition(
     result=ResultDef(
         type="business_requirement_captured",
         result_schema="schema_requirement_set_package",
+        view="flow_graph",
         description="结构化业务需求集 + 4 项抽取验证证据",
 
         acceptance=[

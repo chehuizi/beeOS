@@ -124,6 +124,13 @@ class ResultDef(BaseModel):
     acceptance: list[AcceptanceRule]
     exceptions: list[ExceptionRule]
 
+    # 产出的展示形态。盒子自己声明它的产出长什么样，而不是让看板去猜
+    # （以前靠「result 里有没有 nodes 字段」猜，猜错就把一只盒子的产出
+    #  渲染成另一只盒子的形状，看起来像渲染成功，其实是彻底错读）。
+    # generic = 声明成通用 JSON 视图：没注册渲染器的产出落到这里，
+    # 至少如实呈现，而不是掉进某个不相关的专用视图里。
+    view: str = "generic"
+
 
 class QueenAuthorization(BaseModel):
     """履约政策（Policy）：queen 自治授权档位"""

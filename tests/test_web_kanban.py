@@ -21,7 +21,7 @@ import pytest
 
 from boxes.inventory_shortage.runner import RUNNER as INVENTORY_RUNNER
 from boxes.modeling.runner import RUNNER as MODELING_RUNNER
-from kanban.web import KanbanRequestHandler, dashboard_data
+from kanban.web import HTML_PAGE, KanbanRequestHandler, dashboard_data
 from runtime.store import TaskRunStore
 from runtime import create_task_run, BeelineExecutor
 from boxes.inventory_shortage import get_definition as get_inv_def
@@ -185,6 +185,24 @@ class TestDashboardData:
 
 
 class TestKanbanServer:
+    def test_beeline_runs_left_to_right_with_ports_at_both_ends(self):
+        """BEELINE 栏内：IN 在最左、OUT 在最右，每排都左→右
+
+        以前是蛇形（第二排右→左），于是逻辑上最后一个 op 被甩到最左边，
+        OUT 跟着掉到左下角——可读图的人认的尽头在右边，一看就觉得
+        「链条怎么往回走」。Z 字折行（每排左→右，折行处走中间道回绕）
+        消掉这个逆流，也不用横穿任何工位框。
+        """
+        html = HTML_PAGE
+        assert "Z 字折行" in html
+        assert "蛇形两排布局" not in html, "蛇形布局会把末步甩到左下角，OUT 跟着错位"
+        # 折行路由：同排一条横线，跨排下到中间道再横移
+        assert "a.y === b.y" in html
+        assert "[a.x, midY], [b.x, midY]" in html
+        # 两端分居：IN 靠左贴投料栏，OUT 靠右贴产出口
+        assert "pos._in = { x: 34" in html or "x: 34, y: 96" in html
+        assert "x: 526" in html
+
     def test_html_endpoint(self, server_url: tuple[str, TaskRunStore]):
         url, _ = server_url
         conn = HTTPConnection(url.replace("http://", ""))

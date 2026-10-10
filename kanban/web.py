@@ -791,39 +791,53 @@ let _boxState = {{ opStates: {{}}, token: null, artifact: null, running: false, 
 let _lastData = null;
 
 function layout2D(ops) {{
-  // 蛇形两排布局（盒内 560x420 画布）：row1 左→右（y=150），row2 右→左（y=250）
-  // IN 顶行、OUT 底行，各自独占一行，且横向对齐它连的那个工位中心——
-  // 端口与工位同 x，接入/产出就是一条竖线，不用猜"这个点连的是哪个框"
-  // 间距按完整 op 名设计（不省略），最长 21 字符也能放得下
-  const pos = {{}};
+  // Z 字折行：每排都左→右，IN 在最左、OUT 在最右（画布 560 宽）。
+  //
+  // 以前是蛇形——第二排右→左。后果是逻辑上最后一个 op 被甩到最左边，
+  // OUT 只能跟着掉到左下角，而读图的人认的尽头在右边：
+  // 一眼看过去「链条怎么在这儿往回走」。用户圈出来说 OUT 该在右边，是对的。
+  //
+  // 折行处走 Z 字回绕：从上排末尾垂直下到中间道，水平回到下排开头，
+  // 方向感不丢，也不横穿任何工位框。
+  // IN 在左、OUT 在右还顺带对上了栏：IN 紧邻 TASK IN 投料口，
+  // OUT 紧邻 ARTIFACTS OUT 产出口，两头各归各的邻居。
   const n = ops.length;
-  if (n === 0) return pos;
-  const perRow = Math.ceil(n / 2);
+  if (n === 0) return {{ pos: {{}}, height: 160, midY: 96 }};
+
+  const pos = {{}};
+  const perRow = n <= 3 ? n : Math.ceil(n / 2);
+  const x0 = 100, x1 = 460;
   const spread = (count) => {{
-    if (count === 1) return [270];
+    if (count === 1) return [Math.round((x0 + x1) / 2)];
     const arr = [];
-    for (let i = 0; i < count; i++) arr.push(Math.round(90 + (360 / (count - 1)) * i));
+    for (let i = 0; i < count; i++) arr.push(Math.round(x0 + ((x1 - x0) / (count - 1)) * i));
     return arr;
   }};
   const xs1 = spread(perRow);
-  for (let i = 0; i < perRow; i++) pos[ops[i]] = {{ x: xs1[i], y: 150 }};
+  for (let i = 0; i < perRow; i++) pos[ops[i]] = {{ x: xs1[i], y: 96 }};
+
   const rest = ops.slice(perRow);
-  const xs2 = spread(rest.length);
-  for (let i = 0; i < rest.length; i++) pos[rest[i]] = {{ x: xs2[rest.length - 1 - i], y: 250 }};
-  pos._in = {{ x: pos[ops[0]].x, y: 52 }};
-  pos._out = {{ x: pos[ops[n - 1]].x, y: 322 }};
-  return pos;
+  const height = rest.length ? 300 : 160;
+  const midY = rest.length ? 172 : 96;
+  if (rest.length) {{
+    const xs2 = spread(rest.length);
+    for (let i = 0; i < rest.length; i++) pos[rest[i]] = {{ x: xs2[i], y: 248 }};
+  }}
+
+  pos._in = {{ x: 34, y: 96 }};
+  pos._out = {{ x: 526, y: rest.length ? 248 : 96 }};
+  return {{ pos, height, midY }};
 }}
 
 function initBox2D(container, ops) {{
-  // BEELINE 栏内部：IN → op1 → ... → opN → OUT。
+  // BEELINE 栏内部：IN → op1 → ... → opN → OUT，两端左右分居。
   // 验收闸不在这里——它是同级的第四栏（见 initAccGate）。
-  // 正交布线：横平竖直 + 盒底出口通道，无交叉；令牌沿折线轨道走
+  // 正交布线：同排横平、折行走 Z 字回绕，无交叉；
+  // 令牌沿折线轨道走
   // 盒子边界由外层 .beebox-frame 承担（这里不再画内框）
   // 对外 api：setOpState / moveToken / reset
-  const pos = layout2D(ops);
-  // 画布高 372：两排工位(150/250) + 标签(284) + OUT(322) + OUT 标签(352)
-  let s = `<svg viewBox="0 0 560 372" style="width:100%;height:auto;display:block" preserveAspectRatio="xMidYMid meet">
+  const {{ pos, height, midY }} = layout2D(ops);
+  let s = `<svg viewBox="0 0 560 ${{height}}" style="width:100%;height:auto;display:block" preserveAspectRatio="xMidYMid meet">
     <defs>
       <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
         <path d="M 0 1.5 L 8 5 L 0 8.5" fill="none" stroke="#94a3b8" stroke-width="1.6"/>
@@ -837,23 +851,20 @@ function initBox2D(container, ops) {{
   const pathTo = {{}};   // key → 到达该节点的折线途径点（不含终点）
   for (let i = 0; i < chain.length - 1; i++) {{
     const a = pos[chain[i]], b = pos[chain[i + 1]];
-    let pts;
-    if (chain[i + 1] === '_out' || chain[i] === '_in') {{
-      // 进 IN / 出 OUT：垂直落到目标行 → 横向进目标，同 x 时自动退化成一条竖线
-      pts = [[a.x, a.y], [a.x, b.y], [b.x, b.y]];
-    }} else {{
-      pts = [[a.x, a.y], [b.x, b.y]];
-    }}
-    pts = tidy(pts);
-    s += `<polyline points="${{pts.map(p => p.join(',')).join(' ')}}" class="op-link" fill="none" marker-end="url(#arrow)" />`;
-    if (chain[i + 1] === '_out') pathTo._out = pts.slice(1, -1);
+    // 同排 = 一条横线；跨排 = Z 字回绕（下到中间道 → 横移 → 下到目标行）
+    const pts = a.y === b.y
+      ? [[a.x, a.y], [b.x, b.y]]
+      : [[a.x, a.y], [a.x, midY], [b.x, midY], [b.x, b.y]];
+    const clean = tidy(pts);
+    s += `<polyline points="${{clean.map(p => p.join(',')).join(' ')}}" class="op-link" fill="none" marker-end="url(#arrow)" />`;
+    if (chain[i + 1] === '_out') pathTo._out = clean.slice(1, -1);
   }}
 
-  // IN / OUT 端口
+  // IN / OUT 端口：标签放点的上方，跟工位标签（下方）区分开
   s += `<circle cx="${{pos._in.x}}" cy="${{pos._in.y}}" r="13" class="port-2d port-in-2d" />
-    <text x="${{pos._in.x}}" y="${{pos._in.y + 30}}" class="port-label">IN</text>
+    <text x="${{pos._in.x}}" y="${{pos._in.y - 22}}" class="port-label">IN</text>
     <circle cx="${{pos._out.x}}" cy="${{pos._out.y}}" r="13" class="port-2d port-out-2d" />
-    <text x="${{pos._out.x}}" y="${{pos._out.y + 30}}" class="port-label">OUT</text>`;
+    <text x="${{pos._out.x}}" y="${{pos._out.y - 22}}" class="port-label">OUT</text>`;
 
   // 工位：矩形机器 + 右上角状态灯 + 下方标签
   for (const op of ops) {{

@@ -507,8 +507,23 @@ HTML_PAGE = f"""<!DOCTYPE html>
   /* 只命中投料口那个 task_type 下拉；产出口里的 type 下拉在更深层，
      被这里 width:100% 命中会把整行撑满、把需求描述挤没。 */
   .port > select {{
-    width: 100%; box-sizing: border-box; padding: 6px 8px; margin-bottom: 8px;
+    flex: 1 1 auto; min-width: 0; box-sizing: border-box; padding: 6px 8px; margin-bottom: 8px;
     border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; background: white;
+  }}
+  /* 任务类型这一行：label 在左，控件在右。
+     只有一个 task 时不画下拉——一个没有第二个选项的 select 是纯装饰，
+     还会让人以为能选。改成静态文本，隐藏 input 保住 #task-type 的取值。 */
+  .task-type-row {{
+    display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+  }}
+  .task-type-label {{
+    font-size: 11px; color: #64748b; white-space: nowrap; flex: 0 0 auto;
+  }}
+  .task-type-static {{
+    flex: 1 1 auto; min-width: 0; font-size: 13px; color: #334155;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    padding: 6px 8px; background: #f8fafc;
+    border: 1px dashed #cbd5e1; border-radius: 6px;
   }}
   /* 投料框不给人拖动改大小：盒高固定后，拖一把就破版 */
   #task-payload {{ flex: 1 1 auto; min-height: 0; resize: none; }}
@@ -1371,13 +1386,26 @@ function buildShell(boxId, box, entries) {{
     options += `<option value="${{e.task_type}}">${{e.task_type}}</option>`;
     if (e.beeline_ops && e.beeline_ops.length > 0) ops = e.beeline_ops;
   }}
+  // 任务类型行：多 task 才给下拉，单 task 直接显示静态文本。
+  // 隐藏 input 是为了让 #task-type 的取值路径保持一条——
+  // 三处调用方都写 getElementById('task-type').value。
+  const taskTypeRow = entries.length > 1
+    ? `<div class="task-type-row">
+         <label class="task-type-label" for="task-type">任务类型</label>
+         <select id="task-type" onchange="onTaskTypeChange()">${{options}}</select>
+       </div>`
+    : `<div class="task-type-row">
+         <span class="task-type-label">任务类型</span>
+         <span class="task-type-static">${{esc(entries.length ? entries[0].task_type : '')}}</span>
+         <input type="hidden" id="task-type" value="${{esc(entries.length ? entries[0].task_type : '')}}">
+       </div>`;
   document.getElementById('content').innerHTML = `<div class="section">
     <div class="beebox-frame">
       <div class="beebox-nameplate" id="cube-caption"></div>
       <div class="beebox-body">
         <div class="port">
           <div class="port-title" id="port-title">TASK IN · 投料口</div>
-          <select id="task-type" onchange="onTaskTypeChange()">${{options}}</select>
+          ${{taskTypeRow}}
           <textarea id="task-payload" rows="12" spellcheck="false"
                     oninput="onPayloadInput()"
                     placeholder="${{placeholder}}"></textarea>

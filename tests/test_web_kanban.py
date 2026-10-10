@@ -203,6 +203,21 @@ class TestKanbanServer:
         assert "pos._in = { x: 34" in html or "x: 34, y: 96" in html
         assert "x: 526" in html
 
+    def test_intake_names_the_task_type_instead_of_a_bare_dropdown(self):
+        """投料口要有「任务类型」label；只有一个 task 时不画下拉
+
+        以前那个 select 没 label，读图的人不知道框里那串英文是什么；
+        而且只有一只盒注册了一个 task，下拉根本没有第二个选项——
+        一个不能选的下拉是纯装饰，还会让人以为这里能选。
+        """
+        html = HTML_PAGE
+        assert "任务类型" in html
+        assert "task-type-label" in html
+        assert "entries.length > 1" in html, "多 task 才给下拉"
+        # 静态化后仍要保住 #task-type 的取值路径：隐藏 input，
+        # 三处调用方都写 getElementById('task-type').value
+        assert '<input type="hidden" id="task-type"' in html
+
     def test_html_endpoint(self, server_url: tuple[str, TaskRunStore]):
         url, _ = server_url
         conn = HTTPConnection(url.replace("http://", ""))

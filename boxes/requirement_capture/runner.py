@@ -1,14 +1,18 @@
 """
-runtime.capture_runner - 需求捕获盒的 5 个 operation 实现
+boxes.requirement_capture.runner - 需求捕获盒的 5 个 operation 实现
 
-与 mock_runner 的区别：
-- mock_runner 的 op 全是机械模拟（假装有真实引擎）
-- 本模块的 extract_requirements **真调 LLM**（自然语言理解是真的）
-  其余 4 个 op 是纯机械的（切句 / 编号 / 集合运算 / 字符串匹配）
+从 runtime/capture_runner.py 搬来。盒子以前只带 definition / schemas / measure，
+执行部分躺在内核里——它带不走自己的实现，也就不算一个自包含单元。
 
-**这个模块是"LLM 只做语义、机械做校验"这条边界的落地**：
+**这条腿是真的**：extract_requirements 真调 LLM（自然语言理解是真的），
+其余 4 个 op 是纯机械的（切句 / 编号 / 集合运算 / 字符串匹配）。
+所以它是「LLM 只做语义、机械做校验」这条边界的落地：
 真上生产时只有 extract_requirements 需要换成真实模型调用，
 其余 4 个算子可以永远保持确定性。
+
+**它不含降级**：LLM 不可用就是履约中止，没有第二条腿兜着。
+规则版抽取是唯一稳定拿绿灯的腿，可它绕过了质量门禁——
+降级不是兜底，是绕过检查的通道。
 """
 
 from __future__ import annotations
@@ -17,6 +21,8 @@ import re
 from collections import Counter
 from typing import Any
 from uuid import uuid4
+
+from runtime.runner import HandlerRunner
 
 
 _TYPE_PREFIX = {
@@ -495,3 +501,5 @@ CAPTURE_HANDLERS: dict[str, Any] = {
     "graph_fidelity_verifier": _simulate_graph_fidelity_verifier,
     "requirement_set_packager": _simulate_requirement_set_packager,
 }
+
+RUNNER = HandlerRunner(CAPTURE_HANDLERS, owner="requirement_capture_box")

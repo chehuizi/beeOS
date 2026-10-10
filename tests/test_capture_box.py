@@ -26,7 +26,7 @@ from kanban.trigger import (
     registered_box_ids,
     trigger_task,
 )
-from runtime.capture_runner import _split_sentences, _simulate_requirement_set_packager
+from boxes.requirement_capture.runner import _split_sentences, _simulate_requirement_set_packager
 from runtime.store import TaskRunStore
 from tests.conftest import stub_compliant_llm
 
@@ -636,7 +636,7 @@ def test_extractor_disables_thinking():
     """
     import inspect
 
-    from runtime import capture_runner
+    from boxes.requirement_capture import runner as capture_runner
 
     src = inspect.getsource(capture_runner._simulate_requirement_extractor)
     assert 'thinking="disabled"' in src

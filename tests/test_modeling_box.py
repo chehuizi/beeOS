@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from boxes.modeling import BUSINESS_MODELING_BOX, get_definition
+from boxes.modeling.runner import RUNNER as MODELING_RUNNER
 from boxes.modeling.measure import COMPUTERS as MODEL_COMPUTERS
 from boxes.modeling.schemas import REQUIREMENT_TYPES
 from beelines.modeling import BUSINESS_MODELING_BEELINE, get_beeline
@@ -201,7 +202,7 @@ class TestModelingEndToEnd:
         )
 
         # 执行 beeline
-        task_run = BeelineExecutor().execute(task_run, beeline, input_data)
+        task_run = BeelineExecutor(MODELING_RUNNER).execute(task_run, beeline, input_data)
 
         # 验证：task run COMPLETED
         assert task_run.status == TaskRunStatus.COMPLETED
@@ -247,7 +248,7 @@ class TestModelingEndToEnd:
             f"{box.id}@v{box.version}", beeline.id, beeline.version,
             "rt", "in",
         )
-        BeelineExecutor().execute(task_run, beeline, _sample_requirement_set())
+        BeelineExecutor(MODELING_RUNNER).execute(task_run, beeline, _sample_requirement_set())
 
         events = [e.event for e in task_run.event_log.entries]
         # 必须包含 status_change + op_start + op_finish
@@ -297,7 +298,7 @@ class TestModelingEndToEnd:
             f"{box.id}@v{box.version}", beeline.id, beeline.version,
             "rt", "in",
         )
-        task_run = BeelineExecutor().execute(task_run, beeline, minimal)
+        task_run = BeelineExecutor(MODELING_RUNNER).execute(task_run, beeline, minimal)
         assert task_run.status == TaskRunStatus.COMPLETED
         assert task_run.result["requirement_coverage"] == 100.0
 
@@ -316,7 +317,7 @@ class TestModelingMockSemantics:
             f"{box.id}@v{box.version}", beeline.id, beeline.version,
             "rt", "in",
         )
-        return BeelineExecutor().execute(
+        return BeelineExecutor(MODELING_RUNNER).execute(
             task_run, beeline,
             {"set_id": set_id, "business_goal": "g", "requirements": requirements},
         )
@@ -390,8 +391,8 @@ class TestModelingMockSemantics:
 
     def test_coverage_verifier_detects_uncovered(self):
         """coverage_verifier 真实对比：未被 trace 覆盖的需求进入 uncovered"""
-        from runtime.mock_runner import MockRunner
-        out = MockRunner().run("coverage_verifier", {
+        from boxes.modeling.runner import RUNNER
+        out = RUNNER.run("coverage_verifier", {
             "set_id": "s",
             "modelable_ids": ["r1", "r2", "r3"],
             "entities": [{"entity_id": "e1", "name": "E", "trace_to": "r1"}],
@@ -404,8 +405,8 @@ class TestModelingMockSemantics:
 
     def test_consistency_checker_detects_broken_reference(self):
         """consistency_checker 真实检查：trace_to 指向无效需求 → reference_integrity=False"""
-        from runtime.mock_runner import MockRunner
-        out = MockRunner().run("consistency_checker", {
+        from boxes.modeling.runner import RUNNER
+        out = RUNNER.run("consistency_checker", {
             "set_id": "s",
             "valid_ids": ["r1"],
             "entities": [{"entity_id": "e1", "name": "E", "trace_to": "r_ghost"}],

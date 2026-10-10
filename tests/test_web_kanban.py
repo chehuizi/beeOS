@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from boxes.inventory_shortage.runner import RUNNER as INVENTORY_RUNNER
+from boxes.modeling.runner import RUNNER as MODELING_RUNNER
 from kanban.web import KanbanRequestHandler, dashboard_data
 from runtime.store import TaskRunStore
 from runtime import create_task_run, BeelineExecutor
@@ -51,14 +53,14 @@ def server_url(tmp_path: Path):
             "o", "i", inv_def.result.result_schema, f"{inv_def.id}@v{inv_def.version}",
             inv_beeline.id, inv_beeline.version, "rt", "in",
         )
-        BeelineExecutor().execute(tr, inv_beeline, {"exception_type": "inventory_shortage"})
+        BeelineExecutor(INVENTORY_RUNNER).execute(tr, inv_beeline, {"exception_type": "inventory_shortage"})
         store.append(tr, box_id=inv_def.id, acceptance_status="accepted")
 
     tr = create_task_run(
         "pm", "i", mod_def.result.result_schema, f"{mod_def.id}@v{mod_def.version}",
         mod_beeline.id, mod_beeline.version, "rt", "in",
     )
-    BeelineExecutor().execute(tr, mod_beeline, {
+    BeelineExecutor(MODELING_RUNNER).execute(tr, mod_beeline, {
         "set_id": "s1", "business_goal": "x",
         "requirements": [{"requirement_id": "r1", "description": "x", "requirement_type": "object", "priority": "must_have"}],
     })
@@ -110,7 +112,7 @@ class TestDashboardData:
             "o", "i", inv_def.result.result_schema, f"{inv_def.id}@v{inv_def.version}",
             inv_beeline.id, inv_beeline.version, "rt", "in",
         )
-        BeelineExecutor().execute(tr, inv_beeline, {"exception_type": "inventory_shortage"})
+        BeelineExecutor(INVENTORY_RUNNER).execute(tr, inv_beeline, {"exception_type": "inventory_shortage"})
         store.append(tr, box_id=inv_def.id, acceptance_status="accepted")
 
         # 2 mod
@@ -119,7 +121,7 @@ class TestDashboardData:
                 "pm", "i", mod_def.result.result_schema, f"{mod_def.id}@v{mod_def.version}",
                 mod_beeline.id, mod_beeline.version, "rt", "in",
             )
-            BeelineExecutor().execute(tr, mod_beeline, {
+            BeelineExecutor(MODELING_RUNNER).execute(tr, mod_beeline, {
                 "set_id": "s1", "business_goal": "x",
                 "requirements": [{"requirement_id": "r1", "description": "x", "requirement_type": "object", "priority": "must_have"}],
             })
@@ -152,7 +154,7 @@ class TestDashboardData:
             "o", "i", inv_def.result.result_schema, f"{inv_def.id}@v{inv_def.version}",
             inv_beeline.id, inv_beeline.version, "rt", "in",
         )
-        BeelineExecutor().execute(tr, inv_beeline, {"exception_type": "inventory_shortage"})
+        BeelineExecutor(INVENTORY_RUNNER).execute(tr, inv_beeline, {"exception_type": "inventory_shortage"})
         store.append(tr, box_id=inv_def.id, acceptance_status="accepted")
 
         # 1 mod (rejected)
@@ -160,7 +162,7 @@ class TestDashboardData:
             "pm", "i", mod_def.result.result_schema, f"{mod_def.id}@v{mod_def.version}",
             mod_beeline.id, mod_beeline.version, "rt", "in",
         )
-        BeelineExecutor().execute(tr, mod_beeline, {
+        BeelineExecutor(MODELING_RUNNER).execute(tr, mod_beeline, {
             "set_id": "s1", "business_goal": "x",
             "requirements": [{"requirement_id": "r1", "description": "x", "requirement_type": "object", "priority": "must_have"}],
         })

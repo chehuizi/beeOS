@@ -25,6 +25,8 @@ from runtime import (
 )
 from boxes.inventory_shortage import get_definition as get_inv_def
 from beelines.inventory_shortage import get_beeline as get_inv_beeline
+from boxes.inventory_shortage.runner import RUNNER as INVENTORY_RUNNER
+from boxes.modeling.runner import RUNNER as MODELING_RUNNER
 from boxes.modeling import get_definition as get_mod_def
 from beelines.modeling import get_beeline as get_mod_beeline
 from kanban.cli import render_dashboard
@@ -61,7 +63,7 @@ class TestTaskRunStore:
             "orders.api", "handle_order_exception", box.result.result_schema,
             f"{box.id}@v{box.version}", beeline.id, beeline.version, "rt", "in",
         )
-        BeelineExecutor().execute(tr, beeline, {"exception_type": "inventory_shortage"})
+        BeelineExecutor(INVENTORY_RUNNER).execute(tr, beeline, {"exception_type": "inventory_shortage"})
 
         store.append(tr, box_id=box.id, acceptance_status="accepted")
 
@@ -84,7 +86,7 @@ class TestTaskRunStore:
             "o", "i", box.result.result_schema, f"{box.id}@v{box.version}",
             beeline.id, beeline.version, "rt", "in",
         )
-        BeelineExecutor().execute(tr, beeline, {"exception_type": "inventory_shortage"})
+        BeelineExecutor(INVENTORY_RUNNER).execute(tr, beeline, {"exception_type": "inventory_shortage"})
         s1.append(tr, box_id=box.id, acceptance_status="accepted")
         del s1
 
@@ -138,7 +140,7 @@ class TestTaskRunStore:
                 "o", "i", box.result.result_schema, f"{box.id}@v{box.version}",
                 beeline.id, beeline.version, "rt", "in",
             )
-            BeelineExecutor().execute(tr, beeline, {"exception_type": "inventory_shortage"})
+            BeelineExecutor(INVENTORY_RUNNER).execute(tr, beeline, {"exception_type": "inventory_shortage"})
             store.append(tr, box_id=box.id)
 
         records = store.list_recent(limit=2)
@@ -158,14 +160,14 @@ class TestTaskRunStore:
                 "o", "i", inv_def.result.result_schema, f"{inv_def.id}@v{inv_def.version}",
                 inv_beeline.id, inv_beeline.version, "rt", "in",
             )
-            BeelineExecutor().execute(tr, inv_beeline, {"exception_type": "inventory_shortage"})
+            BeelineExecutor(INVENTORY_RUNNER).execute(tr, inv_beeline, {"exception_type": "inventory_shortage"})
             store.append(tr, box_id=inv_def.id)
 
         tr = create_task_run(
             "pm", "i", mod_def.result.result_schema, f"{mod_def.id}@v{mod_def.version}",
             mod_beeline.id, mod_beeline.version, "rt", "in",
         )
-        BeelineExecutor().execute(tr, mod_beeline, {
+        BeelineExecutor(MODELING_RUNNER).execute(tr, mod_beeline, {
             "set_id": "s1", "business_goal": "x",
             "requirements": [{"requirement_id": "r1", "description": "x", "requirement_type": "object", "priority": "must_have"}],
         })
@@ -187,7 +189,7 @@ class TestTaskRunStore:
                 "o", "i", box.result.result_schema, f"{box.id}@v{box.version}",
                 beeline.id, beeline.version, "rt", "in",
             )
-            BeelineExecutor().execute(tr, beeline, {"exception_type": "inventory_shortage"})
+            BeelineExecutor(INVENTORY_RUNNER).execute(tr, beeline, {"exception_type": "inventory_shortage"})
             store.append(tr, box_id=box.id, acceptance_status=status)
 
         assert store.count_by_status() == {"completed": 3}
@@ -201,7 +203,7 @@ class TestTaskRunStore:
                 "o", "i", box.result.result_schema, f"{box.id}@v{box.version}",
                 beeline.id, beeline.version, "rt", "in",
             )
-            BeelineExecutor().execute(tr, beeline, {"exception_type": "inventory_shortage"})
+            BeelineExecutor(INVENTORY_RUNNER).execute(tr, beeline, {"exception_type": "inventory_shortage"})
             store.append(tr, box_id=box.id, acceptance_status="accepted")
 
         m = store.aggregate_metrics()
@@ -228,7 +230,7 @@ class TestTaskRunStore:
                 "o", intent, box.result.result_schema, f"{box.id}@v{box.version}",
                 beeline.id, beeline.version, "rt", "in",
             )
-            BeelineExecutor().execute(tr, beeline, input_data)
+            BeelineExecutor(MODELING_RUNNER).execute(tr, beeline, input_data)
             store.append(tr, box_id=box.id)
 
         assert set(store.list_boxes()) == {inv_def.id, mod_def.id}
@@ -244,14 +246,14 @@ class TestTaskRunStore:
             "o", "i", inv_def.result.result_schema, f"{inv_def.id}@v{inv_def.version}",
             inv_beeline.id, inv_beeline.version, "rt", "in",
         )
-        BeelineExecutor().execute(tr, inv_beeline, {"exception_type": "inventory_shortage"})
+        BeelineExecutor(INVENTORY_RUNNER).execute(tr, inv_beeline, {"exception_type": "inventory_shortage"})
         store.append(tr, box_id=inv_def.id)
 
         tr = create_task_run(
             "pm", "i", mod_def.result.result_schema, f"{mod_def.id}@v{mod_def.version}",
             mod_beeline.id, mod_beeline.version, "rt", "in",
         )
-        BeelineExecutor().execute(tr, mod_beeline, {
+        BeelineExecutor(MODELING_RUNNER).execute(tr, mod_beeline, {
             "set_id": "s1", "business_goal": "x",
             "requirements": [{"requirement_id": "r1", "description": "x", "requirement_type": "object", "priority": "must_have"}],
         })
@@ -286,7 +288,7 @@ class TestKanbanRender:
             "o", "i", box.result.result_schema, f"{box.id}@v{box.version}",
             beeline.id, beeline.version, "rt", "in",
         )
-        BeelineExecutor().execute(tr, beeline, {"exception_type": "inventory_shortage"})
+        BeelineExecutor(INVENTORY_RUNNER).execute(tr, beeline, {"exception_type": "inventory_shortage"})
         eval_result = evaluate_acceptance(tr, box.result)
         store.append(tr, box_id=box.id, acceptance_status=eval_result.status.value)
 
@@ -306,7 +308,7 @@ class TestKanbanRender:
                 "o", "i", box.result.result_schema, f"{box.id}@v{box.version}",
                 beeline.id, beeline.version, "rt", "in",
             )
-            BeelineExecutor().execute(tr, beeline, {"exception_type": "inventory_shortage"})
+            BeelineExecutor(INVENTORY_RUNNER).execute(tr, beeline, {"exception_type": "inventory_shortage"})
             store.append(tr, box_id=box.id, acceptance_status="accepted")
 
         out = render_dashboard(store)

@@ -32,8 +32,8 @@ from typing import Any, Callable, Optional
 
 from core.beeline_models import Beeline, NextRef, Operation
 from runtime.llm import LLMError
-from runtime.mock_runner import MockRunner
 from runtime.models import OperationRecord, TaskRun, TaskRunStatus
+from runtime.runner import HandlerRunner
 
 
 # 解析 when 条件为可执行函数（极简版）
@@ -105,12 +105,24 @@ class BeelineExecutor:
     """进程内 beeline executor
 
     用法：
-        executor = BeelineExecutor(runner=MockRunner())
-        task_run = executor.execute(task_run, beeline, input_data, contract)
+        # runner 由盒子自己提供（boxes/*/runner.py 里的 RUNNER）
+        executor = BeelineExecutor(runner=some_box.RUNNER)
+        task_run = executor.execute(task_run, beeline, input_data)
+
+    runner 是**必填**且必须由调用方（编排层）按 box_id 取。
+    内核不兜底一张「什么都认识」的表：以前它兜底过，那张表里塞了
+    三只盒子的业务实现，于是内核比任何一只盒子都懂业务，
+    加盒子必须改内核。兜底掉的代价是盒子带不走自己的实现。
     """
 
-    def __init__(self, runner: Optional[MockRunner] = None) -> None:
-        self.runner = runner or MockRunner()
+    def __init__(self, runner: HandlerRunner) -> None:
+        if runner is None:
+            raise ValueError(
+                "BeelineExecutor requires a runner from the box "
+                "(boxes/*/runner.py RUNNER); the kernel no longer "
+                "falls back to a shared handler table"
+            )
+        self.runner = runner
 
     def execute(
         self,

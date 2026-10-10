@@ -533,7 +533,12 @@ HTML_PAGE = f"""<!DOCTYPE html>
   /* ===== media 投料口：图片，不是文字 =====
      后端按 schema 里 media="image" 的字段声明切成这个形态。
      前端只负责收图 → data URL，不解释这张图是什么（那是盒子的事）。 */
-  .media-intake {{ flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 8px; }}
+  /* media-intake 的 margin-bottom 不是可有可无的：投料口里每个可伸展的
+     块都自带 8px 下边距（#task-payload、.task-type-row、.port > select），
+     .port 自己是 flex column 但没设 gap，间距全靠各块自己让。
+     唯独这里忘了给，按钮行就贴着虚线框底边——一个大的点击目标和一个
+     动作按钮挨在一起，会被读成同一个控件。 */
+  .media-intake {{ flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }}
   .media-drop {{
     flex: 1 1 auto; display: flex; flex-direction: column; align-items: center;
     justify-content: center; gap: 8px; text-align: center;

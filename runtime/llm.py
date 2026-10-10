@@ -22,6 +22,7 @@ subprocess 依赖，也不用再把派生 config 写到临时目录。
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -199,6 +200,26 @@ def _readable_error(text: str, limit: int = 300) -> str:
     return "\n".join(picked)[:limit]
 
 
+def image_data_url(data: bytes | str, *, mime: str = "image/jpeg") -> str:
+    """图片 → API 认的 data URL
+
+    Args:
+        data: 图片字节，或已经 base64 编码好的字符串（会自动剥掉 data: 前缀）
+        mime: MIME 类型
+
+    这是**基础设施**：内核只负责把字节拼成合法 URL，
+    不关心这些像素是什么业务对象（小票 / 合同 / 发票是盒子自己的事）。
+    """
+    if isinstance(data, bytes):
+        b64 = base64.b64encode(data).decode("ascii")
+    else:
+        b64 = data.strip()
+        # 已经是完整 data URL 就原样返回，别套第二层
+        if b64.startswith("data:"):
+            return b64
+    return f"data:{mime};base64,{b64}"
+
+
 def complete(
     prompt: str,
     *,
@@ -206,8 +227,13 @@ def complete(
     max_tokens: int = 8000,
     timeout: float = 120.0,
     thinking: str | None = None,
+    images: list[str] | None = None,
 ) -> str:
     """调用 LLM，返回原始文本（未剥杂质）
+
+    images 传图（OpenAI 兼容的 image_url 结构，每个元素一个 URL，
+    可用 http(s) 地址或 image_data_url() 拼出来的 data: URL）。
+    不传时请求体跟以前逐字节一样——纯文本调用点不受影响。
 
     thinking 传给 API 的 `thinking.type`，只接受 "adaptive" / "disabled"，
     传别的会被 API 拒（实测 allowed: adaptive, disabled）。None = 不传，
@@ -224,9 +250,14 @@ def complete(
     thinking 传不进去。现在直连，参数自己说了算。
     """
     url, key = _resolve_endpoint()
+    if images:
+        content: Any = [{"type": "text", "text": prompt}]
+        content.extend({"type": "image_url", "image_url": {"url": u}} for u in images)
+    else:
+        content = prompt
     body: dict[str, Any] = {
         "model": model.split("/", 1)[-1],
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [{"role": "user", "content": content}],
         "max_tokens": max_tokens,
     }
     if thinking:

@@ -68,6 +68,11 @@ class FieldDef(BaseModel):
     items: Optional["FieldDef"] = None
     # enum 类型的合法取值表；不声明表示"暂不约束取值"（只校验类型）
     values: Optional[list[Any]] = None
+    # 非空 = 这是个媒体字段，取值是 data URL / http URL。
+    # 声明式，不靠字段名猜（photo / image / picture …）——
+    # 按名字猜等于把业务约定写进内核，换个盒子就失效。
+    # 投料口据此把文本框换成图片上传。
+    media: Optional[Literal["image"]] = None
 
     @model_validator(mode="after")
     def validate_type_structure(self) -> "FieldDef":

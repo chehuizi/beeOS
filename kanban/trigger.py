@@ -17,11 +17,18 @@ from collections import Counter
 from typing import Any, Callable, Iterable, Optional
 from uuid import uuid4
 
-from beelines import get_modeling_beeline, get_requirement_capture_beeline
+from beelines import (
+    get_modeling_beeline,
+    get_receipt_capture_beeline,
+    get_requirement_capture_beeline,
+)
 from boxes.inventory_shortage.runner import RUNNER as INVENTORY_RUNNER
 from boxes.modeling import get_definition as get_mod_definition
 from boxes.modeling.measure import COMPUTERS as MODELING_COMPUTERS
 from boxes.modeling.runner import RUNNER as MODELING_RUNNER
+from boxes.receipt.runner import RUNNER as RECEIPT_RUNNER
+from boxes.receipt import get_definition as get_receipt_definition
+from boxes.receipt.measure import COMPUTERS as RECEIPT_COMPUTERS
 from boxes.requirement_capture import get_definition as get_capture_definition
 from boxes.requirement_capture.measure import COMPUTERS as CAPTURE_COMPUTERS
 from boxes.requirement_capture.runner import RUNNER as CAPTURE_RUNNER
@@ -50,6 +57,10 @@ BOX_REGISTRY: dict[
         get_mod_definition,
         {"beeline_business_modeling_v1": get_modeling_beeline},
     ),
+    "receipt_capture_box": (
+        get_receipt_definition,
+        {"beeline_receipt_capture_v1": get_receipt_capture_beeline},
+    ),
 }
 
 # box_id → 指标采集算法表。跟 BOX_REGISTRY 一一对应：
@@ -58,6 +69,7 @@ BOX_REGISTRY: dict[
 METRIC_COMPUTERS: dict[str, dict[str, core_metrics.Computer]] = {
     "requirement_capture_box": CAPTURE_COMPUTERS,
     "business_modeling_box": MODELING_COMPUTERS,
+    "receipt_capture_box": RECEIPT_COMPUTERS,
 }
 
 # box_id → 该盒自带的 op 实现。
@@ -70,6 +82,7 @@ RUNNER_REGISTRY: dict[str, HandlerRunner] = {
     # 运营线盒子未注册进 BOX_REGISTRY（看板不显示、trigger 不接收），
     # 代码保留在仓库里，恢复时把它一起挂回 BOX_REGISTRY 即可
     "inventory_shortage": INVENTORY_RUNNER,
+    "receipt_capture_box": RECEIPT_RUNNER,
 }
 
 # Box 元信息（声明式归属，不从 box_id 关键词推断）：
@@ -87,6 +100,14 @@ BOX_META: dict[str, dict[str, Any]] = {
         "display_name": "Business Modeling Box",
         "value_stream": "Software Delivery",
         "role": "Business Modeling Fulfillment",
+        "feeds_into": [],
+    },
+    # 小票识别归费用报销价值流，不归软件交付——填错价值流等于把盒子
+    # 挂到错误的业务线上，跟业务语义造假是一回事。
+    "receipt_capture_box": {
+        "display_name": "Receipt Capture Box",
+        "value_stream": "Expense Reimbursement",
+        "role": "Receipt Recognition Fulfillment",
         "feeds_into": [],
     },
 }
@@ -188,18 +209,31 @@ _EXAMPLE_PAYLOADS: dict[tuple[str, str], dict[str, Any]] = {
 
 
 def _payload_kind(schema) -> str:
-    """投料框形态：由 task_schema 的必填字段形状决定，不在前端硬编码
+    """投料框形态：由 task_schema 的形状决定，不在前端硬编码
 
+    - 有字段声明 media="image" → "media"（投料框是图片上传，不是文本框）
     - 必填字段里有 array / object / ref → "json"（嵌套结构，文本框会毁掉它）
     - 否则全是标量 → "text"（纯文本直接打字，别套一层 JSON 编辑器）
+
+    media 优先于 json：小票那种「一张照片 + 一段备注」应该是 media，
+    因为备注是可选的，真正的输入是图。
     """
     if schema is None:
         return "json"
+    if any(f.media for f in schema.fields):
+        return "media"
     has_complex = any(
         f.required and (f.type in ("array", "object") or f.type.startswith("ref:"))
         for f in schema.fields
     )
     return "json" if has_complex else "text"
+
+
+def media_fields(schema) -> list:
+    """schema 里声明为媒体的字段（投料口按它决定接收几张图）"""
+    if schema is None:
+        return []
+    return [f for f in schema.fields if f.media]
 
 
 def resolve_text_intake(
@@ -294,6 +328,10 @@ def list_task_entries(box_id: str) -> list[dict[str, Any]]:
             "sample_payload": sample,
             "beeline_ops": beeline_ops,
             "payload_kind": _payload_kind(schema),
+            # media 形态时投料口要知道收哪个字段、要不要多张
+            "media_fields": [
+                {"name": f.name, "media": f.media} for f in media_fields(schema)
+            ],
         })
     return entries
 
@@ -339,8 +377,11 @@ def box_manifest(box_id: str) -> dict[str, Any]:
             "beeline_version": task.beeline_version,
             "trigger": task.trigger,
             "payload_kind": _payload_kind(schema),
+            "media_fields": [
+                {"name": f.name, "media": f.media} for f in media_fields(schema)
+            ],
             "required": [
-                {"name": f.name, "type": f.type}
+                {"name": f.name, "type": f.type, "media": f.media}
                 for f in (schema.fields if schema else []) if f.required
             ],
         })

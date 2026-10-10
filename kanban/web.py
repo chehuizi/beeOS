@@ -158,6 +158,11 @@ HTML_PAGE = f"""<!DOCTYPE html>
 <meta charset="UTF-8">
 <title>BeeBox Fulfillment Overview — beeOS Kanban</title>
 <style>
+  /* hidden 属性必须真的藏起来。UA 的 `[hidden] {{display:none}}` 来自
+     用户代理样式表，任何作者样式都能压过它——.media-preview 的
+     `display: flex` 就是这么把一个空 <img> 变成常驻破图的。
+     放最前面统一兜住，省得每加一个用 hidden 切换的面板再踩一次。 */
+  [hidden] {{ display: none !important; }}
   body {{
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     margin: 0; padding: 32px;
@@ -525,6 +530,64 @@ HTML_PAGE = f"""<!DOCTYPE html>
     padding: 6px 8px; background: #f8fafc;
     border: 1px dashed #cbd5e1; border-radius: 6px;
   }}
+  /* ===== media 投料口：图片，不是文字 =====
+     后端按 schema 里 media="image" 的字段声明切成这个形态。
+     前端只负责收图 → data URL，不解释这张图是什么（那是盒子的事）。 */
+  .media-intake {{ flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 8px; }}
+  .media-drop {{
+    flex: 1 1 auto; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 8px; text-align: center;
+    border: 1.5px dashed #cbd5e1; border-radius: 8px;
+    background: #f8fafc; padding: 18px; cursor: pointer;
+  }}
+  .media-drop.hot {{ border-color: #2563eb; background: #eff6ff; }}
+  .media-drop.filled {{ display: none; }}
+  .media-drop-title {{ font-size: 13px; color: #334155; font-weight: 600; }}
+  .media-drop-hint {{ font-size: 12px; color: #64748b; }}
+  .media-drop-limit {{ font-size: 11px; color: #94a3b8; }}
+  .media-drop kbd {{
+    font-size: 11px; padding: 1px 5px; border-radius: 4px;
+    background: #fff; border: 1px solid #cbd5e1;
+  }}
+  /* ===== receipt 视图：小票 =====
+     金额区用等宽右对齐——对账时要看的是小数点在哪一位。 */
+  .rc-head {{ display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 6px; }}
+  .rc-meta-item {{ font-size: 11px; color: #475569; }}
+  .rc-meta-item b {{ color: #94a3b8; font-weight: 400; margin-right: 4px; }}
+  .rc-lowconf {{
+    font-size: 11px; color: #b45309; background: #fffbeb;
+    border: 1px solid #fde68a; border-radius: 6px; padding: 4px 8px; margin-bottom: 8px;
+  }}
+  .rc-table {{ width: 100%; border-collapse: collapse; font-size: 12px; }}
+  .rc-table th {{
+    text-align: left; font-weight: 600; color: #64748b; font-size: 10px;
+    border-bottom: 1px solid #e2e8f0; padding: 3px 6px;
+  }}
+  .rc-table td {{ padding: 3px 6px; border-bottom: 1px solid #f1f5f9; }}
+  .rc-no {{ color: #94a3b8; width: 26px; }}
+  .rc-num {{ text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }}
+  .rc-empty {{ text-align: center; color: #94a3b8; padding: 10px; }}
+  .rc-sum {{
+    margin-top: 8px; display: flex; flex-direction: column; align-items: flex-end;
+    gap: 2px; font-size: 12px;
+  }}
+  .rc-sum > div {{ display: flex; gap: 10px; color: #475569; }}
+  .rc-sum b {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; min-width: 72px; text-align: right; }}
+  .rc-total {{ color: #0f172a; font-weight: 700; border-top: 1px solid #e2e8f0; padding-top: 3px; }}
+  .link-btn {{
+    background: none; border: none; padding: 0; cursor: pointer;
+    color: #2563eb; font-size: inherit; text-decoration: underline;
+  }}
+  .media-preview {{ flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px; }}
+  .media-preview img {{
+    flex: 1 1 auto; min-height: 0; object-fit: contain;
+    background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 8px;
+  }}
+  .media-meta {{
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 11px; color: #64748b;
+  }}
+  .media-error {{ font-size: 12px; color: #b91c1c; }}
   /* 投料框不给人拖动改大小：盒高固定后，拖一把就破版 */
   #task-payload {{ flex: 1 1 auto; min-height: 0; resize: none; }}
   #artifact-slot {{ flex: 1 1 auto; min-height: 0; overflow: auto; }}
@@ -772,6 +835,7 @@ function renderFilters(boxes, current) {{
 const VS_PALETTE = {{
   'Software Delivery': ['rgba(124,58,237,0.10)', 'rgba(124,58,237,0.40)'],
   'Order Fulfillment': ['rgba(59,130,246,0.10)', 'rgba(37,99,235,0.40)'],
+  'Expense Reimbursement': ['rgba(13,148,136,0.10)', 'rgba(13,148,136,0.40)'],
 }};
 
 function vsPalette(box) {{
@@ -1194,7 +1258,49 @@ function ruleAppliedNotice(r) {{
 const ARTIFACT_VIEWS = {{
   flow_graph: renderRequirementSet,
   ddd_model: renderDddModel,
+  receipt: renderReceipt,
 }};
+
+// 小票：抬头 + 商品行表 + 金额区 + 校验结论。
+// 校验证据在这一屏直接给结论，不藏进 raw JSON——
+// 「算术自洽」是这只盒子唯一能自证的正确性，藏起来等于没有。
+function renderReceipt(r) {{
+  const items = Array.isArray(r.items) ? r.items : [];
+  const rows = items.map((it, i) => `<tr>
+      <td class="rc-no">${{esc(String(it.line_no || i + 1))}}</td>
+      <td class="rc-name">${{esc(it.name || '—')}}</td>
+      <td class="rc-num">${{esc(String(it.qty ?? ''))}}</td>
+      <td class="rc-num">${{esc(String(it.unit_price ?? ''))}}</td>
+      <td class="rc-num">${{esc(String(it.amount ?? ''))}}</td>
+    </tr>`).join('');
+  const money = (v) => (v === undefined || v === null || v === '') ? '—' : Number(v).toFixed(2);
+  const lowConf = Array.isArray(r.low_confidence_fields) ? r.low_confidence_fields : [];
+  const meta = [
+    ['商户', r.merchant_name],
+    ['单号', r.receipt_no],
+    ['时间', [r.receipt_date, r.receipt_time].filter(Boolean).join(' ')],
+    ['支付', r.payment_method],
+  ].filter(([, v]) => v).map(([k, v]) =>
+    `<span class="rc-meta-item"><b>${{esc(k)}}</b>${{esc(String(v))}}</span>`).join('');
+
+  return `<div class="rc">
+    <div class="rc-head">${{meta || '<span class="rs-hint">未读出抬头</span>'}}</div>
+    ${{lowConf.length ? `<div class="rc-lowconf">
+      模型自认看不清：${{lowConf.map(esc).join(' · ')}} —— 人工对账时优先核这几项
+    </div>` : ''}}
+    <table class="rc-table">
+      <thead><tr><th>#</th><th>商品</th><th class="rc-num">数量</th><th class="rc-num">单价</th><th class="rc-num">金额</th></tr></thead>
+      <tbody>${{rows || '<tr><td colspan="5" class="rc-empty">未读出商品行</td></tr>'}}</tbody>
+    </table>
+    <div class="rc-sum">
+      <div><span>小计</span><b>${{esc(money(r.subtotal))}}</b></div>
+      <div><span>税额</span><b>${{esc(money(r.tax))}}</b></div>
+      <div class="rc-total"><span>实付</span><b>${{esc(money(r.total))}}</b></div>
+    </div>
+    <div class="rs-hint">机械校验只证明「数字对得上」，不证明「字认对了」——
+      正确性靠人工对账，盲区写在 definition 顶部。</div>
+  </div>`;
+}}
 
 function renderArtifactBody(view, result) {{
   const fn = ARTIFACT_VIEWS[view];
@@ -1399,6 +1505,35 @@ function buildShell(boxId, box, entries) {{
          <span class="task-type-static">${{esc(entries.length ? entries[0].task_type : '')}}</span>
          <input type="hidden" id="task-type" value="${{esc(entries.length ? entries[0].task_type : '')}}">
        </div>`;
+  // 投料框三种形态（text / json / media）由后端按 task_schema 形状决定。
+  // media = schema 里有字段声明 media="image"，投的是图不是字。
+  const firstEntry = entries.length ? entries[0] : {{}};
+  const isMedia = firstEntry.payload_kind === 'media';
+  const mediaField = (firstEntry.media_fields && firstEntry.media_fields[0])
+    ? firstEntry.media_fields[0].name : 'image';
+  const payloadBox = isMedia
+    ? `<div class="media-intake" id="media-intake">
+         <input type="file" id="media-file" accept="image/*" hidden>
+         <div class="media-drop" id="media-drop">
+           <div class="media-drop-title">把图片拖到这里</div>
+           <div class="media-drop-hint">
+             或 <button type="button" class="link-btn" onclick="pickMedia()">选择文件</button>
+             ，也可以直接 <kbd>⌘V</kbd> 粘贴截图
+           </div>
+           <div class="media-drop-limit">仅支持单张图片，最大 8 MB</div>
+         </div>
+         <div class="media-preview" id="media-preview" hidden>
+           <img id="media-img" alt="投料预览" />
+           <div class="media-meta">
+             <span id="media-name"></span>
+             <button type="button" class="link-btn" onclick="clearMedia()">移除</button>
+           </div>
+         </div>
+         <div class="media-error" id="media-error" hidden></div>
+       </div>`
+    : `<textarea id="task-payload" rows="12" spellcheck="false"
+                    oninput="onPayloadInput()"
+                    placeholder="${{placeholder}}"></textarea>`;
   document.getElementById('content').innerHTML = `<div class="section">
     <div class="beebox-frame">
       <div class="beebox-nameplate" id="cube-caption"></div>
@@ -1406,9 +1541,7 @@ function buildShell(boxId, box, entries) {{
         <div class="port">
           <div class="port-title" id="port-title">TASK IN · 投料口</div>
           ${{taskTypeRow}}
-          <textarea id="task-payload" rows="12" spellcheck="false"
-                    oninput="onPayloadInput()"
-                    placeholder="${{placeholder}}"></textarea>
+          ${{payloadBox}}
           <div class="trigger-row">
             <button class="trigger-btn" id="trigger-btn" onclick="triggerTask('${{boxId}}')">▶ 履约</button>
             <button class="ghost-btn" id="sample-btn" onclick="toggleSample()">填入示例</button>
@@ -1438,6 +1571,7 @@ function buildShell(boxId, box, entries) {{
     </div>
   </div>`;
   onTaskTypeChange();
+  initMediaIntake();
 
   const stage = document.getElementById('box2d-stage');
   _scene2d = ops.length > 0 ? initBox2D(stage, ops) : null;
@@ -1654,6 +1788,94 @@ function onPayloadInput() {{
   syncSampleBtn();
 }}
 
+// ===== media 投料：收一张图，转 data URL =====
+// 只做「收图 → data URL」，不解释这张图是什么——那是盒子的事。
+const MEDIA_MAX_BYTES = 8 * 1024 * 1024;
+window._mediaData = null;
+
+function pickMedia() {{
+  const f = document.getElementById('media-file');
+  if (f) f.click();
+}}
+
+function clearMedia() {{
+  window._mediaData = null;
+  const drop = document.getElementById('media-drop');
+  const prev = document.getElementById('media-preview');
+  const err = document.getElementById('media-error');
+  if (prev) {{ prev.hidden = true; }}
+  if (drop) {{ drop.classList.remove('filled'); }}
+  if (err) {{ err.hidden = true; }}
+  const f = document.getElementById('media-file');
+  if (f) f.value = '';
+  clearPayloadError();
+}}
+
+function mediaError(msg) {{
+  const err = document.getElementById('media-error');
+  if (err) {{ err.textContent = msg; err.hidden = false; }}
+  clearMedia();
+}}
+
+function acceptMedia(file) {{
+  if (!file) return;
+  if (!/^image\\//.test(file.type)) {{
+    mediaError(`不是图片：${{file.type || '未知类型'}}`);
+    return;
+  }}
+  if (file.size > MEDIA_MAX_BYTES) {{
+    mediaError(`图片 ${{(file.size / 1024 / 1024).toFixed(1)}} MB，超过 8 MB 上限`);
+    return;
+  }}
+  const reader = new FileReader();
+  reader.onload = () => {{
+    window._mediaData = reader.result;
+    const img = document.getElementById('media-img');
+    const nm = document.getElementById('media-name');
+    const drop = document.getElementById('media-drop');
+    const prev = document.getElementById('media-preview');
+    const err = document.getElementById('media-error');
+    if (img) img.src = reader.result;
+    if (nm) nm.textContent = `${{file.name}} · ${{(file.size / 1024).toFixed(0)}} KB`;
+    if (drop) drop.classList.add('filled');
+    if (prev) prev.hidden = false;
+    if (err) err.hidden = true;
+    clearPayloadError();
+  }};
+  reader.onerror = () => mediaError('读取文件失败');
+  reader.readAsDataURL(file);
+}}
+
+function initMediaIntake() {{
+  const drop = document.getElementById('media-drop');
+  const file = document.getElementById('media-file');
+  if (!drop || !file) return;
+  drop.addEventListener('click', () => file.click());
+  file.addEventListener('change', (e) => acceptMedia(e.target.files && e.target.files[0]));
+  drop.addEventListener('dragover', (e) => {{
+    e.preventDefault(); drop.classList.add('hot');
+  }});
+  drop.addEventListener('dragleave', () => drop.classList.remove('hot'));
+  drop.addEventListener('drop', (e) => {{
+    e.preventDefault();
+    drop.classList.remove('hot');
+    acceptMedia(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]);
+  }});
+  // 粘贴：截图常走这条路（⌘V），比走文件选择器快得多
+  window.addEventListener('paste', (e) => {{
+    if (!document.getElementById('media-intake')) return;
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    for (const it of items) {{
+      if (it.type && it.type.startsWith('image/')) {{
+        acceptMedia(it.getAsFile());
+        e.preventDefault();
+        return;
+      }}
+    }}
+  }});
+}}
+
 // 一开始打字/填示例就把上一条报错撤掉，否则红字挂着会误导成"当前内容仍无效"
 function clearPayloadError() {{
   const res = document.getElementById('trigger-result');
@@ -1670,23 +1892,35 @@ async function triggerTask(boxId) {{
   const btn = document.getElementById('trigger-btn');
   const taskType = document.getElementById('task-type').value;
   const entry = (window._taskEntries || {{}})[taskType] || {{}};
-  const raw = document.getElementById('task-payload').value;
   let payload;
-  if (entry.payload_kind === 'text') {{
-    // 纯文本 task：整段就是 narrative，套一层 JSON 是折磨
-    if (!raw.trim()) {{
+  if (entry.payload_kind === 'media') {{
+    // media task：payload 的媒体字段值 = 收图时转好的 data URL
+    const field = (entry.media_fields && entry.media_fields[0])
+      ? entry.media_fields[0].name : 'image';
+    if (!window._mediaData) {{
       resultEl.className = 'trigger-result err';
-      resultEl.textContent = '先写业务表述再履约';
+      resultEl.textContent = '先投一张图片再履约';
       return;
     }}
-    payload = {{ narrative: raw }};
+    payload = {{ [field]: window._mediaData }};
   }} else {{
-    try {{
-      payload = JSON.parse(raw);
-    }} catch (e) {{
-      resultEl.className = 'trigger-result err';
-      resultEl.textContent = 'payload JSON 解析失败: ' + e.message;
-      return;
+    const raw = document.getElementById('task-payload').value;
+    if (entry.payload_kind === 'text') {{
+      // 纯文本 task：整段就是 narrative，套一层 JSON 是折磨
+      if (!raw.trim()) {{
+        resultEl.className = 'trigger-result err';
+        resultEl.textContent = '先写业务表述再履约';
+        return;
+      }}
+      payload = {{ narrative: raw }};
+    }} else {{
+      try {{
+        payload = JSON.parse(raw);
+      }} catch (e) {{
+        resultEl.className = 'trigger-result err';
+        resultEl.textContent = 'payload JSON 解析失败: ' + e.message;
+        return;
+      }}
     }}
   }}
   _boxState.running = true;

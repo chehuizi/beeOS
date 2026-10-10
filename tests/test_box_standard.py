@@ -30,6 +30,13 @@ from tests.conftest import stub_compliant_llm
 
 CAPTURE = "requirement_capture_box"
 MODELING = "business_modeling_box"
+RECEIPT = "receipt_capture_box"
+
+# 契约测试遍历注册表，而不是手抄盒子名单。
+# 手抄过一次就漏一次：receipt_capture_box 加进 BOX_REGISTRY 时，
+# 下面两条一致性测试压根没跑到它，漏 BOX_META 也没人喊。
+# 「加一只新盒子要不要改测试」正是标准化的判据，不该由人记着。
+ALL_BOXES = sorted(BOX_REGISTRY)
 
 
 # ============================================================
@@ -66,13 +73,32 @@ class TestArtifactView:
         """声明的每个 view 都有渲染器，或者明确落到 generic 回退
 
         不允许「声明了 view 但既没渲染器也没回退」——那会让产出变成空白。
+
+        已知视图表从 HTML 里读，不在这里手抄：手抄的那份会漂，
+        加了新渲染器却不改这个集合，测试还会一直绿。
         """
-        known = {"flow_graph", "ddd_model"}
+        import re
+
+        registered = set(re.findall(r"^\s{2}(\w+):\s*render", HTML_PAGE, re.M))
         for box_id in BOX_REGISTRY:
             view = BOX_REGISTRY[box_id][0]().result.view
-            if view != "generic":
-                assert view in known, f"{box_id} 声明了未注册的 view: {view}"
+            assert view == "generic" or view in registered, (
+                f"{box_id} 声明了 view={view!r}，看板渲染器注册表里没有"
+            )
         assert "generic" in HTML_PAGE or "在看板没有专用视图" in HTML_PAGE
+
+    def test_hidden_attribute_actually_hides(self):
+        """`hidden` 必须压得住类选择器上的 display
+
+        UA 的 `[hidden] {display:none}` 来自用户代理样式表，作者样式随便
+        一条 `display: flex` 就能盖掉它。实测后果：media 投料口还没选图，
+        预览块就常驻在那儿，里头一张空 <img> 显示成破图占位——
+        看上去像「载了一张图但坏了」，其实压根没图。
+        """
+        import re
+
+        rules = re.findall(r"\[hidden\]\s*\{[^}]*display:\s*none\s*!important", HTML_PAGE)
+        assert rules, "看板里没有 [hidden] 兜底规则：用 hidden 切换的面板会漏出来"
 
     def test_trigger_response_carries_the_artifact_kind(self, tmp_path, monkeypatch):
         """产出响应要自带形态，API 消费方不必猜"""
@@ -168,14 +194,14 @@ class TestManifest:
 
 
 class TestDeclarationCoherence:
-    @pytest.mark.parametrize("box_id", [CAPTURE, MODELING])
+    @pytest.mark.parametrize("box_id", ALL_BOXES)
     def test_task_schemas_exist_and_beelines_are_pinned(self, box_id):
         d = BOX_REGISTRY[box_id][0]()
         assert d.result.result_schema in {s.id for s in d.schemas}
         for t in d.task:
             assert t.task_schema in {s.id for s in d.schemas}
 
-    @pytest.mark.parametrize("box_id", [CAPTURE, MODELING])
+    @pytest.mark.parametrize("box_id", ALL_BOXES)
     def test_every_acceptance_metric_has_a_value_in_result(self, box_id):
         """acceptance 声明的每个 metric，产出 schema 里都得有对应字段
 
@@ -191,3 +217,47 @@ class TestDeclarationCoherence:
     def test_result_schema_is_listed_in_the_manifest(self):
         d = get_capture_definition()
         assert box_manifest(CAPTURE)["produces"]["schema"] == d.result.result_schema
+
+
+class TestRegistryCoverage:
+    """三张注册表一一对应：加了盒子就得处处有声，漏一处看板就缺一块"""
+
+    def test_every_registered_box_has_a_runner(self):
+        from kanban.trigger import RUNNER_REGISTRY
+
+        missing = sorted(set(BOX_REGISTRY) - set(RUNNER_REGISTRY))
+        assert not missing, f"注册了但没有 runner：{missing}"
+
+    def test_every_registered_box_has_meta(self):
+        """BOX_META 漏一只盒子 → 看板铭牌 VALUE STREAM / ROLE 全是「—」
+
+        反向漏检：原来的测试只遍历 BOX_META 检查 feeds_into 指向谁，
+        从没检查「注册了的盒子是不是都在 BOX_META 里」。
+        单向遍历看不见缺失，这只盒子就这么带着空铭牌上了看板。
+        """
+        from kanban.trigger import BOX_META
+
+        missing = sorted(set(BOX_REGISTRY) - set(BOX_META))
+        assert not missing, f"注册了但 BOX_META 没声明：{missing}"
+
+    @pytest.mark.parametrize("box_id", ALL_BOXES)
+    def test_meta_fields_are_actually_filled(self, box_id):
+        """声明了字段却留空串，跟没声明一样——铭牌照样显示「—」"""
+        from kanban.trigger import box_meta
+
+        meta = box_meta(box_id)
+        for key in ("display_name", "value_stream", "role"):
+            assert meta.get(key), f"{box_id}: meta.{key} 是空的"
+        assert "feeds_into" in meta, f"{box_id}: 没声明 feeds_into（哪怕是空列表）"
+
+    @pytest.mark.parametrize("box_id", ALL_BOXES)
+    def test_value_stream_has_a_kanban_color(self, box_id):
+        """价值流声明了却没配色 → 静默落到 fallback 色，看板分不出业务线
+
+        「声明了却拿不到」的同一个病：不是没有，是有了一个假的。
+        """
+        from kanban.trigger import box_meta
+
+        vs = box_meta(box_id).get("value_stream")
+        assert vs, f"{box_id}: 没声明 value_stream"
+        assert f"'{vs}'" in HTML_PAGE, f"{box_id}: 价值流 {vs} 在 VS_PALETTE 里没登记"

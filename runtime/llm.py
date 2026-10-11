@@ -31,6 +31,8 @@ from typing import Any
 
 import httpx
 
+from core.models import DEFAULT_MEDIA_ACCEPT
+
 # ~/.minimax/config.yaml —— 注意：这是 MCode runtime 拥有的文件，它会重写
 # （实测引号风格被 YAML 库规范化写回），所以我们不假设里面的值是稳定的。
 _CONFIG_PATH = Path.home() / ".minimax/config.yaml"
@@ -200,24 +202,83 @@ def _readable_error(text: str, limit: int = 300) -> str:
     return "\n".join(picked)[:limit]
 
 
-def image_data_url(data: bytes | str, *, mime: str = "image/jpeg") -> str:
+def _check_image_url(url: str, accept: list[str] | None = None) -> None:
+    """发请求前查一遍媒体类型。http(s) 直链放行，只查 data URL。
+
+    data URL 的 MIME 就在自己前缀里，不用发请求就知道对不对。
+    http(s) 查不出来（得下载），交给服务端——但服务端拒了也是同样的
+    400，一并把话说明白。
+    """
+    if not url.lower().startswith("data:"):
+        return
+    head = url[url.index(":") + 1:].split(";")[0].strip().lower()
+    _reject_media_type(head, accept if accept is not None else DEFAULT_MEDIA_ACCEPT)
+
+
+def image_data_url(
+    data: bytes | str,
+    *,
+    mime: str = "image/jpeg",
+    accept: list[str] | None = None,
+) -> str:
     """图片 → API 认的 data URL
 
     Args:
         data: 图片字节，或已经 base64 编码好的字符串（会自动剥掉 data: 前缀）
         mime: MIME 类型
+        accept: 接受的 MIME 类型白名单，默认用平台集（core.models.DEFAULT_MEDIA_ACCEPT）
 
     这是**基础设施**：内核只负责把字节拼成合法 URL，
     不关心这些像素是什么业务对象（小票 / 合同 / 发票是盒子自己的事）。
+
+    **为什么要在这儿也查一遍**：投料口已经拦了一道，但 API 调用方不经过
+    投料口。放任一个 image/heic 走到线上，拿到的是
+    `http 400 {"type":"bad_request_error","message":"invalid param: image data
+    url media type [\"image/heic\"] not supported"}` —— 400 是**确定性拒绝**，
+    不是瞬时故障，重试多少次都一样，只会把一句能看懂的话包成读不懂的 JSON。
+    在发出去之前就把它换成一句能看懂的话。
     """
+    allowed = accept if accept is not None else DEFAULT_MEDIA_ACCEPT
+    # 已经拼好的 data URL：MIME 在前缀里，只能从那儿取
+    if isinstance(data, str) and data.strip().startswith("data:"):
+        head = data.strip()[len("data:"):].split(";")[0].strip().lower()
+        _reject_media_type(head, allowed)
+        return data.strip()
+
+    got = (mime or "").strip().lower()
+    _reject_media_type(got, allowed)
+
     if isinstance(data, bytes):
         b64 = base64.b64encode(data).decode("ascii")
     else:
         b64 = data.strip()
-        # 已经是完整 data URL 就原样返回，别套第二层
-        if b64.startswith("data:"):
-            return b64
     return f"data:{mime};base64,{b64}"
+
+
+def _reject_media_type(got: str, allowed: list[str]) -> None:
+    """不支持的媒体类型就地拒掉，给一句能照着做的话
+
+    拒在这里而不是留给 API：400 回来的是 provider 的内部错误码，
+    用户看到只会觉得「这破系统又坏了」，不会知道自己该换张图。
+    """
+    if got in allowed:
+        return
+    shown = " / ".join(m.replace("image/", "").upper() for m in allowed)
+    hint = _MEDIA_FIX_HINT.get(got)
+    tail = hint or f"这个入口只收 {shown}"
+    raise ValueError(
+        f"不支持的图片格式 {got or '（空）'}：{tail}"
+    )
+
+
+_MEDIA_FIX_HINT = {
+    "image/heic": "iPhone 默认拍照格式。先在「照片」里打开 → 分享 → 存为 JPEG，或直接截图。",
+    "image/heif": "iPhone 默认拍照格式。先在「照片」里打开 → 分享 → 存为 JPEG，或直接截图。",
+    "image/avif": "AVIF 暂不支持，转成 JPEG 或 PNG。",
+    "image/svg+xml": "SVG 是矢量图，不是照片，投实际位图。",
+    "image/bmp": "转成 JPEG 或 PNG。",
+    "image/tiff": "转成 JPEG 或 PNG。",
+}
 
 
 def complete(
@@ -251,6 +312,12 @@ def complete(
     """
     url, key = _resolve_endpoint()
     if images:
+        # 媒体闸必须开在这里，不能只开在 image_data_url()：
+        # 调用方往往拿到的已经是前端拼好的完整 data URL（投料口那边
+        # FileReader 拼的），压根不经过 image_data_url —— 闸挂在
+        # 辅助函数上等于没挂，实测 image/heic 就这么穿到了 API 面前。
+        for u in images:
+            _check_image_url(u)
         content: Any = [{"type": "text", "text": prompt}]
         content.extend({"type": "image_url", "image_url": {"url": u}} for u in images)
     else:

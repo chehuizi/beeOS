@@ -265,3 +265,115 @@ class TestBoxWiring:
         assert r["result"] in (None, {})
         rec = store.list_recent(limit=1)[0]
         assert rec["error_kind"] == "llm_call"
+
+# ============================================================
+# 媒体格式：能在投料口拒掉的，不该让它走到 API 才 400
+# ============================================================
+
+
+class TestMediaTypeGate:
+    """image/* 是浏览器的说法，不是「系统认的」的说法
+
+    实测踩坑：iPhone 的 .HEIC，MIME 是 image/heic，浏览器能选中、
+    FileReader 能读出 data URL，一路带到 API 才被 400 拒——
+    `invalid param: image data url media type ["image/heic"] not supported`。
+    用户等一整轮，才看到一句读不懂的 JSON。
+    """
+
+    def test_heic_is_rejected_with_a_readable_message(self):
+        from runtime.llm import image_data_url
+
+        with pytest.raises(ValueError) as ei:
+            image_data_url("data:image/heic;base64,AAAA")
+        msg = str(ei.value)
+        assert "image/heic" in msg
+        # 光说「不支持」等于让用户以为自己拍错了，得告诉他该拿它怎么办
+        assert "JPEG" in msg
+
+    @pytest.mark.parametrize("mime", ["image/avif", "image/svg+xml", "image/bmp"])
+    def test_other_unsupported_types_also_rejected(self, mime):
+        from runtime.llm import image_data_url
+
+        with pytest.raises(ValueError):
+            image_data_url(f"data:{mime};base64,AAAA")
+
+    @pytest.mark.parametrize("mime", ["image/jpeg", "image/png", "image/webp", "image/gif"])
+    def test_supported_types_pass_through_byte_identical(self, mime):
+        """放行的路径一个字节都不能变——这道闸不是来改数据的"""
+        from runtime.llm import image_data_url
+
+        u = f"data:{mime};base64,AAAA"
+        assert image_data_url(u) == u
+
+    def test_plain_bytes_still_builds_jpeg_url_unchanged(self):
+        """纯字节 + 默认 mime 的老路径，逐字节不变"""
+        from runtime.llm import image_data_url
+
+        assert image_data_url(b"xx") == "data:image/jpeg;base64,eHg="
+
+    def test_gate_sits_where_every_call_converges(self):
+        """闸必须开在 complete()，不能只挂在 image_data_url 上
+
+        实测踩坑：把校验挂在 image_data_url() 里看着挺对，但投料口那边
+        FileReader 已经把完整 data URL 拼好传过来了，压根不经过这个
+        辅助函数 —— image/heic 一路穿到 API 才 400。
+        凡是 images 参数最终汇合的地方，就得在那儿查。
+        """
+        import inspect as _inspect
+
+        from runtime.llm import complete
+
+        src = _inspect.getsource(complete)
+        assert "_check_image_url" in src, "complete() 里没有校验 images，闸形同虚设"
+
+    def test_check_image_url_rejects_data_url_but_passes_http(self):
+        from runtime.llm import _check_image_url
+
+        with pytest.raises(ValueError):
+            _check_image_url("data:image/heic;base64,AAAA")
+        _check_image_url("data:image/jpeg;base64,AAAA")
+        # http 直链本地查不出 MIME，不该在这里误杀
+        _check_image_url("https://example.com/a.heic")
+
+    def test_box_declares_what_it_accepts(self):
+        """支持哪些格式由盒子声明，不在前端硬编码
+
+        换只盒子支持别的格式，看板一个字都不用改。
+        """
+        from core.models import FieldDef
+        from kanban.trigger import box_manifest
+
+        photo = next(
+            f for f in get_definition().get_schema("schema_receipt_photo").fields
+            if f.name == "photo"
+        )
+        assert "image/heic" not in photo.accepted_media_types()
+        assert "image/jpeg" in photo.accepted_media_types()
+
+        mf = box_manifest(BOX)["tasks"][0]["media_fields"][0]
+        assert mf["name"] == "photo"
+        assert mf["accept"] == photo.accepted_media_types()
+
+    def test_kanban_takes_accept_from_the_declaration(self):
+        """投料口的 accept 得来自盒子声明，不能退回 image/*
+
+        HTML_PAGE 是模板：accept 的值在渲染时才算出来。
+        所以这里查两件事——属性位引的是变量而不是字面量，
+        以及那个变量确实是从 mediaField.accept 取的、兜底也不含 heic。
+        """
+        import re
+
+        from kanban.web import HTML_PAGE
+
+        m = re.search(r'<input type="file" id="media-file" accept="([^"]*)"', HTML_PAGE)
+        assert m, "找不到 media-file 的 accept 属性"
+        assert m.group(1) == "${acceptAttr}", (
+            f"accept 不再取自声明，硬编码成了 {m.group(1)!r}"
+        )
+        # 声明缺失时的兜底值也得收窄：退回 image/* 等于这道闸白设。
+        # 只查兜底那一句，别全文找 —— MEDIA_FIX_HINT 里必须有 image/heic，
+        # 那是「遇到它该说什么」的映射表，正是这道闸的一部分。
+        assert (
+            "['image/jpeg', 'image/png', 'image/webp', 'image/gif']" in HTML_PAGE
+        ), "accept 的兜底清单变了，得确认它仍然不含 HEIC"
+        assert "mediaField.accept" in HTML_PAGE, "accept 没接到盒子声明上"

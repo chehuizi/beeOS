@@ -1515,17 +1515,29 @@ function buildShell(boxId, box, entries) {{
   const firstEntry = entries.length ? entries[0] : {{}};
   const isMedia = firstEntry.payload_kind === 'media';
   const mediaField = (firstEntry.media_fields && firstEntry.media_fields[0])
-    ? firstEntry.media_fields[0].name : 'image';
+    ? firstEntry.media_fields[0] : {{name: 'image', accept: []}};
+  // 收什么格式由盒子声明（media_fields[].accept），前端不自己列清单。
+  // 之前写 accept="image/*" 是把「浏览器认的」当成「系统认的」：
+  // iPhone 的 .HEIC MIME 是 image/heic，一路放行到 API 才 400，
+  // 用户等一轮才看到一句读不懂的 JSON。收窄要在投料口就发生。
+  const mediaAccept = (mediaField.accept && mediaField.accept.length)
+    ? mediaField.accept
+    : ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+  window._mediaAccept = mediaAccept;
+  const acceptAttr = mediaAccept.join(',');
+  const acceptHint = mediaAccept
+    .map((m) => m.replace('image/', '').replace('jpeg', 'jpg').toUpperCase())
+    .join(' / ');
   const payloadBox = isMedia
     ? `<div class="media-intake" id="media-intake">
-         <input type="file" id="media-file" accept="image/*" hidden>
+         <input type="file" id="media-file" accept="${{acceptAttr}}" hidden>
          <div class="media-drop" id="media-drop">
            <div class="media-drop-title">把图片拖到这里</div>
            <div class="media-drop-hint">
              或 <button type="button" class="link-btn" onclick="pickMedia()">选择文件</button>
              ，也可以直接 <kbd>⌘V</kbd> 粘贴截图
            </div>
-           <div class="media-drop-limit">仅支持单张图片，最大 8 MB</div>
+           <div class="media-drop-limit">仅支持单张图片，${{acceptHint}} 格式，最大 8 MB</div>
          </div>
          <div class="media-preview" id="media-preview" hidden>
            <img id="media-img" alt="投料预览" />
@@ -1822,10 +1834,32 @@ function mediaError(msg) {{
   clearMedia();
 }}
 
+// MIME → 人话。HEIC 不是「不支持的怪格式」，是 iPhone 的默认拍照格式，
+// 说「格式不支持」等于让用户以为自己拍错了。得告诉他该拿它怎么办。
+const MEDIA_FIX_HINT = {{
+  'image/heic': '这是 iPhone 的默认拍照格式。先在「照片」里打开 → 分享 → 存为 JPEG，或直接截图再投。',
+  'image/heif': '这是 iPhone 的默认拍照格式。先在「照片」里打开 → 分享 → 存为 JPEG，或直接截图再投。',
+  'image/avif': 'AVIF 格式暂不支持。截图或转成 JPEG 再投。',
+  'image/svg+xml': 'SVG 是矢量图，不是照片。投实际的位图。',
+  'image/bmp': 'BMP 格式暂不支持，转成 JPEG 或 PNG 再投。',
+  'image/tiff': 'TIFF 格式暂不支持，转成 JPEG 或 PNG 再投。',
+}};
+
+function mediaTypeError(file) {{
+  const type = (file.type || '').toLowerCase();
+  const accept = window._mediaAccept || [];
+  const shown = accept.map((m) => m.replace('image/', '').toUpperCase()).join(' / ');
+  const fix = MEDIA_FIX_HINT[type];
+  const what = type ? `${{type}}` : `未知类型`;
+  return `${{file.name}}：${{what}}${{fix ? '。' + fix : `，这里只收 ${{shown}}。`}}`;
+}}
+
 function acceptMedia(file) {{
   if (!file) return;
-  if (!/^image\\//.test(file.type)) {{
-    mediaError(`不是图片：${{file.type || '未知类型'}}`);
+  const accept = window._mediaAccept || [];
+  const type = (file.type || '').toLowerCase();
+  if (!/^image\\//.test(type) || (accept.length && accept.indexOf(type) < 0)) {{
+    mediaError(mediaTypeError(file));
     return;
   }}
   if (file.size > MEDIA_MAX_BYTES) {{

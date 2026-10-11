@@ -11,6 +11,19 @@ from __future__ import annotations
 from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, model_validator
 
+# 媒体字段默认接受的 MIME 类型。
+#
+# 取交集：浏览器能解码出预览 ∩ 视觉接口接受 data URL。
+# HEIC / AVIF 不在其中——Chrome 解不了 HEIC（预览直接是破图），
+# 接口也拒（实测 400 invalid param: image data url media type
+# ["image/heic"] not supported）。两头都不认的东西，放进来只会晚失败。
+DEFAULT_MEDIA_ACCEPT: list[str] = [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+]
+
 # ============================================================
 # 业务化枚举（跨盒子共享）
 # ============================================================
@@ -73,6 +86,18 @@ class FieldDef(BaseModel):
     # 按名字猜等于把业务约定写进内核，换个盒子就失效。
     # 投料口据此把文本框换成图片上传。
     media: Optional[Literal["image"]] = None
+    # 媒体字段接受哪些 MIME 类型。不声明就用 DEFAULT_MEDIA_ACCEPT。
+    #
+    # 为什么要显式收窄：`image/*` 是个**浏览器**的说法，不是「能解码、
+    # 能发出去」的说法。iPhone 拍的 .HEIC 在浏览器里 MIME 是 image/heic，
+    # 放行 `image/*` 就一路带到 API 才被 400 拒（invalid param: image data
+    # url media type ["image/heic"] not supported），用户等一轮才看到一句
+    # 读不懂的 JSON。收窄在投料口拦，才对得起「投进来之前就说清楚」。
+    media_accept: Optional[list[str]] = None
+
+    def accepted_media_types(self) -> list[str]:
+        """这个媒体字段实际接受的 MIME 类型（没声明就用平台默认集）"""
+        return self.media_accept or DEFAULT_MEDIA_ACCEPT
 
     @model_validator(mode="after")
     def validate_type_structure(self) -> "FieldDef":

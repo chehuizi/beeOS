@@ -330,7 +330,14 @@ def list_task_entries(box_id: str) -> list[dict[str, Any]]:
             "payload_kind": _payload_kind(schema),
             # media 形态时投料口要知道收哪个字段、要不要多张
             "media_fields": [
-                {"name": f.name, "media": f.media} for f in media_fields(schema)
+                {
+                    "name": f.name,
+                    "media": f.media,
+                    # 投料口按它决定「能收什么格式」。前端不自己列清单——
+                    # 换只盒子支持别的格式，看板一个字都不用改。
+                    "accept": f.accepted_media_types(),
+                }
+                for f in media_fields(schema)
             ],
         })
     return entries
@@ -378,7 +385,14 @@ def box_manifest(box_id: str) -> dict[str, Any]:
             "trigger": task.trigger,
             "payload_kind": _payload_kind(schema),
             "media_fields": [
-                {"name": f.name, "media": f.media} for f in media_fields(schema)
+                {
+                    "name": f.name,
+                    "media": f.media,
+                    # 投料口按它决定「能收什么格式」。前端不自己列清单——
+                    # 换只盒子支持别的格式，看板一个字都不用改。
+                    "accept": f.accepted_media_types(),
+                }
+                for f in media_fields(schema)
             ],
             "required": [
                 {"name": f.name, "type": f.type, "media": f.media}

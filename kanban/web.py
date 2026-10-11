@@ -588,6 +588,16 @@ HTML_PAGE = f"""<!DOCTYPE html>
     flex: 1 1 auto; min-height: 0; object-fit: contain;
     background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 8px;
   }}
+  /* 浏览器画不出的格式（HEIC / AVIF）摆一块说明牌，不要摆一张破图。
+     破图会被读成「载了张图但坏了」，实际是「压根没坏，是这个格式
+     浏览器解不了」——这两件事得让用户分得清。 */
+  .media-nopreview {{
+    flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 6px; text-align: center;
+    background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px;
+    padding: 16px; font-size: 12px; color: #64748b;
+  }}
+  .media-nopreview b {{ color: #334155; font-size: 13px; }}
   .media-meta {{
     display: flex; align-items: center; justify-content: space-between;
     font-size: 11px; color: #64748b;
@@ -1541,6 +1551,10 @@ function buildShell(boxId, box, entries) {{
          </div>
          <div class="media-preview" id="media-preview" hidden>
            <img id="media-img" alt="投料预览" />
+           <div class="media-nopreview" id="media-nopreview" hidden>
+             <b id="media-nopreview-title"></b>
+             <span id="media-nopreview-why"></span>
+           </div>
            <div class="media-meta">
              <span id="media-name"></span>
              <button type="button" class="link-btn" onclick="clearMedia()">移除</button>
@@ -1820,7 +1834,12 @@ function clearMedia() {{
   const drop = document.getElementById('media-drop');
   const prev = document.getElementById('media-preview');
   const err = document.getElementById('media-error');
+  const img = document.getElementById('media-img');
+  const note = document.getElementById('media-nopreview');
   if (prev) {{ prev.hidden = true; }}
+  // 下次换一张能看的图时，别被上一次留下的 hidden 挡着
+  if (img) {{ img.hidden = false; img.removeAttribute('src'); }}
+  if (note) {{ note.hidden = true; }}
   if (drop) {{ drop.classList.remove('filled'); }}
   if (err) {{ err.hidden = true; }}
   const f = document.getElementById('media-file');
@@ -1833,6 +1852,16 @@ function mediaError(msg) {{
   if (err) {{ err.textContent = msg; err.hidden = false; }}
   clearMedia();
 }}
+
+// 浏览器画不出、但盒子照样收的格式：预览摆说明牌。
+// 「不给看」≠「不能用」——后端会转成 JPEG 再送给模型。
+const NO_PREVIEW_TYPES = {{
+  'image/heic': 'HEIC：你的浏览器解不了这个格式，所以没有预览图。'
+    + '不影响识别——服务端会转成 JPEG 再交给模型。',
+  'image/heif': 'HEIF：你的浏览器解不了这个格式，所以没有预览图。'
+    + '不影响识别——服务端会转成 JPEG 再交给模型。',
+  'image/avif': 'AVIF：你的浏览器解不了这个格式，所以没有预览图。',
+}};
 
 // MIME → 人话。HEIC 不是「不支持的怪格式」，是 iPhone 的默认拍照格式，
 // 说「格式不支持」等于让用户以为自己拍错了。得告诉他该拿它怎么办。
@@ -1874,7 +1903,22 @@ function acceptMedia(file) {{
     const drop = document.getElementById('media-drop');
     const prev = document.getElementById('media-preview');
     const err = document.getElementById('media-error');
-    if (img) img.src = reader.result;
+    const note = document.getElementById('media-nopreview');
+    const noteTitle = document.getElementById('media-nopreview-title');
+    const noteWhy = document.getElementById('media-nopreview-why');
+    // 浏览器自己画不出的格式：摆说明牌，别摆破图。
+    // 破图读起来是「载了张图但坏了」，而 HEIC 压根没坏——
+    // 是这个浏览器解不了它（HEVC 有授权费，进不了 Web 栈）。
+    // 后端会转成 JPEG 再送给模型，所以这里只是「不给看」，不是「不能用」。
+    const noPreview = NO_PREVIEW_TYPES[type];
+    if (img) {{
+      if (noPreview) img.removeAttribute('src');
+      else img.src = reader.result;
+      img.hidden = !!noPreview;
+    }}
+    if (note) note.hidden = !noPreview;
+    if (noteTitle) noteTitle.textContent = `${{file.name}}`;
+    if (noteWhy) noteWhy.textContent = noPreview || '';
     if (nm) nm.textContent = `${{file.name}} · ${{(file.size / 1024).toFixed(0)}} KB`;
     if (drop) drop.classList.add('filled');
     if (prev) prev.hidden = false;

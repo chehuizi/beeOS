@@ -16,8 +16,14 @@ boxes.receipt.runner - 小票识别盒的 3 个 operation 实现
 
 from __future__ import annotations
 
+import base64
+import binascii
 import re
+import shutil
+import subprocess
+import tempfile
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from runtime.llm import complete_json
@@ -50,6 +56,9 @@ qty、unit_price、amount、subtotal、tax、total 各自填图上印的值，
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _HH_MM = re.compile(r"^\d{1,2}:\d{2}$")
 
+# 模型接口 + 浏览器两边都不认的格式，进盒子先转成 JPEG
+_NEEDS_CONVERSION = {"image/heic", "image/heif"}
+
 
 def _num(value: Any) -> float | None:
     """把模型给的数字洗干净：¥/$/逗号/全角 → float，拿不准就 None
@@ -69,6 +78,69 @@ def _num(value: Any) -> float | None:
         return None
 
 
+def _as_viewable_image(photo: str) -> str:
+    """HEIC 转成 JPEG 再交给模型；别的格式原样透传
+
+    **为什么转在盒子里而不是内核**：HEIC 是 iPhone 拍的票据，是这个盒子的
+    业务事实（小票就是这么来的），不是「系统层面都要处理图片格式」。
+    放进 core 就等于让内核替所有盒子背一条它们用不上的规矩。
+
+    **为什么非得转**：两个独立的原因，少一个都还能忍，两个叠一起就绕不过——
+      1. 模型接口直接 400：invalid param: image data url media type
+         ["image/heic"] not supported（确定性拒绝，重试无用）
+      2. Chrome 解不了 HEIC，投料预览是一张破图。传出去的是 JPEG、
+         PNG 还是 HEIC，取决于下游要什么，不取决于相机怎么存。
+    """
+    head, _, b64 = photo.partition(",")
+    if "base64" not in head:
+        return photo  # 不是 data URL（http 直链之类），本地无从转，原样交给下游
+    mime = head[len("data:"):].split(";")[0].strip().lower()
+    if mime not in _NEEDS_CONVERSION:
+        return photo
+    try:
+        raw = base64.b64decode(b64, validate=False)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"HEIC 图片 base64 解不开：{exc}") from exc
+    return "data:image/jpeg;base64," + base64.b64encode(
+        _heic_to_jpeg(raw, mime)
+    ).decode("ascii")
+
+
+def _heic_to_jpeg(raw: bytes, mime: str) -> bytes:
+    """HEIC/HEIF 字节 → JPEG 字节
+
+    用 macOS 自带的 `sips`：零依赖、零安装、HEVC 解码是系统级的。
+    少一个可选的依赖（装不上 Pillow——这台机器的 .venv 里没有 pip），
+    也少一份要维护的编解码器实现。
+
+    缺 sips / 转不动都如实报错，不悄悄退回「原样发出去」——那等于把
+    400 原封不动还给用户，只是晚了一拍。
+    """
+    sips = shutil.which("sips")
+    if sips is None:
+        raise ValueError(
+            f"这台机器没有 sips（macOS 自带的图片转换工具），转不了 {mime}。"
+            "请把票据另存为 JPEG 再投。"
+        )
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "in"
+        dst = Path(tmp) / "out.jpg"
+        src.write_bytes(raw)
+        # 不用 shell=True、不经管道：参数是固定字面量，没有拼接用户输入
+        proc = subprocess.run(
+            [sips, "-s", "format", "jpeg", str(src), "--out", str(dst)],
+            capture_output=True, timeout=60, check=False,
+        )
+        if not dst.is_file() or dst.stat().st_size == 0:
+            detail = (proc.stderr or proc.stdout or b"").decode(
+                "utf-8", "replace"
+            ).strip()
+            raise ValueError(
+                f"{mime} 转 JPEG 失败：{detail or f'sips 退出码 {proc.returncode}'}"
+            )
+        return dst.read_bytes()
+
+
 def _simulate_read_receipt(input_data: dict[str, Any]) -> dict[str, Any]:
     """op 1：看图抄字（真调 LLM，看不清就履约中止，不兜底）
 
@@ -81,7 +153,7 @@ def _simulate_read_receipt(input_data: dict[str, Any]) -> dict[str, Any]:
 
     raw = complete_json(
         _READ_PROMPT,
-        images=[photo],
+        images=[_as_viewable_image(photo)],
         thinking="disabled",
         max_tokens=8000,
     )

@@ -30,6 +30,14 @@ RECEIPT_PHOTO = SchemaDef(
             # 声明成 media → 投料口弹图片上传（拖拽 / 选择 / ⌘V 粘贴），
             # 而不是让人往文本框里粘 300KB 的 base64
             media="image",
+            # 声明本盒收哪些格式。HEIC 在列：iPhone 拍的小票默认就是这个，
+            # 拒收等于让最常见的那种票据投不进来。转码由 runner 在
+            # read_receipt 那一腿做（boxes/receipt/_as_viewable_image），
+            # 到模型手里一定是 JPEG。
+            media_accept=[
+                "image/heic", "image/heif",
+                "image/jpeg", "image/png", "image/webp", "image/gif",
+            ],
             required=True,
             description="小票照片（data URL 或 http URL）",
         ),

@@ -17,7 +17,15 @@ LLM 那一步不 stub（真调要花钱且慢），机械那两步全真测。
 from __future__ import annotations
 
 import base64
+import shutil
+import subprocess
 import tempfile
+from pathlib import Path
+
+# 一张真的、能被 sips 读的 JPEG（4.5KB 合成小票）。
+# 手搓的假 JPEG（ffd8ff + 一串 0）sips 会拒——转换测试必须走真文件，
+# 否则测的是「我塞了个对的魔数」，不是「真的转出来了」。
+RECEIPT_JPEG = Path(__file__).parent / "fixtures" / "receipt_sample.jpg"
 from pathlib import Path
 
 import pytest
@@ -347,12 +355,25 @@ class TestMediaTypeGate:
             f for f in get_definition().get_schema("schema_receipt_photo").fields
             if f.name == "photo"
         )
-        assert "image/heic" not in photo.accepted_media_types()
+        # 盒子自己说了算：小票盒收 HEIC（iPhone 拍的就是这个），
+        # 不代表平台默认集也得收——默认集是给「没声明」的盒子用的保守值
         assert "image/jpeg" in photo.accepted_media_types()
+        assert photo.media_accept, "photo 字段没显式声明 media_accept"
 
         mf = box_manifest(BOX)["tasks"][0]["media_fields"][0]
         assert mf["name"] == "photo"
         assert mf["accept"] == photo.accepted_media_types()
+
+    def test_platform_default_excludes_heic(self):
+        """没声明 media_accept 的盒子走平台默认集，那套里不该有 HEIC
+
+        没转码能力就收 HEIC = 让它撞 400。默认集保守是对的：
+        收得窄不会出错，收得宽会。
+        """
+        from core.models import DEFAULT_MEDIA_ACCEPT
+
+        assert "image/heic" not in DEFAULT_MEDIA_ACCEPT
+        assert "image/jpeg" in DEFAULT_MEDIA_ACCEPT
 
     def test_kanban_takes_accept_from_the_declaration(self):
         """投料口的 accept 得来自盒子声明，不能退回 image/*
@@ -377,3 +398,121 @@ class TestMediaTypeGate:
             "['image/jpeg', 'image/png', 'image/webp', 'image/gif']" in HTML_PAGE
         ), "accept 的兜底清单变了，得确认它仍然不含 HEIC"
         assert "mediaField.accept" in HTML_PAGE, "accept 没接到盒子声明上"
+
+
+# ============================================================
+# HEIC：iPhone 拍的小票默认就是这个格式，得收
+# ============================================================
+
+
+class TestHeicAccepted:
+    """HEIC 不是「不支持的怪格式」，是小票最常见的来源之一
+
+    拒它的理由只有两条，而且都得先转：模型接口 400（确定性拒绝，
+    重试无用），Chrome 也解不了它（预览是张破图）。
+    格式本身没有优劣——传出去是 JPEG 还是 HEIC，取决于下游要什么。
+    """
+
+    HEIC = base64.b64encode(b"not-really-heic-but-bytes").decode()
+
+    def _url(self, mime):
+        return f"data:{mime};base64,{self.HEIC}"
+
+    def test_box_declares_heic_as_accepted(self):
+        photo = next(
+            f for f in get_definition().get_schema("schema_receipt_photo").fields
+            if f.name == "photo"
+        )
+        assert "image/heic" in photo.accepted_media_types()
+        assert "image/heif" in photo.accepted_media_types()
+
+    @pytest.mark.parametrize("mime", ["image/jpeg", "image/png", "image/webp", "image/gif"])
+    def test_non_heic_passes_through_byte_identical(self, mime):
+        """这道闸不是来改数据的：能直接用的格式一个字节都不许动"""
+        from boxes.receipt.runner import _as_viewable_image
+
+        u = self._url(mime)
+        assert _as_viewable_image(u) == u
+
+    def test_http_url_passes_through(self):
+        """http 直链本地无从转，原样交给下游，不瞎猜"""
+        from boxes.receipt.runner import _as_viewable_image
+
+        assert _as_viewable_image("https://x/y.heic") == "https://x/y.heic"
+
+    def test_heic_becomes_a_real_jpeg(self):
+        """真的出 JPEG（看 SOI 魔数），不是把 MIME 标签改了就当转过了
+
+        走真文件：仓库里这张 fixture JPEG → sips 转成真 HEIC → 盒子转回
+        JPEG。手搓的假 JPEG（ffd8ff + 一串 0）sips 直接拒，本轮就踩过。
+        """
+        from boxes.receipt.runner import _as_viewable_image
+
+        if shutil.which("sips") is None:
+            pytest.skip("没有 sips，跳过真转换验证")
+        tmp = Path(tempfile.mkdtemp())
+        heic = tmp / "probe.heic"
+        subprocess.run(
+            ["sips", "-s", "format", "heic", str(RECEIPT_JPEG), "--out", str(heic)],
+            capture_output=True, check=True,
+        )
+        url = "data:image/heic;base64," + base64.b64encode(heic.read_bytes()).decode()
+        out = _as_viewable_image(url)
+        assert out.startswith("data:image/jpeg;base64,")
+        assert base64.b64decode(out.split(",", 1)[1])[:3] == b"\xff\xd8\xff"
+
+    def test_missing_sips_fails_loudly(self, monkeypatch):
+        """转不了就如实说，不悄悄把 HEIC 原样发出去
+
+        悄悄退回去 = 把同样的 400 原封不动还给用户，只是晚了一拍。
+        """
+        from boxes.receipt import runner as receipt_runner
+
+        monkeypatch.setattr(receipt_runner.shutil, "which", lambda _: None)
+        with pytest.raises(ValueError) as ei:
+            receipt_runner._as_viewable_image(self._url("image/heic"))
+        assert "sips" in str(ei.value)
+
+    def test_converter_failure_is_reported(self, monkeypatch):
+        """sips 在但转不动（文件不是真 HEIC 等）——报 sips 说的原话"""
+        from boxes.receipt import runner as receipt_runner
+
+        monkeypatch.setattr(receipt_runner.shutil, "which", lambda _: "/usr/bin/sips")
+
+        class _Proc:
+            returncode = 1
+            stdout = b""
+            stderr = b"bad image data"
+
+        monkeypatch.setattr(receipt_runner.subprocess, "run", lambda *a, **k: _Proc())
+        with pytest.raises(ValueError) as ei:
+            receipt_runner._as_viewable_image(self._url("image/heic"))
+        assert "bad image data" in str(ei.value)
+
+    def test_read_receipt_converts_before_calling_the_model(self, monkeypatch):
+        """转换必须发生在调模型**之前**，而不是指望模型自己看得懂 HEIC"""
+        from boxes.receipt import runner as receipt_runner
+
+        seen = {}
+
+        def spy(prompt, **kw):
+            seen["images"] = kw.get("images")
+            return {"merchant_name": "某超市", "items": []}
+
+        monkeypatch.setattr(receipt_runner.shutil, "which", lambda _: None)
+        monkeypatch.setattr(receipt_runner, "complete_json", spy)
+        # 没 sips → 转换失败 → 一张图都不该发出去
+        with pytest.raises(ValueError):
+            receipt_runner._simulate_read_receipt({"photo": self._url("image/heic")})
+        assert not seen, "转换失败后仍然调了模型"
+
+    def test_kanban_shows_a_note_not_a_broken_image(self):
+        """浏览器解不了的格式摆说明牌，不摆破图
+
+        破图会被读成「载了张图但坏了」，实际是「压根没坏，是这个格式
+        浏览器解不了」——这两件事得让用户分得清。
+        """
+        from kanban.web import HTML_PAGE
+
+        assert "NO_PREVIEW_TYPES" in HTML_PAGE, "没有「画不出就摆说明牌」的分支"
+        assert "media-nopreview" in HTML_PAGE

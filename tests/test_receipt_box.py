@@ -606,10 +606,17 @@ class TestPromptKeepsTranscriptionSeparateFromArithmetic:
 
         return _READ_PROMPT
 
-    def test_prompt_forbids_reading_qty_from_the_product_name(self):
+    def test_prompt_forbids_reading_qty_from_the_spec_string(self):
+        """规格里的数字不是数量
+
+        反例用真票上的写法：`500ml*2` 是规格（500ml 的瓶子 ×2），
+        数量栏印的是 `x 1`。早先这里写的是「两件装」——真票上根本没这三个字，
+        照着一个票上不存在的写法让模型理解，反而误导。
+        """
         p = self._prompt()
-        assert "两件装" in p, "没点名「商品名里的『两件装』不是数量」这个坑"
-        assert "数量" in p
+        assert "500ml*2" in p, "没点名「规格里的数字不是数量」这个坑"
+        assert "规格" in p
+        assert "两件装" not in p, "反例是编的，真票上写的是 500ml*2"
 
     def test_prompt_forbids_computing_amount_from_qty_times_price(self):
         """拿 qty × unit_price 去填 amount，这条校验就永远发现不了错
@@ -659,3 +666,95 @@ class TestPromptKeepsTranscriptionSeparateFromArithmetic:
         }})
         assert bad["line_arithmetic"] is False
         assert bad["totals_match"] is False
+
+
+class TestRetailPosReceipt:
+    """零售 POS 小票不是增值税发票
+
+    实测踩坑（真盒马 NB 小票）：
+        商品合计 28.80 / 支付宝优惠 -0.18 / 支付明细 28.62
+    票上**没有税**。而原来的公式是「小计 + 税 = 实付」，那张优惠数
+    在数据契约里无处安放，模型只能给 null，于是每张打过折的票必然转红。
+
+    这不是「模型没抄好」，是 schema 漏了一个真实存在的业务事实。
+    漏字段 = 声明了却拿不到的另一个变体：票上有，盒子里没有。
+    """
+
+    # 票面真值（照着真票抄的）
+    POS = {
+        "merchant_name": "杭州盒马NB拱墅桥西邻里店",
+        "receipt_no": "5127745356775056818",
+        "receipt_date": "2026-10-07", "receipt_time": "17:54",
+        "subtotal": 28.80, "tax": None, "discount": 0.18, "total": 28.62,
+        "payment_method": "碰一下支付",
+        "items": [
+            {"name": "李锦记 薄盐生抽(酿造酱油) 500ml*2", "qty": 1,
+             "unit_price": 14.90, "amount": 14.90},
+            {"name": "巴马铂泉 饮用天然泉水 500ml*12", "qty": 1,
+             "unit_price": 13.90, "amount": 13.90},
+        ],
+    }
+
+    def _verify(self, parsed):
+        from boxes.receipt.runner import _simulate_verify_receipt
+
+        return _simulate_verify_receipt({"parsed": parsed})
+
+    def test_pos_receipt_with_discount_passes_all_rules(self):
+        v = self._verify(self.POS)
+        assert v["totals_match"] is True, (
+            f"零售 POS 小票竟然过不了：{v}"
+        )
+        assert v["total_arithmetic"] is True
+
+    def test_vat_invoice_without_discount_still_passes(self):
+        """另一类票据：增值税发票有税没优惠，公式也得认"""
+        v = self._verify({**self.POS, "subtotal": 100.0, "tax": 13.0,
+                          "discount": None, "total": 113.0})
+        assert v["total_arithmetic"] is True
+
+    def test_discount_is_not_silently_absorbed_into_tax(self):
+        """优惠不能塞进税额栏——POS 小票没有税，增值税发票没有支付宝优惠"""
+        v = self._verify({**self.POS, "tax": 0.18, "discount": None})
+        assert v["total_arithmetic"] is False, (
+            "把优惠当成税，公式就又回到「小计+税=实付」那个漏字段的老路"
+        )
+
+    def test_schema_declares_discount(self):
+        """产出契约里必须有 discount，否则这个字段无处安放"""
+        fields = {f.name for f in get_definition().get_schema("schema_receipt_parsed").fields}
+        assert "discount" in fields
+        assert "tax" in fields, "税也得留着——增值税发票那张还没有"
+
+    def test_packaging_passes_discount_through(self):
+        from boxes.receipt.runner import _simulate_package_receipt
+
+        out = _simulate_package_receipt({"parsed": self.POS, **self._verify(self.POS)})
+        assert out["discount"] == 0.18
+        assert out["tax"] is None, "票上没有税，就该是 None，不该补 0"
+
+    def test_prompt_names_the_discount_concept(self):
+        """prompt 里没有「优惠」这个词，模型就不知道 -0.18 该放哪"""
+        from boxes.receipt.runner import _READ_PROMPT
+
+        p = _READ_PROMPT
+        assert "discount" in p
+        for label in ("支付宝优惠", "抹零"):
+            assert label in p, f"prompt 没点名「{label}」这类标签"
+
+    def test_prompt_says_pos_receipts_have_no_tax(self):
+        """不说清楚，模型会为了凑公式把优惠硬塞进税额栏"""
+        from boxes.receipt.runner import _READ_PROMPT
+
+        assert "POS" in _READ_PROMPT and "没有" in _READ_PROMPT
+
+    def test_prompt_uses_the_real_spec_pattern_not_a_made_up_one(self):
+        """上一版写的反例「两件装」是编的——真票上写的是 500ml*2
+
+        结论碰巧对（都是「规格里的数字不是数量」），但反例得是真的，
+        不然模型照着一个票上不存在的写法去理解，反而误导。
+        """
+        from boxes.receipt.runner import _READ_PROMPT
+
+        assert "500ml*2" in _READ_PROMPT
+        assert "两件装" not in _READ_PROMPT

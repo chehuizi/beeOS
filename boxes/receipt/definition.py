@@ -13,7 +13,7 @@ boxes.receipt.definition - 小票识别履约盒 Definition
 - field_completeness —— 必填字段齐全（商��或单号至少有一个 + 金额齐全 + 有商品行）
 - line_arithmetic     —— 每行 数量 × 单价 == 该行金额
 - sum_arithmetic      —— Σ行金额 == 小计
-- total_arithmetic    —— 小计 + 税 == 合计
+- total_arithmetic    —— 小计 + 税 − 优惠 == 实付
 - date_wellformed     —— 日期时间格式合法
 - totals_match        —— 以上全过
 

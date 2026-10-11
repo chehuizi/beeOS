@@ -78,16 +78,22 @@ RECEIPT_PARSED = SchemaDef(
         FieldDef(name="receipt_date", type="string", description="ISO 日期 YYYY-MM-DD"),
         FieldDef(name="receipt_time", type="string", description="HH:MM 或空串"),
         FieldDef(name="items", type="ref:schema_receipt_item"),
-        FieldDef(name="subtotal", type="number", description="小计（商品合计，不含税）"),
-        FieldDef(name="tax", type="number"),
+        FieldDef(name="subtotal", type="number", description="小计 / 商品合计"),
+        # 零售 POS 小票**没有税**，只有优惠（支付宝优惠 / 满减 / 抹零）。
+        # 漏掉这一栏，票上最常见的那个数字就无处安放——模型只能给 null，
+        # 然后「小计+税=实付」必然对不上。实测踩坑：盒马 NB 小票
+        # 商品合计 28.80、支付宝优惠 -0.18、实付 28.62，就卡在这一栏。
+        # tax 和 discount 都留着：POS 小票只有 discount，增值税发票只有 tax。
+        FieldDef(name="tax", type="number", description="税额（零售 POS 小票通常没有）"),
+        FieldDef(name="discount", type="number", description="优惠 / 折扣 / 减免（正数=减免了多少）"),
         FieldDef(name="total", type="number", description="实付合计"),
         FieldDef(name="payment_method", type="string"),
         # ---- 可机械验证的校验证据（详见 runner）----
-        # 算术自洽：小计 + 税 = 合计；每行 qty × 单价 = 该行金额
+        # 算术自洽：每行 qty × 单价 = 金额；Σ行金额 = 小计；小计 + 税 − 优惠 = 实付
         FieldDef(name="field_completeness", type="boolean", description="必填字段齐全"),
         FieldDef(name="line_arithmetic", type="boolean", description="每行 数量×单价 = 金额"),
         FieldDef(name="sum_arithmetic", type="boolean", description="Σ行金额 = 小计"),
-        FieldDef(name="total_arithmetic", type="boolean", description="小计 + 税 = 合计"),
+        FieldDef(name="total_arithmetic", type="boolean", description="小计 + 税 − 优惠 = 实付"),
         FieldDef(name="date_wellformed", type="boolean", description="日期格式合法"),
         FieldDef(name="totals_match", type="boolean", description="金额与票据上印的合计一致"),
         FieldDef(name="low_confidence_fields", type="array", items=FieldDef(name="f", type="string"), required=False,

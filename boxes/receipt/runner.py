@@ -41,21 +41,26 @@ _READ_PROMPT = """你是一张小票识别器。给你一张收银小票的照�
 - receipt_date: 日期，转成 YYYY-MM-DD
 - receipt_time: 时间 HH:MM，看不到填 ""
 - items: 商品行数组，每行 {{name, qty, unit_price, amount}}，价格是数字
-- subtotal: 小计（商品合计，不含税）
-- tax: 税额
-- total: 实付合计
-- payment_method: 支付方式（现金/微信/支付宝/银行卡…）
+- subtotal: 小计 / 商品合计
+- tax: 税额。**零售 POS 小票通常没有这一栏**（超市、便利店 POS 单是含税价），
+  找不到就填 null，**不要拿别的数字凑**。
+- discount: 优惠 / 折扣 / 减免 / 抹零，填**正数**（票上印 -0.18 就填 0.18）。
+  常见标签：支付宝优惠、微信优惠、满减、折扣、抹零、立减。
+- total: 实付合计（支付明细那一行）
+- payment_method: 支付方式（现金/微信/支付宝/银行卡/碰一下支付…）
 - low_confidence_fields: 你拿不准的字段名数组
 
-**抄，不是算。** qty、unit_price、amount、subtotal、tax、total 各自填**图上印着的那一格**，
-不管它们之间算不算得起来。
+**抄，不是算。** qty、unit_price、amount、subtotal、tax、discount、total 各自填
+**图上印着的那一格**，不管它们之间算不算得起来。
 
 **不要自己做算术校验**，也不要为了「看起来对」而改数字。加不起来是校验层该发现的事，
 不是你该偷偷修正的事——你一修正，这条校验就再也发现不了真实错误了。
 
-**qty 只看「数量」那一栏。** 商品名里的「两件装」「6 联」「500ml*12」是名字的一部分，
-不是数量。实测踩坑：一张「李锦记薄盐生抽(酿造酱油) 两件装」的单子，SKU 本身就是两件装，
-数量栏印的是 1、金额栏印的是 14.9；模型从名字里捡了个「两」当数量，又把金额抄成 28.8。
+**qty 只看「数量」那一栏。** 票上常写成 `x 1`、`×1`、`1.00` 这类形式。
+**规格里的数字不是数量**：实测一张「李锦记 薄盐生抽(酿造酱油) **500ml*2**」的单子，
+`500ml*2` 是规格（500ml 的瓶子 ×2），数量栏印的是 `x 1`、金额 14.90。
+模型从规格里捡了个「2」当数量，金额也跟着抄错。
+同理「6 联」「*12」「2.5L」都是规格，不是数量。
 
 **amount 抄「金额」那一栏，不要用 qty × unit_price 代替。** 两者本来就是该被校验的
 两个独立数字，你拿一个去填另一个，这条校验就永远发现不了错。
@@ -214,10 +219,16 @@ def _simulate_verify_receipt(input_data: dict[str, Any]) -> dict[str, Any]:
         subtotal is not None and abs(line_sum - subtotal) <= 0.01
     )
 
-    # 小计 + 税 == 合计（没税就当 0）
+    # 小计 + 税 − 优惠 = 实付
+    # 优惠这一项是零售 POS 小票的标配（支付宝优惠 / 满减 / 抹零），而 POS 小票
+    # **没有税**。以前公式只写「小计 + 税 = 实付」，票上那个优惠数就无处安放，
+    # 模型只能给 null，于是每张打过折的票都必然转红。
+    # 两种票据都在这套公式里：POS 小票 tax 缺省 0、discount 有值；
+    # 增值税发票 tax 有值、discount 缺省 0。
+    discount = _num(parsed.get("discount"))
     total_arithmetic = (
         subtotal is not None and total is not None
-        and abs(subtotal + (tax or 0.0) - total) <= 0.01
+        and abs(subtotal + (tax or 0.0) - (discount or 0.0) - total) <= 0.01
     )
 
     # 日期格式
@@ -277,6 +288,7 @@ def _simulate_package_receipt(input_data: dict[str, Any]) -> dict[str, Any]:
         "items": normalized_items,
         "subtotal": _num(parsed.get("subtotal")),
         "tax": _num(parsed.get("tax")),
+        "discount": _num(parsed.get("discount")),
         "total": _num(parsed.get("total")),
         "payment_method": parsed.get("payment_method") or "",
         "field_completeness": bool(v.get("field_completeness")),

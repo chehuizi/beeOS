@@ -1310,6 +1310,7 @@ function renderReceipt(r) {{
     <div class="rc-sum">
       <div><span>小计</span><b>${{esc(money(r.subtotal))}}</b></div>
       <div><span>税额</span><b>${{esc(money(r.tax))}}</b></div>
+      <div><span>优惠</span><b>${{esc(money(r.discount))}}</b></div>
       <div class="rc-total"><span>实付</span><b>${{esc(money(r.total))}}</b></div>
     </div>
     <div class="rs-hint">机械校验只证明「数字对得上」，不证明「字认对了」——

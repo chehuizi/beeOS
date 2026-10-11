@@ -185,6 +185,10 @@ class AcceptanceEvaluation(BaseModel):
     evaluated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     passed_rules: list[str] = Field(default_factory=list)
     failed_rules: list[dict[str, Any]] = Field(default_factory=list)
+    # 判据里明确「对这次产出用不上」的（如票上没印单价，却要验数量×单价）。
+    # 不算失败，所以不挡 ACCEPTED；但也不算通过——看板要把它们单独列出来，
+    # 不能混进 passed 让人以为「全都验过了」。
+    not_applicable_rules: list[str] = Field(default_factory=list)
     # rejected 归因（ACCEPTED / AWAITING 时为 None）——让看板能说清"为什么没通过"
     rejection_class: Optional[RejectionClass] = None
     exception_action: Optional[str] = None  # no_deliver / rollback / escalate

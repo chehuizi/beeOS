@@ -737,9 +737,13 @@ HTML_PAGE = f"""<!DOCTYPE html>
   }}
   .ac-row.ok {{ border-color: #bbf7d0; }}
   .ac-row.bad {{ border-color: #fecaca; background: #fef2f2; }}
+  /* n/a 用虚线边 + 全灰：它既没过（不红）也没验（不绿）。
+     给它任何一种状态色都会变成在替它表态——「用不上」不等于「没问题」。 */
+  .ac-row.na {{ border-color: #e2e8f0; border-style: dashed; }}
   .ac-mark {{ font-weight: 700; }}
   .ac-row.ok .ac-mark {{ color: #16a34a; }}
   .ac-row.bad .ac-mark {{ color: #dc2626; }}
+  .ac-row.na .ac-mark {{ color: #94a3b8; }}
   .ac-metric {{
     grid-column: 2; color: #0f172a; font-weight: 600;
     font-family: ui-monospace, monospace; font-size: 10px; word-break: break-all;
@@ -750,6 +754,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .ac-rule::before {{ content: '判据 '; color: #94a3b8; }}
   .ac-actual {{ grid-column: 2; font-size: 10px; color: #475569; word-break: break-all; }}
   .ac-row.bad .ac-actual {{ color: #b91c1c; font-weight: 600; }}
+  .ac-row.na .ac-actual {{ color: #94a3b8; font-style: italic; }}
   /* 验收闸：菱形，颜色随判定结果走 */
   /* 菱形不挂状态灯：填充色本身就是状态（待机米 / 判定中黄 / 通过绿 / 没过红），
      再塞一个灯就是同一格两套编码，而且令牌 hold 时停在正中，灯躲不开。 */
@@ -1232,18 +1237,29 @@ function renderAcceptance(a) {{
     return esc(v);
   }};
   const items = rows.map((r) => {{
-    const passed = !!r.passed;
-    return `<div class="ac-row ${{passed ? 'ok' : 'bad'}}">
-      <span class="ac-mark">${{passed ? '✓' : '✗'}}</span>
+    // 三态：passed / failed / not_applicable。
+    // n/a 绝不能画成 ✓——「这条票型用不上这条判据」和「这条验过了」是两回事，
+    // 混起来就变成用 6/6 冒充「全都验过了」。
+    const na = r.outcome === 'not_applicable' || r.not_applicable;
+    const passed = !na && !!r.passed;
+    const cls = na ? 'na' : (passed ? 'ok' : 'bad');
+    const mark = na ? '—' : (passed ? '✓' : '✗');
+    const tail = na ? '这条票型用不上' : '';
+    return `<div class="ac-row ${{cls}}">
+      <span class="ac-mark">${{mark}}</span>
       <span class="ac-metric">${{esc(r.metric)}}</span>
       <span class="ac-rule">${{esc(r.op)}} ${{fmt(r.expected)}}</span>
-      <span class="ac-actual">实测 ${{fmt(r.actual)}}</span>
+      <span class="ac-actual">${{na ? tail : `实测 ${{fmt(r.actual)}}`}}</span>
     </div>`;
   }}).join('');
-  const nOk = rows.filter((r) => r.passed).length;
+  const nOk = rows.filter((r) => r.outcome === 'passed' || (!r.not_applicable && r.passed)).length;
+  const nNa = rows.filter((r) => r.outcome === 'not_applicable' || r.not_applicable).length;
+  // 分母只数真正判过的。6 条里 1 条不适用，说「5/6」会让人以为还有一条没过。
+  const nJudged = nOk + (rows.length - nOk - nNa);
+  const naNote = nNa ? ` · ${{nNa}} 条不适用` : '';
   return `<div class="ac">
     <div class="ac-summary ${{ok ? 'ok' : 'bad'}}">
-      ${{ok ? '✓ 全部通过' : '✗ 未通过'}} · ${{nOk}} / ${{rows.length}} 条判据
+      ${{ok ? '✓ 全部通过' : '✗ 未通过'}} · ${{nOk}} / ${{nJudged}} 条判据${{naNote}}
     </div>
     <div class="ac-rows">${{items}}</div>
   </div>`;

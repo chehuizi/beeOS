@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.models import AcceptanceRule, ExceptionRule, ResultDef
+from core.models import AcceptanceRule, ExceptionRule, ResultDef, is_not_applicable
 from runtime.models import (
     AcceptanceEvaluation,
     AcceptanceStatus,
@@ -33,7 +33,7 @@ from runtime.models import (
 # ============================================================
 
 
-def _evaluate_rule(rule: AcceptanceRule, result: dict[str, Any]) -> bool:
+def _evaluate_rule(rule: AcceptanceRule, result: dict[str, Any]) -> bool | None:
     """评估单条 acceptance rule
 
     Args:
@@ -41,9 +41,15 @@ def _evaluate_rule(rule: AcceptanceRule, result: dict[str, Any]) -> bool:
         result: task run 业务结果 dict
 
     Returns:
-        True = pass, False = fail
+        True = pass, False = fail, None = **不适用**
+
+    None 不是「缺值」也不是「失败」，是「这条判据对这次产出用不上」。
+    典型：票上没印单价，却要验「数量 × 单价 == 金额」——无从检验，
+    不该说它过，也不该说它错。混进 pass 是撒谎，混进 fail 同样是撒谎。
     """
     actual = result.get(rule.metric)
+    if is_not_applicable(actual):
+        return None
 
     if rule.op == "eq":
         return actual == rule.value
@@ -171,11 +177,14 @@ def evaluate_acceptance(
         AcceptanceEvaluation（含 status + 通过/失败规则 + 触发的 exception action）
 
     状态转移：
-    - 全 pass → ACCEPTED
+    - 无 fail（n/a 不算 fail）→ ACCEPTED
     - 有 fail + exception=rollback → COMPENSATING_ACCEPTANCE（PoC 不执行反向 op，直接回 AWAITING）
     - 有 fail + exception=escalate → REJECTED（queen 决策）
     - 有 fail + exception=no_deliver → REJECTED
     - 有 fail 无 exception → REJECTED（默认）
+
+    n/a（判据对本次产出用不上）既不挡 ACCEPTED，也不进 passed_rules——
+    它进 not_applicable_rules，由看板单独列出来。说成「通过」是撒谎。
     """
     if task_run.status.value != "completed":
         raise ValueError(
@@ -185,28 +194,40 @@ def evaluate_acceptance(
     result = task_run.result or {}
     passed: list[str] = []
     failed: list[dict[str, Any]] = []
+    not_applicable: list[str] = []
 
     for rule in contract.acceptance:
+        error: str | None = None
         try:
             ok = _evaluate_rule(rule, result)
         except Exception as e:
             ok = False
-            failed.append({"rule": rule.metric, "error": str(e)})
-            continue
+            error = str(e)
 
+        # 三态：None = 用不上，不进 failed 也不进 passed
+        if ok is None:
+            not_applicable.append(rule.metric)
+            continue
         if ok:
             passed.append(rule.metric)
         else:
-            failed.append(
-                {"metric": rule.metric, "op": rule.op, "expected": rule.value, "actual": result.get(rule.metric)}
-            )
+            entry = {
+                "metric": rule.metric,
+                "op": rule.op,
+                "expected": rule.value,
+                "actual": result.get(rule.metric),
+            }
+            if error is not None:
+                entry["error"] = error
+            failed.append(entry)
 
-    # 全 pass
+    # 全 pass（n/a 不算失败）
     if not failed:
         return AcceptanceEvaluation(
             status=AcceptanceStatus.ACCEPTED,
             passed_rules=passed,
             failed_rules=[],
+            not_applicable_rules=not_applicable,
         )
 
     # 有 fail：找 exception 规则
@@ -220,6 +241,7 @@ def evaluate_acceptance(
             status=AcceptanceStatus.REJECTED,
             passed_rules=passed,
             failed_rules=failed,
+            not_applicable_rules=not_applicable,
             rejection_class=rejection_class,
             exception_action=None,
         )
@@ -229,6 +251,7 @@ def evaluate_acceptance(
             status=AcceptanceStatus.REJECTED,
             passed_rules=passed,
             failed_rules=failed,
+            not_applicable_rules=not_applicable,
             rejection_class=rejection_class,
             exception_action="no_deliver",
         )
@@ -239,6 +262,7 @@ def evaluate_acceptance(
             status=AcceptanceStatus.COMPENSATING_ACCEPTANCE,
             passed_rules=passed,
             failed_rules=failed,
+            not_applicable_rules=not_applicable,
             exception_action="rollback",
         )
 
@@ -251,6 +275,7 @@ def evaluate_acceptance(
             status=AcceptanceStatus.REJECTED,  # queen 默认拒绝（人工接管）
             passed_rules=passed,
             failed_rules=failed,
+            not_applicable_rules=not_applicable,
             rejection_class=rejection_class,
             exception_action="escalate",
             queen_decision=queen_decision,

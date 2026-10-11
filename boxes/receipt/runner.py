@@ -26,8 +26,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from core.models import NOT_APPLICABLE, is_not_applicable
 from runtime.llm import complete_json
 from runtime.runner import HandlerRunner
+
+
+def _keep_state(value: Any) -> Any:
+    """判据值三态透传：True / False / "n/a"
+
+    不能用 bool() 兜——bool("n/a") 是 True，「用不上」会被悄悄变成「通过」。
+    """
+    return NOT_APPLICABLE if is_not_applicable(value) else bool(value)
 
 
 # LLM 只做这一件事：看图抄字。判据全部留给机械层。
@@ -193,17 +202,37 @@ def _simulate_verify_receipt(input_data: dict[str, Any]) -> dict[str, Any]:
     total = _num(parsed.get("total"))
     has_identity = bool(parsed.get("merchant_name")) or bool(parsed.get("receipt_no"))
     field_completeness = (
-        subtotal is not None and total is not None and has_identity and len(items) > 0
+        subtotal is not None and total is not None and has_identity
+        # 「有商品行」得是真有行：items 里塞一堆字符串也是「非空」，
+        # 但那不叫解析出了小票。
+        and any(isinstance(it, dict) for it in items)
     )
 
     # 逐行 qty × unit_price == amount（容差 0.01：浮点 + 两位小数四舍五入）
+    #
+    # 三态，不是两态。餐馆结账单只印「品项/数量/金额」，压根没有单价栏——
+    # 这时这条判据**用不上**，既不该说它过，也不该说它错。
+    #
+    # 怎么区分「票上没这一栏」和「模型没抄出来」：
+    #   一行都没有单价 → 大概率票上没这栏（超市 POS、餐馆结账单都这样）
+    #   有的有、有的没有 → 票上有这栏，是模型漏抄 → 真失败
+    # 这是启发式，不是判据。已声明的盲区：一张**确实印了单价栏**、
+    # 而模型在每一行都漏抄的票，会被误读成「票上没单价」而放行。
+    # 跟「字认对没有」一样，机器判不了就明说，不假装能判。
     line_bad = []
     line_sum = 0.0
+    row_count = 0          # items 里一共有几行（不管这行长不像样）
+    struct_rows = 0        # 其中读成结构化对象的有几行
+    rows_with_price = 0    # 其中读到单价的有几行
     for i, it in enumerate(items, start=1):
+        row_count += 1
         if not isinstance(it, dict):
             line_bad.append(i)
             continue
+        struct_rows += 1
         qty, price, amt = _num(it.get("qty")), _num(it.get("unit_price")), _num(it.get("amount"))
+        if price is not None:
+            rows_with_price += 1
         amt_ok = (
             qty is not None and price is not None and amt is not None
             and abs(qty * price - amt) <= 0.01
@@ -212,7 +241,19 @@ def _simulate_verify_receipt(input_data: dict[str, Any]) -> dict[str, Any]:
             line_bad.append(i)
         if amt is not None:
             line_sum += amt
-    line_arithmetic = not line_bad
+
+    if row_count == 0:
+        # 压根没行可验。（这条单独看可以放行——field_completeness
+        # 会因为 items 为空而转红，整张票照样被拦。）
+        line_arithmetic = NOT_APPLICABLE
+    elif struct_rows > 0 and rows_with_price == 0:
+        # 读出了结构化的行、但一行单价都没有 → 票上大概率没这一栏。
+        # **前提是 struct_rows > 0**：一堆读不成对象的行同样「没有单价」，
+        # 但那是模型抄砸了，不是票上没这栏。不加这个前提，
+        # 垃圾行会被当成「不适用」白放行——比算错还难查。
+        line_arithmetic = NOT_APPLICABLE
+    else:
+        line_arithmetic = not line_bad
 
     # Σ行金额 == 小计
     sum_arithmetic = (
@@ -250,10 +291,21 @@ def _simulate_verify_receipt(input_data: dict[str, Any]) -> dict[str, Any]:
         "sum_arithmetic": sum_arithmetic,
         "total_arithmetic": total_arithmetic,
         "date_wellformed": date_wellformed and time_ok,
-        # 总口径：全部机械判据都过
+        # 总口径：没有任何一条判据是 False。
+        #
+        # 写成 `is not False` 而不是 and 链，不是为了防类型污染——
+        # （实测过：and 短路返回第一个假值、否则最后一个操作数，
+        #   字符串在链中间漏不出去，旧写法其实也没真出错。）
+        # 真正的原因：让「n/a 不拖后腿」这件事变成显式声明。
+        # 现在它靠的是 bool("n/a") is True 这个巧合——哪天有人调整判据顺序、
+        # 把 line_arithmetic 挪到链尾，它就会变成字符串悄悄漏出去。
         "totals_match": (
-            field_completeness and line_arithmetic and sum_arithmetic
-            and total_arithmetic and date_wellformed and time_ok
+            field_completeness is not False
+            and line_arithmetic is not False
+            and sum_arithmetic is not False
+            and total_arithmetic is not False
+            and date_wellformed
+            and time_ok
         ),
         "line_errors": line_bad,
     }
@@ -292,7 +344,10 @@ def _simulate_package_receipt(input_data: dict[str, Any]) -> dict[str, Any]:
         "total": _num(parsed.get("total")),
         "payment_method": parsed.get("payment_method") or "",
         "field_completeness": bool(v.get("field_completeness")),
-        "line_arithmetic": bool(v.get("line_arithmetic")),
+        # **别用 bool()**：bool("n/a") 是 True，会把「这张票用不上这条判据」
+        # 变成「这条判据通过了」——正是这套判据存在的意义的反面。
+        # 三态原样带过去。
+        "line_arithmetic": _keep_state(v.get("line_arithmetic")),
         "sum_arithmetic": bool(v.get("sum_arithmetic")),
         "total_arithmetic": bool(v.get("total_arithmetic")),
         "date_wellformed": bool(v.get("date_wellformed")),

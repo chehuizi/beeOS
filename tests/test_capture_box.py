@@ -586,13 +586,21 @@ class TestAcceptanceGate:
         )
 
     def test_detail_covers_every_declared_rule(self, store):
-        """每条声明的判据都要有一行，带上判据 / 实测 / 过没过"""
+        """每条声明的判据都要有一行，带上判据 / 实测 / 三态结论"""
         r = self._run(store, "建模退款流程。退款必须在 7 天内完成。退款申请走审批流程。")
         declared = {rule.metric for rule in get_capture_definition().result.acceptance}
         detail = r["acceptance_detail"]
         assert {d["metric"] for d in detail} == declared
         for d in detail:
-            assert set(d) == {"metric", "op", "expected", "actual", "passed"}
+            assert set(d) == {
+                "metric", "op", "expected", "actual", "passed",
+                "outcome", "not_applicable",
+            }
+            # 三态自洽：outcome 是唯一权威，passed / not_applicable 必须跟它对齐。
+            # 两套布尔各说各话时，看板会挑那个错的渲染。
+            assert d["outcome"] in ("passed", "failed", "not_applicable")
+            assert d["passed"] is (d["outcome"] == "passed")
+            assert d["not_applicable"] is (d["outcome"] == "not_applicable")
 
     def test_rejected_points_at_the_failing_rule(self, store):
         """拒时要能说出是哪条判据没过 + 期望多少 + 实际多少"""

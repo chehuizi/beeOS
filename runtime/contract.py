@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.models import FieldDef, SchemaDef
+from core.models import FieldDef, SchemaDef, is_not_applicable
 
 
 # ============================================================
@@ -35,6 +35,13 @@ _PY_TYPE_CHECKS: dict[str, Any] = {
     "boolean": lambda v: isinstance(v, bool),
     "object": lambda v: isinstance(v, dict),
     "array": lambda v: isinstance(v, (list, tuple)),
+    # 三态布尔：true / false / "n/a"（判据对本次产出用不上）。
+    #
+    # 单独开一个类型，而不是让 "boolean" 顺带放行 "n/a"——
+    # 后者会把**全系统**每一个布尔字段的口径都悄悄放松，而且放松得
+    # 看不出来。只有确实会出现三态的字段才声明 boolean_or_na，
+    # 声明它就是在说「这条判据有可能不适用」，这句话要显式。
+    "boolean_or_na": lambda v: isinstance(v, bool) or is_not_applicable(v),
 }
 
 

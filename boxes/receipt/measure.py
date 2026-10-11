@@ -13,6 +13,7 @@ from typing import Any
 
 import core.metrics as core_metrics
 from core.metrics import Computer, Measurement
+from core.models import is_not_applicable
 
 
 def _finished(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -21,7 +22,18 @@ def _finished(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _rate(records: list[dict[str, Any]], metric: str) -> Measurement:
-    judged = [r for r in _finished(records) if metric in (r.get("observed") or {})]
+    """判据为 True 的比例
+
+    **n/a 的 run 分子分母都不算。** 它不是「一致」也不是「不一致」，
+    是「这张票压根没用上这条判据」——把它算进分母，等于把「用不上」
+    记成「做错了」；把它算进分子，等于把「没验」记成「验过了」。
+    两种都是假信号。真实一致率只由「验了而且过了」的 run 贡献。
+    """
+    judged = [
+        r for r in _finished(records)
+        if metric in (r.get("observed") or {})
+        and not is_not_applicable(r["observed"].get(metric))
+    ]
     return core_metrics.ratio_pct(
         judged, lambda r: r["observed"][metric] is True
     )

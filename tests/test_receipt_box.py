@@ -17,6 +17,8 @@ LLM 那一步不 stub（真调要花钱且慢），机械那两步全真测。
 from __future__ import annotations
 
 import base64
+import inspect
+import re
 import shutil
 import subprocess
 import tempfile
@@ -31,10 +33,12 @@ from pathlib import Path
 import pytest
 
 from boxes.receipt import get_definition
-from boxes.receipt.measure import COMPUTERS
+from boxes.receipt import measure as boxes_receipt_measure
+from boxes.receipt.measure import COMPUTERS, _rate
 from boxes.receipt.runner import _simulate_verify_receipt as verify
 from core import metrics as m
 from core.beeline_models import NextRef
+from core.models import NOT_APPLICABLE, SchemaDef
 from kanban.trigger import (
     BOX_REGISTRY,
     RUNNER_REGISTRY,
@@ -758,3 +762,338 @@ class TestRetailPosReceipt:
 
         assert "500ml*2" in _READ_PROMPT
         assert "两件装" not in _READ_PROMPT
+
+
+# ============================================================
+# 判据三态：passed / failed / not_applicable
+# ============================================================
+
+# 一张餐馆结账单：只印「品项 / 数量 / 金额」，没有单价栏。
+# 这就是「判据用不上」的真实样本——不是造出来的边界情况。
+_RESTAURANT_BILL = {
+    "merchant_name": "老王川菜馆",
+    "receipt_no": "A20261011-0031",
+    "receipt_date": "2026-10-11",
+    "receipt_time": "19:04",
+    "items": [
+        {"line_no": 1, "name": "水煮鱼", "qty": 1, "unit_price": None, "amount": 58.0},
+        {"line_no": 2, "name": "米饭", "qty": 2, "unit_price": None, "amount": 4.0},
+    ],
+    "subtotal": 62.0, "tax": None, "discount": None, "total": 62.0,
+    "payment_method": "微信支付",
+}
+
+
+class TestRuleCanBeNotApplicable:
+    """「这张票压根没这一栏」得是个独立结论，不能硬塞进通过/失败
+
+    两边都撒谎：判成「通过」是盖住症状，判成「失败」是把用不上说成做错了。
+    餐馆结账单没有单价栏，连着两版都卡在这儿——这不是模型的问题，
+    是判据适用性问题。
+    """
+
+    def test_a_bill_without_unit_prices_is_not_applicable(self):
+        v = verify({"parsed": _RESTAURANT_BILL})
+        assert v["line_arithmetic"] == NOT_APPLICABLE
+
+    def test_not_applicable_is_neither_pass_nor_fail(self):
+        """n/a 就是 n/a。不能是真值也不能是假值——它两个都不是。"""
+        v = verify({"parsed": _RESTAURANT_BILL})["line_arithmetic"]
+        assert v is not True and v is not False, "n/a 被压成布尔了，三态又塌回两态"
+
+    def test_the_other_rules_still_run_and_still_judge(self):
+        """n/a 只放掉它自己，不许顺带放行别人"""
+        v = verify({"parsed": _RESTAURANT_BILL})
+        assert v["field_completeness"] is True
+        assert v["sum_arithmetic"] is True
+        assert v["total_arithmetic"] is True
+        assert v["date_wellformed"] is True
+
+    def test_n_a_does_not_drag_the_overall_verdict_down(self):
+        """n/a 只表示「这条没拖后腿」，不能反过来把整张票判红"""
+        v = verify({"parsed": _RESTAURANT_BILL})
+        assert v["totals_match"] is True
+        assert isinstance(v["totals_match"], bool), (
+            "totals_match 是判据值，必须一直是布尔"
+        )
+
+    def test_totals_match_cannot_inherit_a_string_from_any_rule(self):
+        """组合方式必须与判据顺序无关
+
+        and 短路返回第一个假值、否则**最后一个操作数**。所以三态判据一旦
+        落在链尾，字符串就会以 totals_match 的身份漏出去——下游拿到
+        `"n/a" == True` 会是 False，一个「过了」的票被判成没过。
+        全链用 `is not False` 就切断了这个顺序依赖：不管谁在链尾，
+        出来的永远是布尔。
+        """
+        src = inspect.getsource(verify)
+        tail = src[src.index('"totals_match"'):]
+        tail = tail[:tail.index("\n        ),")]
+        # 三个可能三态的（此刻只有 line_arithmetic）必须逐条显式判 False；
+        # 两个恒布尔的（date_wellformed / time_ok）直接用即可。
+        for name in ("line_arithmetic",):
+            assert f"{name} is not False" in tail, (
+                f"{name} 退回了 and 串联：三态判据在链尾时会漏出字符串"
+            )
+        for name in ("field_completeness", "sum_arithmetic", "total_arithmetic"):
+            assert f"{name} is not False" in tail, (
+                f"{name} 也得显式判 False——它哪天也可能变成三态，"
+                "而且 and 链的位置依赖是隐形的"
+            )
+        for name in ("date_wellformed", "time_ok"):
+            assert re.search(rf"\b{name}\b(?!\s+is\s+not\s+False)", tail), (
+                f"{name} 不见了，总口径漏判一条"
+            )
+
+    def test_a_receipt_with_prices_is_still_judged_normally(self):
+        """有单价栏的票不受影响——三态不是给所有票开后门"""
+        assert verify({"parsed": _parsed()})["line_arithmetic"] is True
+
+    def test_some_rows_priced_some_not_is_a_real_failure(self):
+        """有的有、有的没有 → 票上有这栏、模型漏抄 → 真失败，不是 n/a"""
+        v = verify({"parsed": _parsed(items=[
+            {"line_no": 1, "name": "可乐", "qty": 2, "unit_price": 3.5, "amount": 7.0},
+            {"line_no": 2, "name": "面包", "qty": 1, "unit_price": None, "amount": 12.8},
+        ], subtotal=19.8, tax=1.19, total=20.99)})
+        assert v["line_arithmetic"] is False, (
+            "漏抄单价被当成「票上没单价栏」放行了——这是最阴的一种漏判"
+        )
+
+    def test_unreadable_rows_are_a_failure_not_a_free_pass(self):
+        """items 全是字符串时，不许拿「没读到单价」当不适用糊弄过去
+
+        这一条钉的是 struct_rows 那个前提。垃圾行同样「没有单价」，
+        但那说明模型抄砸了，不是票上没这栏——放行等于把失败洗成不适用。
+        """
+        v = verify({"parsed": _parsed(items=["可乐", "面包"], subtotal=19.8,
+                                       tax=1.19, total=20.99)})
+        assert v["line_arithmetic"] is False
+        assert v["field_completeness"] is False, (
+            "items 里全是字符串，还报「必填字段齐全」——那不叫解析出了小票"
+        )
+
+    def test_empty_items_do_not_count_as_present(self):
+        """空 items 之前靠 len(items) > 0 挡着，换成 any(dict) 后得还在"""
+        v = verify({"parsed": _parsed(items=[], subtotal=0.0, tax=None, total=0.0)})
+        assert v["field_completeness"] is False
+        assert v["line_arithmetic"] == NOT_APPLICABLE, (
+            "没行可验就是不适用；但整张票仍因 field_completeness 被拦"
+        )
+        assert v["totals_match"] is False
+
+
+class TestPackagingKeepsTheThreeStates:
+    def test_packaging_does_not_turn_na_into_pass(self):
+        """bool("n/a") 是 True —— 打包那一步会把「用不上」悄悄变成「通过」
+
+        判据本来存在的意义就是「过没过得说清」，
+        在最后一步被 bool() 抹平，等于整套白做。
+        """
+        from boxes.receipt.runner import _simulate_package_receipt
+
+        out = _simulate_package_receipt({"parsed": _RESTAURANT_BILL,
+                                         **verify({"parsed": _RESTAURANT_BILL})})
+        assert out["line_arithmetic"] == NOT_APPLICABLE, "n/a 在打包时被写成了 True"
+        assert out["totals_match"] is True
+
+    def test_a_real_failure_stays_false_through_packaging(self):
+        from boxes.receipt.runner import _simulate_package_receipt
+
+        bad = _parsed(items=[{"line_no": 1, "name": "可乐", "qty": 2,
+                              "unit_price": 3.5, "amount": 7.5}],
+                      subtotal=7.5, tax=0.0, total=7.5)
+        out = _simulate_package_receipt({"parsed": bad, **verify({"parsed": bad})})
+        assert out["line_arithmetic"] is False
+
+
+class TestAcceptanceKeepsNAOutOfBothSides:
+    """端到端：n/a 既不挡交付，也不进通过名单"""
+
+    def _run(self, monkeypatch, parsed):
+        from boxes.receipt import runner as receipt_runner
+
+        monkeypatch.setattr(receipt_runner, "complete_json", lambda *a, **kw: parsed)
+        store = TaskRunStore(Path(tempfile.mktemp(suffix=".jsonl")))
+        return trigger_task(
+            BOX, "capture_receipt",
+            {"photo": "data:image/jpeg;base64," + base64.b64encode(b"x").decode()},
+            store,
+        )
+
+    def test_a_bill_without_unit_prices_is_accepted(self, monkeypatch):
+        r = self._run(monkeypatch, _RESTAURANT_BILL)
+        assert r["acceptance_status"] == "accepted", (
+            f"没有单价栏的结账单被判不合格：{r['acceptance_detail']}"
+        )
+
+    def test_na_is_reported_in_its_own_field(self, monkeypatch):
+        r = self._run(monkeypatch, _RESTAURANT_BILL)
+        assert r["acceptance_not_applicable"] == ["line_arithmetic"]
+
+    def test_na_is_never_listed_as_passed(self, monkeypatch):
+        """「5 条过 + 1 条用不上」说成「6 条全过」就是在撒谎"""
+        r = self._run(monkeypatch, _RESTAURANT_BILL)
+        assert "line_arithmetic" not in r["acceptance_passed"]
+        assert len(r["acceptance_passed"]) == 5, (
+            f"6 条判据里 1 条不适用，通过的应该是 5 条：{r['acceptance_passed']}"
+        )
+
+    def test_detail_row_carries_its_own_outcome(self, monkeypatch):
+        r = self._run(monkeypatch, _RESTAURANT_BILL)
+        row = next(d for d in r["acceptance_detail"] if d["metric"] == "line_arithmetic")
+        assert row["outcome"] == "not_applicable"
+        assert row["not_applicable"] is True
+        assert row["passed"] is False, "passed=True 会让看板画成 ✓"
+        assert row["actual"] == NOT_APPLICABLE
+
+    def test_a_priced_receipt_reports_no_na_at_all(self, monkeypatch):
+        r = self._run(monkeypatch, _parsed())
+        assert r["acceptance_not_applicable"] == []
+        assert "line_arithmetic" in r["acceptance_passed"]
+        assert all(d["outcome"] == "passed" for d in r["acceptance_detail"])
+
+    def test_na_does_not_launder_a_broken_receipt(self, monkeypatch):
+        """没单价栏不能变成万能借口：别的判据红照样红"""
+        bad = {**_RESTAURANT_BILL, "total": 99.0}   # 小计 62 ≠ 实付 99
+        r = self._run(monkeypatch, bad)
+        assert r["acceptance_status"] == "rejected"
+        failed = {d["metric"] for d in r["acceptance_detail"] if d["outcome"] == "failed"}
+        assert "total_arithmetic" in failed
+        assert "line_arithmetic" not in failed
+
+
+class TestRateIgnoresNA:
+    """度量层：n/a 分子分母都不算
+
+    算进分母 = 把「用不上」记成「做错了」；算进分子 = 把「没验」记成「验过了」。
+
+    直接测 _rate 这个共享助手：现在没有哪个 COMPUTERS 条目读三态字段
+    （totals_match / field_completeness 都是二值的），拿现成指标测会绕开
+    真正要守的那段逻辑。
+    """
+
+    def _record(self, observed, status="accepted"):
+        return {"acceptance_status": status, "observed": observed}
+
+    def test_na_is_dropped_from_both_sides(self):
+        recs = [
+            self._record({"line_arithmetic": True}),
+            self._record({"line_arithmetic": False}),
+            self._record({"line_arithmetic": NOT_APPLICABLE}),
+        ]
+        # 3 条里 1 条不适用 → 分母只剩 2，不是 3；分子只有 1，不是 2
+        actual, n = _rate(recs, "line_arithmetic")
+        assert actual == 50.0 and n == 2
+
+    def test_all_na_yields_no_sample_rather_than_a_fake_hundred(self):
+        recs = [self._record({"line_arithmetic": NOT_APPLICABLE})]
+        actual, n = _rate(recs, "line_arithmetic")
+        assert actual is None and n == 0, (
+            "全是不适用时该是「没样本」(None)，不是 100% 也不是 0%"
+        )
+
+    def test_na_is_not_counted_as_a_pass(self):
+        recs = [
+            self._record({"line_arithmetic": NOT_APPLICABLE}),
+            self._record({"line_arithmetic": False}),
+        ]
+        actual, n = _rate(recs, "line_arithmetic")
+        assert actual == 0.0 and n == 1, "n/a 混进分子会把 0% 洗成 50%"
+
+    def test_the_helper_is_the_one_the_box_uses(self):
+        """别测一份影子实现——COMPUTERS 里的指标得真走 _rate"""
+        assert boxes_receipt_measure._arithmetic_consistency_rate is not None
+        recs = [self._record({"totals_match": True, "line_arithmetic": NOT_APPLICABLE})]
+        assert COMPUTERS["arithmetic_consistency_rate"](recs) == _rate(recs, "totals_match")
+
+
+def _one_field_schema(name):
+    """只留一个字段的 schema——单字段校验不该被别的字段带偏"""
+    fields = get_definition().get_schema("schema_receipt_parsed").fields
+    return SchemaDef(id="s", fields=[f for f in fields if f.name == name])
+
+
+class TestNAIsDeclaredHonestly:
+    """声明层：n/a 得在 schema 上说清楚，否则消费方只会当成 boolean"""
+
+    def test_line_arithmetic_is_declared_tristate_not_boolean(self):
+        fields = {f.name: f for f in get_definition()
+                  .get_schema("schema_receipt_parsed").fields}
+        assert fields["line_arithmetic"].type == "boolean_or_na", (
+            "还声明成 boolean：manifest 是将来 API 的面，"
+            "对着 boolean 读的人会以为它只会是 True/False"
+        )
+        assert fields["field_completeness"].type == "boolean", (
+            "其余判据不该跟着放宽——它们确实是二值的"
+        )
+
+    def test_contract_validation_accepts_the_three_states(self):
+        from runtime.contract import validate_payload
+
+        line = _one_field_schema("line_arithmetic")
+        for value in (True, False, NOT_APPLICABLE):
+            assert validate_payload({"line_arithmetic": value}, line) == []
+        assert validate_payload({"line_arithmetic": "yes"}, line), (
+            "三态类型也得挡住 'yes' 这种随手写的字符串"
+        )
+
+    def test_plain_boolean_fields_still_reject_na(self):
+        """别为了方便把所有 boolean 都放行 n/a——放松要显式，逐字段来"""
+        from runtime.contract import validate_payload
+
+        assert validate_payload(
+            {"field_completeness": NOT_APPLICABLE}, _one_field_schema("field_completeness")
+        )
+
+    def test_the_definition_writes_down_the_blind_spot(self):
+        from boxes.receipt import definition as receipt_definition
+
+        doc = receipt_definition.__doc__ or ""
+        assert "n/a" in doc, "三态没写进盒子文档，后来的人还会当成两态"
+        assert "不算通过" in doc, (
+            "光说三态不够——必须写明 n/a 不算通过，"
+            "否则下一个人照样会拿它凑「6/6 全过」"
+        )
+
+    def test_the_heuristic_and_its_hole_are_both_written_down(self):
+        """判别 n/a 用的是启发式，不是判据——它的盲区必须跟着一起声明"""
+        from boxes.receipt.runner import _simulate_verify_receipt
+
+        assert "盲区" in inspect.getsource(_simulate_verify_receipt), (
+            "启发式判 n/a 一定有洞（真印了单价栏但每行都漏抄的票会被放行），"
+            "这个洞必须写在代码旁边，不能装作没有"
+        )
+
+
+class TestKanbanDoesNotFakeAPass:
+    """看板层：n/a 绝不能画成 ✓"""
+
+    def _render_fn(self):
+        from kanban.web import HTML_PAGE
+
+        i = HTML_PAGE.index("function renderAcceptance(")
+        j = HTML_PAGE.index("\n}\n", i)
+        return HTML_PAGE[i:j]
+
+    def test_the_mark_for_na_is_a_dash(self):
+        body = self._render_fn()
+        assert "const mark = na ? '—' : (passed ? '✓' : '✗');" in body, (
+            "n/a 的标记必须是「—」。画成 ✓ 等于拿没验过的冒充验过了"
+        )
+
+    def test_the_denominator_counts_only_judged_rules(self):
+        body = self._render_fn()
+        assert "const nJudged = nOk + (rows.length - nOk - nNa);" in body, (
+            "分母把不适用算进去了——6 条里 1 条用不上会说成 5/6，"
+            "让人以为还有一条没过"
+        )
+
+    def test_the_summary_tells_you_how_many_were_skipped(self):
+        body = self._render_fn()
+        assert "条不适用" in body
+
+    def test_na_has_its_own_style(self):
+        """n/a 行现在没有专属样式时，会渲染成默认白底——看不出它被跳过了"""
+        from kanban.web import HTML_PAGE
+
+        assert ".ac-row.na" in HTML_PAGE

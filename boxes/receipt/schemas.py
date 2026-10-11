@@ -91,7 +91,14 @@ RECEIPT_PARSED = SchemaDef(
         # ---- 可机械验证的校验证据（详见 runner）----
         # 算术自洽：每行 qty × 单价 = 金额；Σ行金额 = 小计；小计 + 税 − 优惠 = 实付
         FieldDef(name="field_completeness", type="boolean", description="必填字段齐全"),
-        FieldDef(name="line_arithmetic", type="boolean", description="每行 数量×单价 = 金额"),
+        # 三态，不是 boolean：票上压根没印单价栏时（餐馆结账单很常见）
+        # 这条判据**用不上**，值是 "n/a"。它不算失败，但也不能当成 true——
+        # 消费者必须能分辨「验过了」和「没得验」，否则就是把没验说成验过。
+        FieldDef(
+            name="line_arithmetic",
+            type="boolean_or_na",
+            description="每行 数量×单价 = 金额；票上无单价栏时为 \"n/a\"（不适用，非通过）",
+        ),
         FieldDef(name="sum_arithmetic", type="boolean", description="Σ行金额 = 小计"),
         FieldDef(name="total_arithmetic", type="boolean", description="小计 + 税 − 优惠 = 实付"),
         FieldDef(name="date_wellformed", type="boolean", description="日期格式合法"),

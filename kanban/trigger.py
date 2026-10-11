@@ -620,21 +620,31 @@ def trigger_task(
     # 只给一个 accepted 徽章等于把"为什么不过"藏起来了。
     acceptance_detail = []
     acceptance_passed = []
+    acceptance_not_applicable = []
     if task_run.status == TaskRunStatus.COMPLETED:
         evaluation = evaluate_acceptance(task_run, definition.result)
         acceptance_status = evaluation.status.value
         acceptance_passed = list(evaluation.passed_rules)
+        acceptance_not_applicable = list(evaluation.not_applicable_rules)
         rejection_class = (
             evaluation.rejection_class.value if evaluation.rejection_class else None
         )
         failed_map = {f.get("metric"): f for f in evaluation.failed_rules}
+        na_set = set(acceptance_not_applicable)
         acceptance_detail = [
             {
                 "metric": rule.metric,
                 "op": rule.op,
                 "expected": rule.value,
                 "actual": task_run.result.get(rule.metric),
-                "passed": rule.metric not in failed_map,
+                # 三态，不是一个 passed 布尔：把「用不上」算成 passed，
+                # 看板就会显示「6/6 全过」，而实际只验了 5 条。
+                "outcome": (
+                    "not_applicable" if rule.metric in na_set
+                    else ("failed" if rule.metric in failed_map else "passed")
+                ),
+                "passed": rule.metric not in failed_map and rule.metric not in na_set,
+                "not_applicable": rule.metric in na_set,
             }
             for rule in definition.result.acceptance
         ]
@@ -660,6 +670,7 @@ def trigger_task(
         "acceptance_status": acceptance_status,
         "acceptance_detail": acceptance_detail,
         "acceptance_passed": acceptance_passed,
+        "acceptance_not_applicable": acceptance_not_applicable,
         "rejection_class": rejection_class,
         # 产出自描述：这只盒子声明的展示形态 + 结果类型。
         # 消费方（看板渲染器、将来的 API 调用方）据此知道该拿哪种视图，

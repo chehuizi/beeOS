@@ -249,14 +249,14 @@ def _simulate_package_receipt(input_data: dict[str, Any]) -> dict[str, Any]:
         normalized_items.append({
             "line_no": i,
             "name": it.get("name") or "",
-            "qty": _num(it.get("qty")) or 0.0,
-            "unit_price": _num(it.get("unit_price")) or 0.0,
-            "amount": _num(it.get("amount")) or 0.0,
+            # 拿不到就留 None，不补 0.0。
+            # 「模型没读到这一格」和「这一格真的是 0」是两件事：
+            # 编成 0 等于替模型做了个它没依据的断言，而这份产出是给人
+            # 人工对账用的——有人在票上找 0.00 的小计，能白找半天。
+            "qty": _num(it.get("qty")),
+            "unit_price": _num(it.get("unit_price")),
+            "amount": _num(it.get("amount")),
         })
-
-    def n(key: str) -> float:
-        v2 = _num(parsed.get(key))
-        return v2 if v2 is not None else 0.0
 
     return {
         "merchant_name": parsed.get("merchant_name") or "",
@@ -264,9 +264,9 @@ def _simulate_package_receipt(input_data: dict[str, Any]) -> dict[str, Any]:
         "receipt_date": parsed.get("receipt_date") or "",
         "receipt_time": parsed.get("receipt_time") or "",
         "items": normalized_items,
-        "subtotal": n("subtotal"),
-        "tax": n("tax"),
-        "total": n("total"),
+        "subtotal": _num(parsed.get("subtotal")),
+        "tax": _num(parsed.get("tax")),
+        "total": _num(parsed.get("total")),
         "payment_method": parsed.get("payment_method") or "",
         "field_completeness": bool(v.get("field_completeness")),
         "line_arithmetic": bool(v.get("line_arithmetic")),

@@ -516,3 +516,74 @@ class TestHeicAccepted:
 
         assert "NO_PREVIEW_TYPES" in HTML_PAGE, "没有「画不出就摆说明牌」的分支"
         assert "media-nopreview" in HTML_PAGE
+
+
+# ============================================================
+# 没读到的 ≠ 读到的 0
+# ============================================================
+
+
+class TestNoFabricatedZeros:
+    """拿不到就留空，不补 0
+
+    实测踩坑（真盒马小票）：模型对小计看不清，返回 null —— 这是对的，
+    prompt 就写着「看不清填 null」。verify 那步也确实知道，
+    field_completeness / sum_arithmetic 都因为它是 None 而转红。
+    结果 package 那步把 None 兜成 0.0，产出一份「小计 0.00」。
+
+    「模型没读到这一格」和「这一格真的是 0」是两件事。编成 0 等于替模型
+    做了个它没依据的断言，而这份产出是给人**人工对账**用的：有人拿着
+    0.00 去票上找，能白找半天；更糟的是它把证据销毁了——
+    low_confidence_fields 说小计没把握，产出却把 0.00 摆在正中间。
+    """
+
+    PARSED = {
+        "merchant_name": "杭州盒马NB", "receipt_no": "002026-10-07-174-01",
+        "receipt_date": "2026-10-07", "receipt_time": "17:53",
+        "subtotal": None, "tax": -0.18, "total": 28.62,
+        "items": [
+            {"name": "李锦记薄盐生抽", "qty": 2, "unit_price": 14.9, "amount": 28.8},
+            {"name": "巴马铂泉", "qty": 1, "unit_price": 13.9, "amount": 13.9},
+        ],
+        "low_confidence_fields": ["subtotal", "receipt_no", "tax"],
+    }
+
+    def test_missing_numbers_stay_none(self):
+        from boxes.receipt.runner import _simulate_package_receipt
+
+        out = _simulate_package_receipt({"parsed": self.PARSED, "field_completeness": False})
+        assert out["subtotal"] is None, "把「没读到」编成了数字"
+        # 读到了的照旧，不因为隔壁缺一个就连累
+        assert out["tax"] == -0.18
+        assert out["total"] == 28.62
+
+    def test_missing_line_numbers_stay_none(self):
+        from boxes.receipt.runner import _simulate_package_receipt
+
+        parsed = {**self.PARSED, "items": [{"name": "某商品", "qty": None,
+                                            "unit_price": 3.5, "amount": None}]}
+        out = _simulate_package_receipt({"parsed": parsed, "field_completeness": False})
+        assert out["items"][0]["qty"] is None
+        assert out["items"][0]["amount"] is None
+        assert out["items"][0]["unit_price"] == 3.5
+
+    def test_a_real_zero_is_still_zero(self):
+        """真的 0 就该是 0——别把这道修复写成「所有 null 都变 0」的反面"""
+        from boxes.receipt.runner import _simulate_package_receipt
+
+        parsed = {**self.PARSED, "subtotal": 0, "tax": 0, "total": 0}
+        out = _simulate_package_receipt({"parsed": parsed})
+        assert out["subtotal"] == 0.0
+        assert out["subtotal"] is not None
+
+    def test_renderer_shows_dash_not_zero_for_missing(self):
+        """产出侧留了 None，渲染侧得显示「—」，不能又变回 0.00"""
+        import re
+
+        from kanban.web import HTML_PAGE
+
+        m = re.search(r"const money = \(v\) => .*", HTML_PAGE)
+        assert m, "找不到 receipt 视图的金额格式化"
+        assert "null" in m.group(0) and "'—'" in m.group(0), (
+            "money() 不认 null，空值会又被渲染成 0.00"
+        )

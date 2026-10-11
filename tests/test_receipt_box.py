@@ -587,3 +587,75 @@ class TestNoFabricatedZeros:
         assert "null" in m.group(0) and "'—'" in m.group(0), (
             "money() 不认 null，空值会又被渲染成 0.00"
         )
+
+
+class TestPromptKeepsTranscriptionSeparateFromArithmetic:
+    """抄 ≠ 算
+
+    实测踩坑（真盒马小票，HEIC）：模型把
+    「李锦记薄盐生抽(酿造酱油) **两件装**」名字里的「两」当成了数量，
+    数量栏其实印的是 1、金额栏印的是 14.9。整张票其余部分全对
+    （14.9 + 13.9 = 28.80 小计，减 0.18 抹零，实付 28.62，账能合上），
+    就这一行错了。
+    而且模型没把这行标进 low_confidence_fields——它觉得自己抄对了，
+    是机械判据发现的。
+    """
+
+    def _prompt(self):
+        from boxes.receipt.runner import _READ_PROMPT
+
+        return _READ_PROMPT
+
+    def test_prompt_forbids_reading_qty_from_the_product_name(self):
+        p = self._prompt()
+        assert "两件装" in p, "没点名「商品名里的『两件装』不是数量」这个坑"
+        assert "数量" in p
+
+    def test_prompt_forbids_computing_amount_from_qty_times_price(self):
+        """拿 qty × unit_price 去填 amount，这条校验就永远发现不了错
+
+        amount 和 qty × unit_price 本来是该被互相校验的两个独立数字。
+        要是模型自己动手算，line_arithmetic 恒为真，判据直接废掉。
+        """
+        p = self._prompt()
+        assert "qty × unit_price" in p or "qty x unit_price" in p
+
+    def test_prompt_still_says_do_not_self_check(self):
+        p = self._prompt()
+        assert "不要自己" in p and "算术" in p
+
+    def test_arithmetic_check_still_catches_the_two_pack_misread(self):
+        """模型旧行为（qty=2 / 金额=28.8）必须仍然被拦下
+
+        prompt 只是把坑说清楚，兜底的判据不能因此松掉。
+        """
+        from boxes.receipt.runner import _simulate_verify_receipt
+
+        # 票面真值：两件装 SKU，数量 1，金额 14.9 —— 这张是能过的
+        good = _simulate_verify_receipt({"parsed": {
+            "merchant_name": "杭州盒马NB", "receipt_no": "002026-10-07-174-01",
+            "receipt_date": "2026-10-07", "receipt_time": "17:53",
+            "subtotal": 28.80, "tax": -0.18, "total": 28.62,
+            "items": [
+                {"name": "李锦记薄盐生抽(酿造酱油) 两件装", "qty": 1,
+                 "unit_price": 14.9, "amount": 14.9},
+                {"name": "巴马铂泉 饮用天然泉水500ml*12", "qty": 1,
+                 "unit_price": 13.9, "amount": 13.9},
+            ],
+        }})
+        assert good["totals_match"] is True, "票面真值竟然过不了"
+
+        # 模型旧行为：从名字里捡了「两」当数量 —— 必须红
+        bad = _simulate_verify_receipt({"parsed": {
+            "merchant_name": "杭州盒马NB", "receipt_no": "002026-10-07-174-01",
+            "receipt_date": "2026-10-07", "receipt_time": "17:53",
+            "subtotal": 28.80, "tax": -0.18, "total": 28.62,
+            "items": [
+                {"name": "李锦记薄盐生抽(酿造酱油) 两件装", "qty": 2,
+                 "unit_price": 14.9, "amount": 28.8},
+                {"name": "巴马铂泉 饮用天然泉水500ml*12", "qty": 1,
+                 "unit_price": 13.9, "amount": 13.9},
+            ],
+        }})
+        assert bad["line_arithmetic"] is False
+        assert bad["totals_match"] is False

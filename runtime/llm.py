@@ -33,6 +33,18 @@ import httpx
 
 from core.models import DEFAULT_MEDIA_ACCEPT
 
+# 凭证优先从项目根的 .env 读（.gitignore 收走，不进版本库）。
+# 为什么不只靠 ~/.minimax/config.yaml：那个文件是 MCode runtime 拥有的，
+# 它会重写——实测 apiKey 被改回 sk-xxx 占位符、baseURL 退回内部代理
+# agent.minimax.cn。每填一次丢一次。runtime 动不了进程环境变量，
+# 所以 .env 才是稳的那一份。
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:  # 没装 python-dotenv 就退回纯环境变量，不该因此起不来
+    pass
+
 # ~/.minimax/config.yaml —— 注意：这是 MCode runtime 拥有的文件，它会重写
 # （实测引号风格被 YAML 库规范化写回），所以我们不假设里面的值是稳定的。
 _CONFIG_PATH = Path.home() / ".minimax/config.yaml"

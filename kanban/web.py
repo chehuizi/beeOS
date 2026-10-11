@@ -571,6 +571,11 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .rc-table td {{ padding: 3px 6px; border-bottom: 1px solid #f1f5f9; }}
   .rc-no {{ color: #94a3b8; width: 26px; }}
   .rc-num {{ text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }}
+  /* 折扣：暖色 + 略小。冷灰会和「没读出来」的 — 长得像，
+     绿又会跟「这条判据过了」撞色——它是「这行打过折」，
+     不是任何一种判定结果。 */
+  .rc-disc {{ color: #b45309; font-size: 10px; white-space: nowrap; }}
+  .rc-disc:empty {{ background: transparent; }}
   .rc-empty {{ text-align: center; color: #94a3b8; padding: 10px; }}
   .rc-sum {{
     margin-top: 8px; display: flex; flex-direction: column; align-items: flex-end;
@@ -1297,11 +1302,20 @@ const ARTIFACT_VIEWS = {{
 // 「算术自洽」是这只盒子唯一能自证的正确性，藏起来等于没有。
 function renderReceipt(r) {{
   const items = Array.isArray(r.items) ? r.items : [];
+  // 折扣列**只在真有折扣时才出现**。
+  // 每张小票都摆一列空格子，读者要逐行确认「这格是不是该有值」，
+  // 反而是噪声；而折扣行正是最需要解释的那行——
+  // 少了它，`1 × 498 → 290` 看着就像模型算错了。
+  // 实测 MUJI：`1x498×5.83折=290.00`，498 和 290 都对，差在被 5.83 折掉了。
+  const hasDiscount = items.some((it) => it && it.discount_rate !== null
+    && it.discount_rate !== undefined && it.discount_rate !== '');
+  const disc = (v) => (v === null || v === undefined || v === '') ? '' : `${{esc(String(v))}}折`;
   const rows = items.map((it, i) => `<tr>
       <td class="rc-no">${{esc(String(it.line_no || i + 1))}}</td>
       <td class="rc-name">${{esc(it.name || '—')}}</td>
       <td class="rc-num">${{esc(String(it.qty ?? ''))}}</td>
       <td class="rc-num">${{esc(String(it.unit_price ?? ''))}}</td>
+      ${{hasDiscount ? `<td class="rc-num rc-disc">${{disc(it.discount_rate)}}</td>` : ''}}
       <td class="rc-num">${{esc(String(it.amount ?? ''))}}</td>
     </tr>`).join('');
   const money = (v) => (v === undefined || v === null || v === '') ? '—' : Number(v).toFixed(2);
@@ -1320,8 +1334,8 @@ function renderReceipt(r) {{
       模型自认看不清：${{lowConf.map(esc).join(' · ')}} —— 人工对账时优先核这几项
     </div>` : ''}}
     <table class="rc-table">
-      <thead><tr><th>#</th><th>商品</th><th class="rc-num">数量</th><th class="rc-num">单价</th><th class="rc-num">金额</th></tr></thead>
-      <tbody>${{rows || '<tr><td colspan="5" class="rc-empty">未读出商品行</td></tr>'}}</tbody>
+      <thead><tr><th>#</th><th>商品</th><th class="rc-num">数量</th><th class="rc-num">单价</th>${{hasDiscount ? '<th class="rc-num">折扣</th>' : ''}}<th class="rc-num">金额</th></tr></thead>
+      <tbody>${{rows || `<tr><td colspan="${{hasDiscount ? 6 : 5}}" class="rc-empty">未读出商品行</td></tr>`}}</tbody>
     </table>
     <div class="rc-sum">
       <div><span>小计</span><b>${{esc(money(r.subtotal))}}</b></div>

@@ -1276,3 +1276,62 @@ class TestDiscountIsDeclared:
         assert "抹零" in doc, (
             "抹零容差是业务事实，必须跟着声明；不写就成了没人敢动的橡皮"
         )
+
+
+class TestDiscountIsVisible:
+    """折扣算进判据了，还得**看得见**。
+
+    算对了但画不出来，跟没修是一回事：屏幕上只剩
+    `1 × 498 → 290`，读的人只会以为模型算错了。
+    「声明了却拿不到」「算了却看不见」是同一族病。
+    """
+
+    def _renderer(self):
+        from kanban.web import HTML_PAGE
+
+        i = HTML_PAGE.index("function renderReceipt(")
+        j = HTML_PAGE.index("\n}\n", i)
+        return HTML_PAGE[i:j]
+
+    def test_the_table_has_a_discount_column(self):
+        body = self._renderer()
+        # 查真的表头，不是查「折扣」两个字——CSS 注释里也有那两个字，
+        # 搜词等于什么都没守住（这条第一版就是这么写的，回退时果然没转红）。
+        assert "折扣</th>" in body, "产出视图没有折扣列，折扣只活在判据里"
+
+    def test_the_discount_column_is_conditional(self):
+        """没有折扣的票不该多一列空格子
+
+        每行都摆一列空白，读者要逐行确认「这格是不是该有值」——
+        那是噪声。列只在真需要解释的时候出现。
+        """
+        body = self._renderer()
+        assert "hasDiscount" in body
+        assert "items.some(" in body, (
+            "折扣列得由「有没有行带折扣」决定，不能一直摆着"
+        )
+
+    def test_it_renders_the_printed_zhe_not_a_ratio(self):
+        """画出来得是「5.83折」人能读的东西，不是 0.583"""
+        body = self._renderer()
+        assert 'class="rc-num rc-disc"' in body, "折扣单元格没渲染出来"
+        assert "}折" in body, "折扣列没带「折」字"
+
+    def test_missing_discount_renders_blank_not_a_dash(self):
+        """空格子，不画破折号——没折扣的行本来就是空的"""
+        body = self._renderer()
+        assert "? '' :" in body, (
+            "没折扣的行画成 — 的话，满屏都是横杠，折扣行反而看不出来"
+        )
+
+    def test_the_column_has_its_own_colour(self):
+        from kanban.web import HTML_PAGE
+
+        assert ".rc-disc" in HTML_PAGE, "折扣没有专属样式，会和旁边的数字混成一片"
+
+    def test_the_empty_row_spans_the_right_number_of_columns(self):
+        """加了列就得改 colspan，否则「未读出商品行」那格会错位"""
+        body = self._renderer()
+        assert "hasDiscount ? 6 : 5" in body, (
+            "colspan 没跟着列数走——没读出商品行时会串行"
+        )

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import math
 import re
 import shutil
 import subprocess
@@ -39,6 +40,61 @@ def _keep_state(value: Any) -> Any:
     return NOT_APPLICABLE if is_not_applicable(value) else bool(value)
 
 
+# ---- 行级折扣 ----
+#
+# 为什么单独一块：折后商品的票面长这样（MUJI POS 实测）
+#     1x498×5.83折=290.00   →  ¥290.0
+# 原价 498、折后行金额 290、折扣 5.83 折。三个数**都印在票上**，
+# 抄下来全对，但 `数量 × 原价 ≠ 金额`。以前这条判据只能转红，
+# 而产出其实一点错没有——同一个病根的第三次：把某类票的形状
+# 当成所有票的形状（前面两次是没税栏、没单价栏）。
+#
+# 折扣率是**读来的**，不是从金额倒推的。倒推的话
+# `amount / (qty*price)` 恒等于它自己，这条判据就废了——
+# 那才是真正的「永远绿的判据」。
+
+
+def _discount_multiplier(raw: Any) -> float:
+    """票面折数 → 支付比例。「5.83折」→ 0.583，「8折」→ 0.8
+
+    返回 None 表示「这一行没折扣」，调用方按全价验。
+
+    只认 0 < 折数 < 10。写 10（= 不打折）是模型在编——
+    「没有折扣」的诚实写法是 null，编一个 10 出来会让真正的
+    漏抄折扣看起来像正常的全价行。
+    """
+    zhe = _num(raw)
+    if zhe is None or not (0 < zhe < 10):
+        return None
+    return zhe / 10.0
+
+
+def _line_amount_ok(
+    qty: float, price: float, multiplier: float | None, amount: float
+) -> bool:
+    """行金额对不对得上（含行级折扣 + 抹零）
+
+    两种合法：
+
+    1. 算得开——`数量 × 原价 × 折扣` 直接等于行金额（容差 0.01，
+       留给浮点和两位小数）。
+
+    2. 抹零——小票常把行金额**抹零到元**。实测 MUJI：
+       498 × 5.83折 = 290.334，票面印的是 290.00。
+       这不是算错，是 POS 在这一行就取整了。
+
+    为什么把抹零写成判据的一部分而不是一句「容差放宽点」：
+    写成规则，误差就有上限（<1 元），金额读错 0.9 元这种真错
+    仍然会被拦；写成模糊容差，容差就成了没人敢动的橡皮。
+    它的盲区也照实说：金额被误读成比正确值小不到 1 元时会放过。
+    """
+    expected = qty * price * (1.0 if multiplier is None else multiplier)
+    if abs(expected - amount) <= 0.01:
+        return True
+    # 抹零到元（向下取整）
+    return math.floor(expected + 1e-9) == amount
+
+
 # LLM 只做这一件事：看图抄字。判据全部留给机械层。
 _READ_PROMPT = """你是一张小票识别器。给你一张收银小票的照片，把它上面的信息抄成 JSON。
 
@@ -49,7 +105,10 @@ _READ_PROMPT = """你是一张小票识别器。给你一张收银小票的照�
 - receipt_no: 小票单号
 - receipt_date: 日期，转成 YYYY-MM-DD
 - receipt_time: 时间 HH:MM，看不到填 ""
-- items: 商品行数组，每行 {{name, qty, unit_price, amount}}，价格是数字
+- items: 商品行数组，每行 {{name, qty, unit_price, amount, discount_rate}}，价格是数字
+  discount_rate 只在票面**这一行**印了折扣时才填，照抄折数：「×5.83折」填 5.83、
+  「8折」填 8。没有折扣就填 null。**不要填 10**——10 是「没折扣」的编造说法。
+  它是**行**上的折扣，不是小票底部的「优惠金额」栏（那个填进顶部的 discount）。
 - subtotal: 小计 / 商品合计
 - tax: 税额。**零售 POS 小票通常没有这一栏**（超市、便利店 POS 单是含税价），
   找不到就填 null，**不要拿别的数字凑**。
@@ -73,6 +132,11 @@ _READ_PROMPT = """你是一张小票识别器。给你一张收银小票的照�
 
 **amount 抄「金额」那一栏，不要用 qty × unit_price 代替。** 两者本来就是该被校验的
 两个独立数字，你拿一个去填另一个，这条校验就永远发现不了错。
+
+**unit_price 抄原价，amount 抄折后行金额，两个都要照抄。** 折后商品的票面长这样：
+`1x498×5.83折=290.00` —— 498 是原价、290.00 是这一行实收、5.83 是折扣。
+这三个数都对，**1 × 498 ≠ 290 不是错**。你要是看着不平就把 unit_price 改成 290，
+折扣就凭空消失了，这条校验也就再也发现不了「优惠金额」栏漏抄。别这么干。
 
 看不清就填 null，不要猜、不要补全、不要编。
 
@@ -208,7 +272,7 @@ def _simulate_verify_receipt(input_data: dict[str, Any]) -> dict[str, Any]:
         and any(isinstance(it, dict) for it in items)
     )
 
-    # 逐行 qty × unit_price == amount（容差 0.01：浮点 + 两位小数四舍五入）
+    # 逐行：数量 × 原价 × 折扣 ≈ 行金额（容差见 _line_amount_ok）
     #
     # 三态，不是两态。餐馆结账单只印「品项/数量/金额」，压根没有单价栏——
     # 这时这条判据**用不上**，既不该说它过，也不该说它错。
@@ -223,7 +287,7 @@ def _simulate_verify_receipt(input_data: dict[str, Any]) -> dict[str, Any]:
     line_sum = 0.0
     row_count = 0          # items 里一共有几行（不管这行长不像样）
     struct_rows = 0        # 其中读成结构化对象的有几行
-    rows_with_price = 0    # 其中读到单价的有几行
+    rows_with_price = 0    # 其中读到原价的有几行
     for i, it in enumerate(items, start=1):
         row_count += 1
         if not isinstance(it, dict):
@@ -235,7 +299,7 @@ def _simulate_verify_receipt(input_data: dict[str, Any]) -> dict[str, Any]:
             rows_with_price += 1
         amt_ok = (
             qty is not None and price is not None and amt is not None
-            and abs(qty * price - amt) <= 0.01
+            and _line_amount_ok(qty, price, _discount_multiplier(it.get("discount_rate")), amt)
         )
         if not amt_ok:
             line_bad.append(i)
@@ -330,6 +394,11 @@ def _simulate_package_receipt(input_data: dict[str, Any]) -> dict[str, Any]:
             "qty": _num(it.get("qty")),
             "unit_price": _num(it.get("unit_price")),
             "amount": _num(it.get("amount")),
+            # 折数原样带出（没折扣是 None，不是 0 也不是 10）。
+            # 带不出去就等于把「这一行打过折」这个事实从产出里抹了——
+            # 人工对账时看到原价 498、行金额 290 会一头雾水，
+            # 而这恰恰是票上明明白白印着的。
+            "discount_rate": _num(it.get("discount_rate")),
         })
 
     return {

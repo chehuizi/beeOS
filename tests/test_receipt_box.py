@@ -1097,3 +1097,182 @@ class TestKanbanDoesNotFakeAPass:
         from kanban.web import HTML_PAGE
 
         assert ".ac-row.na" in HTML_PAGE
+
+
+# ============================================================
+# 行级折扣：折后商品的小票
+# ============================================================
+
+# MUJI POS 真票实测：
+#     1x498×5.83折=290.00   →  ¥290.0
+# 原价 498、折后行金额 290、折扣 5.83 折。三个数都印在票上。
+# 498 × 0.583 = 290.334，票面按抹零印 290.00。
+_MUJI = {
+    "merchant_name": "MUJI",
+    "receipt_no": "X5006731012602230111",
+    "receipt_date": "2026-02-23",
+    "receipt_time": "13:27",
+    "items": [
+        {"line_no": 1, "name": "不易沾水 羽绒大衣", "qty": 1,
+         "unit_price": 498, "amount": 290, "discount_rate": 5.83},
+    ],
+    "subtotal": 290.0, "tax": None, "discount": 0.0, "total": 290.0,
+    "payment_method": "支付宝",
+}
+
+
+class TestLineLevelDiscount:
+    """折后商品：1 × 498 ≠ 290 不是错
+
+    这张票以前必然 rejected，而产出全对。同一个病根的第三次：
+    把某类票的形状当成所有票的形状。
+    """
+
+    def test_the_real_muji_receipt_now_passes(self):
+        v = verify({"parsed": _MUJI})
+        assert v["line_arithmetic"] is True, (
+            f"折后商品被判不合格：{v}（这三个数票上都印着，抄得没错）"
+        )
+        assert v["totals_match"] is True
+
+    def test_the_discount_is_read_not_derived(self):
+        """折扣率必须来自票面，不能从金额倒推
+
+        倒推的话 amount / (qty*price) 恒等于它自己，
+        这条判据就成了永远绿的——比没有判据更坏。
+        """
+        from boxes.receipt.runner import _discount_multiplier
+
+        assert _discount_multiplier(5.83) == 0.583
+        assert _discount_multiplier(8) == 0.8, "「8折」= 付 80%"
+        assert _discount_multiplier(None) is None
+
+    def test_a_wrong_discount_still_fails(self):
+        """折扣抄错必须转红——不然上面那条就成了摆设"""
+        v = verify({"parsed": {**_MUJI, "items": [
+            {**_MUJI["items"][0], "discount_rate": 7},
+        ]}})
+        assert v["line_arithmetic"] is False, (
+            "折扣抄成 7 折也算过——这条判据就是在查这个"
+        )
+
+    def test_a_missing_discount_is_a_failure_not_a_pass(self):
+        """票上有折却没抄 → 红。
+
+        不能拿「没有折扣栏」放行：原价和行金额明明对不上，
+        没有任何东西解释这个差额，那就是产出有问题。
+        """
+        v = verify({"parsed": {**_MUJI, "items": [
+            {**_MUJI["items"][0], "discount_rate": None},
+        ]}})
+        assert v["line_arithmetic"] is False
+
+    def test_ten_zhe_is_refused_as_a_made_up_no_discount(self):
+        """「10折」= 不打折，票上不会这么印。
+
+        模型拿它当「我没看到折扣」的挡箭牌，就等于把真折扣藏起来了。
+        """
+        from boxes.receipt.runner import _discount_multiplier
+
+        assert _discount_multiplier(10) is None
+        assert _discount_multiplier(0) is None
+        assert _discount_multiplier(-1) is None
+
+    def test_rounding_down_to_yuan_is_legal(self):
+        """498 × 5.83折 = 290.334，票面印 290.00 —— 抹零，不是算错"""
+        exact = {**_MUJI, "items": [{**_MUJI["items"][0], "amount": 290.334}]}
+        assert verify({"parsed": exact})["line_arithmetic"] is True
+
+    def test_the_rounding_tolerance_has_an_upper_bound(self):
+        """抹零最多抹到元，再往下就是抄错了
+
+        写成「向下取整到元」这条规则，而不是「容差放宽 1 元」——
+        后者放行的东西比前者多：289.5 距正确值 290.334 只差 0.83 元，
+        但它不是 290.334 的任何一种抹零，是个实打实的误读。
+        """
+        misread = {**_MUJI, "items": [{**_MUJI["items"][0], "amount": 289.5}]}
+        assert verify({"parsed": misread})["line_arithmetic"] is False, (
+            "金额读错不到 1 元就被放行了——容差变成了没人敢动的橡皮"
+        )
+
+    def test_a_rounding_further_than_a_yuan_is_rejected(self):
+        far = {**_MUJI, "items": [{**_MUJI["items"][0], "amount": 289.0}]}
+        assert verify({"parsed": far})["line_arithmetic"] is False
+
+    def test_a_full_price_line_still_needs_no_discount_field(self):
+        """没折扣的普通行照旧按原价验，不能被折扣逻辑误伤"""
+        assert verify({"parsed": _parsed()})["line_arithmetic"] is True
+
+    def test_only_the_discounted_line_may_skip_the_original_price(self):
+        """一张票里有的打折有的全价，两种都得判对"""
+        parsed = _parsed(items=[
+            {"line_no": 1, "name": "大衣", "qty": 1,
+             "unit_price": 498, "amount": 290, "discount_rate": 5.83},
+            {"line_no": 2, "name": "袜子", "qty": 2,
+             "unit_price": 15.0, "amount": 30.0, "discount_rate": None},
+        ], subtotal=320.0, tax=None, discount=0.0, total=320.0)
+        assert verify({"parsed": parsed})["line_arithmetic"] is True
+
+    def test_packaging_carries_the_discount_out(self):
+        """折扣得进产出——不然人工对账看到 498 → 290 会一头雾水"""
+        from boxes.receipt.runner import _simulate_package_receipt
+
+        v = verify({"parsed": _MUJI})
+        out = _simulate_package_receipt({"parsed": _MUJI, **v})
+        assert out["items"][0]["discount_rate"] == 5.83
+        assert out["items"][0]["unit_price"] == 498.0, (
+            "原价也得留着：498 和 290 都对，差的那部分靠折扣解释"
+        )
+
+    def test_a_line_without_discount_ships_as_null_not_zero(self):
+        from boxes.receipt.runner import _simulate_package_receipt
+
+        v = verify({"parsed": _parsed()})
+        out = _simulate_package_receipt({"parsed": _parsed(), **v})
+        assert out["items"][0]["discount_rate"] is None, (
+            "没有折扣是 null，不是 0——0 是个票上根本不存在的折数"
+        )
+
+
+class TestDiscountIsDeclared:
+    def test_the_item_schema_declares_the_field(self):
+        """schema 里没有 discount_rate，判据就没地方拿折扣"""
+        fields = {f.name for f in get_definition().get_schema("schema_receipt_item").fields}
+        assert "discount_rate" in fields
+
+    def test_the_schema_says_it_is_the_printed_number_not_a_ratio(self):
+        f = next(x for x in get_definition().get_schema("schema_receipt_item").fields
+                 if x.name == "discount_rate")
+        assert "5.83" in (f.description or ""), (
+            "得说清存的是折数不是比例，否则模型会填 0.583"
+        )
+
+    def test_the_prompt_names_the_real_pattern(self):
+        from boxes.receipt.runner import _READ_PROMPT
+
+        assert "5.83折" in _READ_PROMPT, (
+            "prompt 里没有真实折扣写法，模型不知道该抄什么"
+        )
+
+    def test_the_prompt_forbids_backfilling_the_original_price(self):
+        """最阴的一种作弊：模型看着 1×498≠290，把 unit_price 改成 290
+
+        这么一改折扣就凭空消失，判据全绿，而票上明明印着 5.83 折。
+        """
+        from boxes.receipt.runner import _READ_PROMPT
+
+        assert "别这么干" in _READ_PROMPT or "不要这么干" in _READ_PROMPT
+
+    def test_the_prompt_says_null_not_ten(self):
+        from boxes.receipt.runner import _READ_PROMPT
+
+        assert "10" in _READ_PROMPT, "没告诉模型「不打折填 null 而不是 10」"
+
+    def test_the_definition_explains_why_the_old_form_was_wrong(self):
+        from boxes.receipt import definition as receipt_definition
+
+        doc = receipt_definition.__doc__ or ""
+        assert "5.83折" in doc, "折后票这个坑没写进盒子文档"
+        assert "抹零" in doc, (
+            "抹零容差是业务事实，必须跟着声明；不写就成了没人敢动的橡皮"
+        )

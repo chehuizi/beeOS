@@ -63,8 +63,21 @@ RECEIPT_ITEM = SchemaDef(
         FieldDef(name="line_no", type="integer"),
         FieldDef(name="name", type="string"),
         FieldDef(name="qty", type="number"),
-        FieldDef(name="unit_price", type="number"),
-        FieldDef(name="amount", type="number"),
+        # unit_price 抄「原价」那一格。MUJI POS 折后商品印的是
+        # `1x498×5.83折=290.00`：498 是原价，290 是折后行金额，
+        # 两者不等且都对——差的那部分由 discount_rate 解释。
+        FieldDef(name="unit_price", type="number", description="原价（不是折后价）"),
+        FieldDef(name="amount", type="number", description="这一行票面印的金额（折后）"),
+        # 行级折扣。**照抄票面印的折数**：「×5.83折」填 5.83、「8折」填 8。
+        # 存折数不存 0.583：模型只负责抄，÷10 换算由盒子做——
+        # 让模型自己算出 0.583，这一步就没有校验价值了。
+        # 没折扣就填 null（不是 10，10 是「没有折扣」的编造说法）。
+        FieldDef(
+            name="discount_rate",
+            type="number",
+            required=False,
+            description="行级折扣折数（照抄「×5.83折」=5.83）；无折扣为 null",
+        ),
     ],
 )
 

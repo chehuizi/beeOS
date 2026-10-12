@@ -1,0 +1,304 @@
+{
+  "_readme": [
+    "真票回归集。每张票记两样东西：",
+    "  parsed —— 票面上**真实印着**的解析结果（人工逐字核对过）",
+    "  expect —— 这份正确解析喂进机械层，**应该**得出什么判定",
+    "",
+    "为什么只钉机械层、不钉模型输出：模型每版、每次调用都不一样，",
+    "拿它当断言等于把测试写成随机数发生器。而「这份**正确**的解析",
+    "该过还是该不适用」是盒子自己的性质，必须钉死——",
+    "过去四次误伤真票（没税栏 / 没单价栏 / 有行级折扣 / 没小计栏），",
+    "全都是这一层出的问题，而且全都是真票实跑才发现的。",
+    "有了这个文件，那四种坑再犯会当场转红，不用再烧一次模型。",
+    "",
+    "photo 字段是给人看的路径；机械层测试不需要图片，要跑真实抽取用",
+    "tests/test_receipt_corpus.py::TestRealCorpusEndToEnd（需要凭证，会花钱）。",
+    "blocked_by —— 预期红的票，指名它卡在 known_gaps 的哪一条上。没有它、或者指了一个不存在的坑，测试会红：「红色必须有名字」，否则下一个看到红的人只会当成 bug 直接改绿。"
+  ],
+  "receipts": [
+    {
+      "id": "hema_soy_sauce",
+      "photo": "hema_soy_sauce.jpg",
+      "shape": "零售 POS 小票 · 有单价栏 · 无税栏 · 底部有支付宝优惠",
+      "note": "商品名里的「500ml*2」「500ml*12」是规格不是数量，数量栏印的是 x 1。",
+      "parsed": {
+        "merchant_name": "杭州超盒算NB拱墅桥西邻里店",
+        "receipt_no": "5127745356775056818",
+        "receipt_date": "2026-10-07",
+        "receipt_time": "17:53",
+        "items": [
+          {
+            "line_no": 1,
+            "name": "李锦记 薄盐生抽(酿造酱油) 500ml*2",
+            "qty": 1,
+            "unit_price": 14.9,
+            "amount": 14.9,
+            "discount_rate": null
+          },
+          {
+            "line_no": 2,
+            "name": "巴马铂泉 饮用天然泉水 500ml*12",
+            "qty": 1,
+            "unit_price": 13.9,
+            "amount": 13.9,
+            "discount_rate": null
+          }
+        ],
+        "subtotal": 28.8,
+        "tax": null,
+        "discount": 0.18,
+        "total": 28.62,
+        "payment_method": "碰一下支付",
+        "low_confidence_fields": []
+      },
+      "expect": {
+        "field_completeness": true,
+        "line_arithmetic": true,
+        "sum_arithmetic": true,
+        "total_arithmetic": true,
+        "date_wellformed": true,
+        "totals_match": true,
+        "not_applicable": [],
+        "acceptance": "accepted"
+      }
+    },
+    {
+      "id": "hema_tea_drink",
+      "photo": "hema_tea_drink.jpg",
+      "shape": "零售 POS 小票 · 有单价栏 · 无税栏 · 合计与行金额一致",
+      "note": "这台曾把第二行单价抄成 8.4（那是整张票的商品合计），行算术当场转红。",
+      "parsed": {
+        "merchant_name": "杭州超盒算NB拱墅桥西邻里店",
+        "receipt_no": "5127480146777154725",
+        "receipt_date": "2026-10-07",
+        "receipt_time": "12:24",
+        "items": [
+          {
+            "line_no": 1,
+            "name": "脉动 维生素饮料 桃子口味 600ml",
+            "qty": 1,
+            "unit_price": 3.9,
+            "amount": 3.9,
+            "discount_rate": null
+          },
+          {
+            "line_no": 2,
+            "name": "NB 无糖茉莉轻茶 1L",
+            "qty": 1,
+            "unit_price": 4.5,
+            "amount": 4.5,
+            "discount_rate": null
+          }
+        ],
+        "subtotal": 8.4,
+        "tax": null,
+        "discount": null,
+        "total": 8.4,
+        "payment_method": "碰一下支付",
+        "low_confidence_fields": []
+      },
+      "expect": {
+        "field_completeness": true,
+        "line_arithmetic": true,
+        "sum_arithmetic": true,
+        "total_arithmetic": true,
+        "date_wellformed": true,
+        "totals_match": true,
+        "not_applicable": [],
+        "acceptance": "accepted"
+      }
+    },
+    {
+      "id": "noodle_shop_bill",
+      "photo": "noodle_shop_bill.jpg",
+      "shape": "餐馆结账单 · 只有「品项/数量/金额」三栏 · 没有单价栏",
+      "note": "行算术在这里**不适用**：票上压根没有单价，不是「抄错了单价」。",
+      "parsed": {
+        "merchant_name": "卤鸭儿面聚",
+        "receipt_no": "02202610070086",
+        "receipt_date": "2026-10-07",
+        "receipt_time": "12:17",
+        "items": [
+          {
+            "line_no": 1,
+            "name": "猪肝拌川",
+            "qty": 1,
+            "unit_price": null,
+            "amount": 18.0,
+            "discount_rate": null
+          },
+          {
+            "line_no": 2,
+            "name": "加面",
+            "qty": 1,
+            "unit_price": null,
+            "amount": 0.01,
+            "discount_rate": null
+          },
+          {
+            "line_no": 3,
+            "name": "打包盒",
+            "qty": 1,
+            "unit_price": null,
+            "amount": 1.0,
+            "discount_rate": null
+          }
+        ],
+        "subtotal": 19.01,
+        "tax": null,
+        "discount": 0.01,
+        "total": 19.0,
+        "payment_method": "现金",
+        "low_confidence_fields": []
+      },
+      "expect": {
+        "field_completeness": true,
+        "line_arithmetic": "n/a",
+        "sum_arithmetic": true,
+        "total_arithmetic": true,
+        "date_wellformed": true,
+        "totals_match": true,
+        "not_applicable": [
+          "line_arithmetic"
+        ],
+        "acceptance": "accepted"
+      }
+    },
+    {
+      "id": "muji_discounted",
+      "photo": "muji_discounted.jpg",
+      "shape": "零售 POS 小票 · **行级折扣** · 没有小计栏 · 优惠栏印 ¥0.00",
+      "note": [
+        "唯一一张行级折扣的真票：`1x498×5.83折=290.00`。",
+        "498 × 0.583 = 290.334，票面按抹零印 290.00——两者都对。",
+        "注意「优惠金额 ¥0.00」：5.83 折已经烘进商品单价了，MUJI POS",
+        "不往优惠栏记。所以 discount 记 0.0 是对的，不能为了凑公式填 208。",
+        "",
+        "同样故意记 red：这张票**没有小计栏**，只有「实收总额 ¥290.00」。",
+        "subtotal 记 null（照抄，票上没印就是没印），于是",
+        "field_completeness / sum_arithmetic / total_arithmetic 三条一起红。",
+        "行算术本身是过的——折扣和抹零都算对了。"
+      ],
+      "parsed": {
+        "merchant_name": "MUJI 无印良品",
+        "receipt_no": "X5006731012602230111",
+        "receipt_date": "2026-02-23",
+        "receipt_time": "13:27",
+        "items": [
+          {
+            "line_no": 1,
+            "name": "不易沾水 羽绒大衣",
+            "qty": 1,
+            "unit_price": 498,
+            "amount": 290,
+            "discount_rate": 5.83
+          }
+        ],
+        "subtotal": null,
+        "tax": null,
+        "discount": 0.0,
+        "total": 290.0,
+        "payment_method": "支付宝",
+        "low_confidence_fields": []
+      },
+      "expect": {
+        "field_completeness": false,
+        "line_arithmetic": true,
+        "sum_arithmetic": false,
+        "total_arithmetic": false,
+        "date_wellformed": true,
+        "totals_match": false,
+        "not_applicable": [],
+        "acceptance": "rejected"
+      },
+      "blocked_by": "票上没有「小计」栏（MUJI POS）"
+    },
+    {
+      "id": "liuxianji_bakery",
+      "photo": "liuxianji_bakery.jpg",
+      "shape": "烘焙店销售单 · 有单价栏 · **折让金额已含在合计里**",
+      "note": [
+        "第五种票型，也是这个文件里唯一一张「正确解析仍会红」的：",
+        "票面印「合计:39.70(2.60)」和「折让金额:2.60」，但 39.70 已经等于",
+        "15.90+8.80+15.00——折让**含在**合计里，不是从合计里减掉的。",
+        "而 subtotal + tax - discount == total 这条公式会算成 39.70 - 2.60 = 37.10 ≠ 39.70。",
+        "",
+        "所以这条 expect 是**故意记 red 的**：它钉住的不是「这张票该过」，",
+        "而是「这张票目前过不了，且我们知道为什么」。等折让的处理方式定了，",
+        "这个文件要跟着改——改了以后如果没人记得改回来，测试会拦。",
+        "把这张写成 green 等于给一个还没解决的问题盖绿章。"
+      ],
+      "parsed": {
+        "merchant_name": "六贤记 小河店",
+        "receipt_no": "0016261010056172884",
+        "receipt_date": "2026-10-10",
+        "receipt_time": "20:36",
+        "items": [
+          {
+            "line_no": 1,
+            "name": "摩芝士布丁三明治",
+            "qty": 1,
+            "unit_price": 15.9,
+            "amount": 15.9,
+            "discount_rate": null
+          },
+          {
+            "line_no": 2,
+            "name": "芝士奶酪",
+            "qty": 1,
+            "unit_price": 8.8,
+            "amount": 8.8,
+            "discount_rate": null
+          },
+          {
+            "line_no": 3,
+            "name": "奶皮鞭子",
+            "qty": 2,
+            "unit_price": 7.5,
+            "amount": 15.0,
+            "discount_rate": null
+          }
+        ],
+        "subtotal": 39.7,
+        "tax": null,
+        "discount": 2.6,
+        "total": 39.7,
+        "payment_method": "储值卡",
+        "low_confidence_fields": []
+      },
+      "expect": {
+        "field_completeness": true,
+        "line_arithmetic": true,
+        "sum_arithmetic": true,
+        "total_arithmetic": false,
+        "date_wellformed": true,
+        "totals_match": false,
+        "not_applicable": [],
+        "acceptance": "rejected"
+      },
+      "blocked_by": "折让 / 已含折让的合计（六贤记）"
+    }
+  ],
+  "known_gaps": [
+    {
+      "gap": "票上没有「小计」栏（MUJI POS）",
+      "symptom": "只有「实收总额」；subtotal 抄不到 → field_completeness / sum_arithmetic / total_arithmetic 三条一起红",
+      "status": "未解决。receipts[muji_discounted].expect 故意记 red 钉住现状。待定方向：缺小计时用 Σ行金额回落，还是判红不动。"
+    },
+    {
+      "gap": "折让 / 已含折让的合计（六贤记）",
+      "symptom": "subtotal + tax - discount == total 在「折让已含在合计里」的票上恒红",
+      "status": "未解决。receipts[liuxianji_bakery].expect 故意记 red 钉住现状。"
+    },
+    {
+      "gap": "增值税电子发票（有税、无优惠、无单价行）",
+      "symptom": "没样本。真票到手前不做——造一张假发票不如不造。",
+      "status": "未解决，等样本。"
+    },
+    {
+      "gap": "字认对没有（商户名/商品名）",
+      "symptom": "「超盒算」被读成「超盒客」，同一个模型下一次跑又对了",
+      "status": "机械判据抓不到，是 definition 顶部声明的盲区。所以测试集只钉机械层，不断言字符——否则就是随机数发生器。"
+    }
+  ]
+}

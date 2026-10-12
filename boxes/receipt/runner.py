@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 import math
 import re
 import shutil
@@ -140,7 +141,40 @@ _READ_PROMPT = """你是一张小票识别器。给你一张收银小票的照�
 
 看不清就填 null，不要猜、不要补全、不要编。
 
+**每一行的单价，只从「这一行自己的」数字里抄。** 小票上最容易被抓错位的就是它——
+「商品合计 / 订单总额 / 实付」那几个数长得最显眼，位置又紧挨着明细，
+很容易顺手填进某一行的单价里。实测一张 NB 小票：第二行单价明明印着
+「（4.50元/瓶）」，被抄成了 8.4——8.4 是整张票的商品合计。
+**合计、订单总额、实付这三个数，一个都不能当成任何一行的单价。**
+抄完扫一遍：有哪一行的单价跟这张票的合计撞上了，就把它改回本行括号里那个数。
+
+**low_confidence_fields 要真的用起来。** 抄完回头看一眼：哪一行的
+数量 × 单价跟这一行的金额对不上、哪个数你觉得眼熟但没底，就把它填进去。
+留空等于没看——人工对账只核你标出来的那些。
+
 只输出 JSON，不要解释。"""
+
+
+# 第二遍只问「对不上的那几行」，不是重读整张票
+_REREAD_PROMPT = """你刚才抄了一张小票，其中几行**对不上**，请重新看一眼那张图，只修正这几行。
+
+对不上的行（你上一遍抄的）：
+{rows}
+
+请重新看图上这几行的原文：
+- 数量抄「数量」那一栏（票上常写成 `x 1`、`×1`、`1.00`）
+- 单价抄「（3.90元/瓶）」这类括号里的数字，或「单价」那一栏
+- 金额抄「金额」那一栏
+- 折扣抄「×5.83折」里的折数
+
+**最要紧的一条：重新抄，不是重新算。**
+你可能会想「让这几行对上」——**不要**。数字不是用来凑的，是用来抄的。
+把单价改成金额能让它平，但票上印的是什么就是什么，抄错了就该是错的。
+对不上就在 low_confidence_fields 里写上对应字段名，那比改数字有用得多。
+
+只输出 JSON，不要解释。格式：
+{{"修正": [{{"行号": 1, "数量": null, "单价": null, "金额": null, "折扣": null}}],
+  "low_confidence_fields": ["字段名"]}}"""
 
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _HH_MM = re.compile(r"^\d{1,2}:\d{2}$")
@@ -235,22 +269,128 @@ def _simulate_read_receipt(input_data: dict[str, Any]) -> dict[str, Any]:
 
     没有规则版降级：规则版读不了小票，退化成「解析出一堆 null 但流程全绿」
     恰恰是最坏结果——看起来成功，其实什么也没读到。
+
+    **抄完自查一次，对不上就带着错处重问。** 见 `_looks_consistent`。
     """
     photo = input_data.get("photo")
     if not isinstance(photo, str) or not photo.strip():
         raise ValueError("receipt_photo.image is required")
 
+    image = _as_viewable_image(photo)
     raw = complete_json(
         _READ_PROMPT,
-        images=[_as_viewable_image(photo)],
+        images=[image],
         thinking="disabled",
         max_tokens=8000,
     )
     if not isinstance(raw, dict):
         raise ValueError("llm did not return a receipt object")
+
+    # 第二遍只在真对不上时才花钱。抄一次就对的票（绝大多数）零额外开销。
+    suspect = _looks_inconsistent(raw)
+    if suspect:
+        raw = _reread_suspect_lines(image, raw, suspect)
     # 套一层 parsed：下游 op 的输入 = 上游 op 的输出，
     # 不包装的话 verify 收到的是 task input（只有 photo），parsed 取不到。
     return {"parsed": raw}
+
+
+# ============================================================
+# 抄完自查 → 对不上就重问一次
+# ============================================================
+#
+# 为什么需要：抽取腿是整套里唯一的模型环节，而它**从来不回头看**。
+# 实测同一个错连犯三次，全是「抓错了那个最显眼的数字」：
+#   1. 「500ml*2」里的 2 当成数量（规格不是数量）
+#   2. 小票的「合计」当成某一行��单价
+#   3. 「支付宝优惠 -0.18」当成税额
+# 三次都不是模型不会认字，是**它没有把这一行和别的数字对一遍**。
+#
+# 为什么不用 prompt 里写「请检查」：写过了，它还是自信地给错答案
+# （读错单价那次的 low_confidence_fields 里压根没提单价）。
+# 模型对自己的输出没有可靠的自我批评，提示词换不来第二次注意力。
+# 把「哪些行对不上」算出来再摊给它看，才是真的多给了它一次注意力。
+#
+# 边界（照实说，别把它当万能药）：
+#   - 第二遍**仍可能是在凑数**。看到「1×8.4≠4.5」之后把 amount 改成
+#     8.4 也是一种「让它对上」的办法。区别在于金额改动会被 sum_arithmetic
+#     逮到（Σ行金额会对不上小计），但原理上这一层挡不住所有作弊。
+#   - 只查得出**自相矛盾**，查不出「一致地错」（单价金额一起认错）。
+#   - 最多问一次，不循环。再错就交给验收判据红——那是它的活。
+
+
+def _looks_inconsistent(parsed: dict[str, Any]) -> list[str]:
+    """这份抄件里有哪些行自相矛盾（纯机械，零 LLM）
+
+    只问一个事：**每一行的 数量 × 原价 × 折扣，跟这一行的金额对不对得上。**
+    不查别的——查多了会把「票型本来就这样」误判成抄错（比如没单价栏的
+    结账单、折后商品），那就是把判据的坑又挖一遍。
+    """
+    items = parsed.get("items")
+    if not isinstance(items, list):
+        return []
+    bad = []
+    for i, it in enumerate(items, start=1):
+        if not isinstance(it, dict):
+            bad.append(i)
+            continue
+        qty, price = _num(it.get("qty")), _num(it.get("unit_price"))
+        amt = _num(it.get("amount"))
+        if None in (qty, price, amt):
+            bad.append(i)
+            continue
+        if not _line_amount_ok(qty, price, _discount_multiplier(it.get("discount_rate")), amt):
+            bad.append(i)
+    return bad
+
+
+def _reread_suspect_lines(image: str, parsed: dict[str, Any], bad: list[int]) -> dict[str, Any]:
+    """把对不上的那几行原样摊回去，让模型重新看一眼图
+
+    合并策略：**只接受第二遍对这几个数字的改写**，其余字段保持第一遍。
+    全量替换会让第二遍顺手改掉它本来抄对的东西。
+    """
+    items = parsed.get("items") or []
+    shown = [
+        {"行号": i, "品名": (items[i - 1] or {}).get("name") if isinstance(items[i - 1], dict) else None,
+         "数量": (items[i - 1] or {}).get("qty") if isinstance(items[i - 1], dict) else None,
+         "单价": (items[i - 1] or {}).get("unit_price") if isinstance(items[i - 1], dict) else None,
+         "金额": (items[i - 1] or {}).get("amount") if isinstance(items[i - 1], dict) else None}
+        for i in bad if 1 <= i <= len(items)
+    ]
+    prompt = _REREAD_PROMPT.format(rows=json.dumps(shown, ensure_ascii=False))
+    # 第二遍挂了就让整条履约中止，不退回第一遍。
+    #
+    # 走到这里的前提是**第一遍已经自相矛盾**。这种情况下退回一份
+    # 我们明知有问题、又没能复核的产出，就是静默降级——看起来成功了，
+    # 实际上交出去的是一份自己都说不清的账。中止是吵，但吵得对。
+    fixed = complete_json(prompt, images=[image], thinking="disabled", max_tokens=4000)
+    if not isinstance(fixed, dict):
+        raise ValueError("llm rereread did not return an object")
+
+    merged = dict(parsed)
+    new_items = list(items)
+    by_line = {
+        int(x.get("行号")): x for x in (fixed.get("修正") or [])
+        if isinstance(x, dict) and str(x.get("行号", "")).isdigit()
+    }
+    for i in bad:
+        patch = by_line.get(i)
+        if not patch or not isinstance(new_items[i - 1], dict):
+            continue
+        row = dict(new_items[i - 1])
+        for src, dst in (("数量", "qty"), ("单价", "unit_price"),
+                         ("金额", "amount"), ("折扣", "discount_rate")):
+            if src in patch:
+                row[dst] = patch[src]
+        new_items[i - 1] = row
+    merged["items"] = new_items
+    if fixed.get("low_confidence_fields"):
+        merged["low_confidence_fields"] = list(
+            dict.fromkeys(list(parsed.get("low_confidence_fields") or [])
+                          + list(fixed["low_confidence_fields"]))
+        )
+    return merged
 
 
 def _simulate_verify_receipt(input_data: dict[str, Any]) -> dict[str, Any]:

@@ -106,7 +106,14 @@ class TestJudgeActuallyJudges:
         assert r["total_arithmetic"] is True, "小计+税=合计是对的，不该误判"
 
     def test_date_wellformed_catches_a_free_text_date(self):
-        r = verify({"parsed": _parsed(receipt_date="2026年10月10日")})
+        """真·自由文本要红——不是「不是 ISO 就要红」
+
+        旧版这条拿 `2026年10月10日` 当反例，那是**判据自己在犯病**：
+        票面印的就是这个形状，模型抄对了，是判据只认 `-` 才把它拦下。
+        同类病第六次（见 runner._normalize_date）。现在归一在机械层，
+        这里换成真的自由文本。
+        """
+        r = verify({"parsed": _parsed(receipt_date="10月10号下午")})
         assert r["date_wellformed"] is False
         assert r["totals_match"] is False
 

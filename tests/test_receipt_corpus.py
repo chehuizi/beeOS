@@ -36,6 +36,7 @@ from pathlib import Path
 
 import pytest
 
+from boxes.receipt.runner import _simulate_package_receipt as package
 from boxes.receipt.runner import _simulate_verify_receipt as verify
 
 CORPUS = Path(__file__).parent / "fixtures" / "receipts"
@@ -473,4 +474,200 @@ class TestIncludedDiscountIsVisible:
 
         assert "r.included_discount ?" in HTML_PAGE, (
             "标记得由 included_discount 决定，不能一直摆着"
+        )
+
+
+class TestDateShapeIsNormalizedMechanically:
+    """日期写法千姿百态，归一在机械层做——同类病第六次
+
+    实测六贤记那张票印的是 `2026.10.10`。以前判据只认 `YYYY-MM-DD`，
+    等于要求模型每次都乖乖转换。实测它不转：要么把整行
+    `2026.10.10 20:36` 塞进 receipt_no 让日期空着，要么原样抄回来，
+    两种都让 date_wellformed 红。产出一点错没有，是判据把
+    「某一种日期形状」当成了所有日期的形状。
+    """
+
+    def _bakery(self, **over):
+        rec = next(r for r in RECEIPTS if r["id"] == "liuxianji_bakery")
+        base = json.loads(json.dumps(rec["parsed"]))
+        base.update(over)
+        return base
+
+    def test_the_real_ticket_shape_is_no_longer_red(self):
+        """票面印的写法就该过。这条转红过——就是这轮修的那个恒红"""
+        assert verify({"parsed": self._bakery(receipt_date="2026.10.10")})[
+            "date_wellformed"] is True
+
+    def test_all_the_common_shapes_land_on_the_same_string(self):
+        """归一的唯一目的：写法不同、同一天。认不出写法才算失败"""
+        from boxes.receipt.runner import _normalize_date
+
+        for raw in ("2026-10-10", "2026.10.10", "2026/10/10", "20261010",
+                    "2026年10月10日", "26.10.10", "2026.10.10 20:36",
+                    "2026/10/10T20:36", "2026.10.10(周二)"):
+            assert _normalize_date(raw) == "2026-10-10", f"{raw!r} 没归一过来"
+
+    def test_understanding_the_shape_is_not_approving_the_value(self):
+        """归一只放宽写法，不放宽日期本身合不合法"""
+        for raw in ("2026.13.45", "2026-02-30", "abc", "2026-10", "20:36", ""):
+            r = verify({"parsed": self._bakery(receipt_date=raw)})
+            assert r["date_wellformed"] is False, f"{raw!r} 不该被放过"
+            assert r["totals_match"] is False, f"{raw!r} 过了 date 就等于整票放行"
+
+    def test_the_normalized_value_is_what_gets_carried_out(self):
+        """归一完要带出去——不然看板和产出里同一个日期长得不一样"""
+        out = package(verify({"parsed": self._bakery(receipt_date="2026.10.10")}))
+        assert out["receipt_date"] == "2026-10-10", (
+            "产出里还是票面原样的 2026.10.10，对账的人得自己再换算一遍"
+        )
+
+    def test_the_two_digit_year_rule_is_written_down(self):
+        """两位年是**加了个假设**，不是白捡的——假设得在代码里明写"""
+        from boxes.receipt.runner import _normalize_date
+
+        assert _normalize_date("26.10.10") == "2026-10-10"
+        assert _normalize_date("98.10.10") == "1998-10-10"
+
+
+class TestMissingRequiredFieldTriggersReread:
+    """自查腿要查「漏抄」，不只查「抄错」
+
+    上面那张六贤记实测：模型把 `2026.10.10 20:36` 整行塞进 receipt_no，
+    receipt_date 空着。三行金额全对，所以行算术**一根手指都动不了**——
+    盒子毫无反应，只能等验收闸红。而验收闸红的时候已经没什么可救的了。
+    """
+
+    def _parsed(self, **over):
+        base = json.loads(json.dumps(
+            next(r for r in RECEIPTS if r["id"] == "liuxianji_bakery")["parsed"]))
+        base["receipt_date"] = ""      # 票上印着日期，这一遍读空了
+        base["receipt_no"] = "202610101 010 20:36"   # 日期被塞进了单号
+        base.update(over)
+        return base
+
+    def test_the_detector_sees_it(self):
+        """纯机械，不花钱"""
+        from boxes.receipt.runner import _missing_required_fields, _looks_inconsistent
+
+        parsed = self._parsed()
+        assert _looks_inconsistent(parsed) == [], (
+            "这张票的金额全对，行算术本来就不该响——它查不到漏抄"
+        )
+        assert _missing_required_fields(parsed) == ["receipt_date"]
+
+    def test_an_empty_date_triggers_exactly_one_reread(self, monkeypatch):
+        from boxes.receipt import runner as receipt_runner
+
+        seen = []
+
+        def fake(prompt, **kw):
+            seen.append(prompt)
+            if len(seen) == 1:
+                return self._parsed()
+            return {"修正": [], "补字段": {"receipt_date": "2026-10-10"},
+                    "low_confidence_fields": []}
+
+        monkeypatch.setattr(receipt_runner, "complete_json", fake)
+        out = receipt_runner._simulate_read_receipt(
+            {"photo": "data:image/jpeg;base64,eA=="})["parsed"]
+        assert len(seen) == 2, f"应该重问一次，实际调了 {len(seen)} 次"
+        assert out["receipt_date"] == "2026-10-10", "重问补回来的日期没合进来"
+
+    def test_both_problems_cost_one_call_not_two(self, monkeypatch):
+        """算术不对 + 字段读空 → 还是只调一次
+
+        「最多问一次」不变。拆成两次问，代价翻倍，
+        还会让模型拿到两份互相矛盾的上下文。
+        """
+        from boxes.receipt import runner as receipt_runner
+
+        seen = []
+
+        def fake(prompt, **kw):
+            seen.append(prompt)
+            if len(seen) == 1:
+                p = self._parsed()
+                p["items"] = [{"line_no": 1, "name": "奶皮罐子", "qty": 2,
+                               "unit_price": 8.8, "amount": 15.0,
+                               "discount_rate": None}]
+                return p
+            return {"修正": [{"行号": 1, "单价": 7.5}],
+                    "补字段": {"receipt_date": "2026-10-10"},
+                    "low_confidence_fields": []}
+
+        monkeypatch.setattr(receipt_runner, "complete_json", fake)
+        out = receipt_runner._simulate_read_receipt(
+            {"photo": "data:image/jpeg;base64,eA=="})["parsed"]
+        assert len(seen) == 2, f"两件事应该共用一次重问，实际调了 {len(seen)} 次"
+        assert out["items"][0]["unit_price"] == 7.5
+        assert out["receipt_date"] == "2026-10-10"
+
+    def test_a_still_empty_date_is_left_empty(self, monkeypatch):
+        """第二遍还是空就保持空——让判据去红它
+
+        硬塞一个占位值（比如今天日期）才是造假信号：
+        「声明了却拿不到」那族病的老路。
+        """
+        from boxes.receipt import runner as receipt_runner
+
+        n = {"i": 0}
+
+        def fake(prompt, **kw):
+            n["i"] += 1
+            if n["i"] == 1:
+                return self._parsed()
+            return {"修正": [], "补字段": {"receipt_date": None},
+                    "low_confidence_fields": ["receipt_date"]}
+
+        monkeypatch.setattr(receipt_runner, "complete_json", fake)
+        out = receipt_runner._simulate_read_receipt(
+            {"photo": "data:image/jpeg;base64,eA=="})["parsed"]
+        assert out["receipt_date"] == "", (
+            "重问没读出来却塞了个值——这是在骗验收闸"
+        )
+
+    def test_a_populated_date_costs_nothing(self, monkeypatch):
+        """happy path 零额外开销：日期有值就不该重问"""
+        from boxes.receipt import runner as receipt_runner
+
+        calls = []
+        good = self._parsed(receipt_date="2026-10-10", receipt_no="NO.0016261010056172884")
+        monkeypatch.setattr(receipt_runner, "complete_json",
+                            lambda *a, **kw: (calls.append(1), good)[1])
+        receipt_runner._simulate_read_receipt({"photo": "data:image/jpeg;base64,eA=="})
+        assert len(calls) == 1, f"日期抄到了还多调了一次模型：{len(calls)} 次"
+
+    def test_the_reread_prompt_names_the_real_mistake(self):
+        """得把「日期塞进单号」这个具体的错摊给它看
+
+        注意这条**不能只查词在不在**：`单号` 和 `receipt_date` 在输出格式
+        示例里本来就有，只查词的话，指令整段被删掉它照样绿——实测过一次。
+        查的是那句话本身。
+        """
+        from boxes.receipt.runner import _REREAD_PROMPT
+
+        assert "两者别搞混" in _REREAD_PROMPT, (
+            "重问 prompt 没点破「日期和单号别搞混」——这就是它这么抄错的原因"
+        )
+        assert "塞进单号" in _REREAD_PROMPT, (
+            "光说别搞混不够，要把它上一遍到底干了什么摊出来"
+        )
+
+    def test_a_gutted_instruction_would_be_caught(self):
+        """自证：把那段指令整段删掉，上面那条必须转红
+
+        写完判据得证明自己会红。这条是为了让上面那条**有资格**当守卫——
+        顺序是先写守卫、再删指令看它响不响，响完才算数。
+
+        删法也有讲究：按**整段**删（从日期那条起、到下一条正文止），
+        只删那一行的话后面三行补充说明还留着，守卫照样绿——第一次就踩了。
+        """
+        from boxes.receipt import runner as receipt_runner
+
+        lines = receipt_runner._REREAD_PROMPT.splitlines()
+        start = next(i for i, l in enumerate(lines) if l.startswith("- 日期抄票面"))
+        end = next(i for i, l in enumerate(lines) if l.startswith("**最要紧的一条"))
+        gutted = "\n".join(lines[:start] + ["- 日期随便写。", ""] + lines[end:])
+        assert "两者别搞混" not in gutted and "塞进单号" not in gutted, (
+            "删指令这步本身没生效，这个自证不算数"
         )

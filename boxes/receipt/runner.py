@@ -165,16 +165,21 @@ _READ_PROMPT = """你是一张小票识别器。给你一张收银小票的照�
 
 
 # 第二遍只问「对不上的那几行」，不是重读整张票
-_REREAD_PROMPT = """你刚才抄了一张小票，其中几行**对不上**，请重新看一眼那张图，只修正这几行。
+_REREAD_PROMPT = """你刚才抄了一张小票，有几处抄得不对。请重新看一眼那张图，**只修正这几处**。
 
-对不上的行（你上一遍抄的）：
-{rows}
+{problem}
 
-请重新看图上这几行的原文：
+怎么读这些栏：
 - 数量抄「数量」那一栏（票上常写成 `x 1`、`×1`、`1.00`）
 - 单价抄「（3.90元/瓶）」这类括号里的数字，或「单价」那一栏
 - 金额抄「金额」那一栏
 - 折扣抄「×5.83折」里的折数
+- 日期抄票面**抬头时间那一行**里的日期部分，写成 YYYY-MM-DD。
+  票上印成 `2026.10.10` / `2026/10/10` / `2026年10月10日` 都行，
+  你只要把那三组数字抄对，换算不用你做。
+  **单号是另一个字段**（`NO.` 开头那串数字）——
+  上一遍最常见的错就是把整行 `2026.10.10 20:36` 塞进单号，
+  结果单号是日期、日期反而空着。两者别搞混。
 
 **最要紧的一条：重新抄，不是重新算。**
 你可能会想「让这几行对上」——**不要**。数字不是用来凑的，是用来抄的。
@@ -183,10 +188,13 @@ _REREAD_PROMPT = """你刚才抄了一张小票，其中几行**对不上**，�
 
 只输出 JSON，不要解释。格式：
 {{"修正": [{{"行号": 1, "数量": null, "单价": null, "金额": null, "折扣": null}}],
+  "补字段": {{"receipt_date": null}},
   "low_confidence_fields": ["字段名"]}}"""
 
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _HH_MM = re.compile(r"^\d{1,2}:\d{2}$")
+# 小票上的日期分隔符：点、斜杠、中文年月日都算
+_DATE_SEPARATORS = re.compile(r"[./年月日]")
 
 # 模型接口 + 浏览器两边都不认的格式，进盒子先转成 JPEG
 _NEEDS_CONVERSION = {"image/heic", "image/heif"}
@@ -208,6 +216,53 @@ def _num(value: Any) -> float | None:
         return float(s)
     except ValueError:
         return None
+
+
+def _normalize_date(value: Any) -> str:
+    """把小票上的日期机械归一成 YYYY-MM-DD；认不出写法返回空串
+
+    票面印的分隔符五花八门：六贤记那张是 `2026.10.10`，还有 `2026/10/10`、
+    `20261010`、`2026年10月10日`，有时后面粘着时间 `2026.10.10 20:36`。
+
+    以前判据只认 `YYYY-MM-DD`，等于**要求模型每次都乖乖转换**——而模型对
+    格式的服从度远低于对数字的服从度。实测：它把整行 `2026.10.10 20:36`
+    塞进了 receipt_no、让 receipt_date 空着，判据红。
+    同一个病根的**第六次**：把某类票的形状当成所有票的形状
+    （前五次是没税栏、没单价栏、有行级折扣、没小计栏、折让已含在合计里）。
+
+    所以归一放在机械层：换分隔符、砍掉粘着的时间、补两位年，
+    再交给 strptime 判真假。模型只管把那三组数字抄对。
+
+    **认出写法 ≠ 认可内容**——`2026.13.45` 归一完照样解析失败、照样转红。
+    归一只放宽「写法」，不放宽「日期本身合不合法」。
+    """
+    s = str(value or "").strip()
+    if not s:
+        return ""
+    # 砍掉粘在后面的时间：`2026.10.10 20:36` / `2026/10/10T20:36`
+    s = re.split(r"[\sT]", s, maxsplit=1)[0]
+    s = _DATE_SEPARATORS.sub("-", s)
+    # 「日」及其后可能跟的尾巴（`10日(周二)`）；括号里的补充说明也砍掉
+    s = re.sub(r"[日号].*$", "", s)
+    s = re.sub(r"[（(].*?[）)]", "", s)
+    s = s.strip("-")
+    if not s:
+        return ""
+    # 紧凑写法 `20261010`
+    if s.isdigit() and len(s) == 8:
+        s = f"{s[:4]}-{s[4:6]}-{s[6:]}"
+    parts = s.split("-")
+    if len(parts) == 3 and len(parts[0]) == 2 and parts[0].isdigit():
+        # 两位年 `26.10.10`。小票不会是 2070 年的东西，按 POSIX 惯例补世纪。
+        # 这条假设写在明面上，不是偷偷塞进来的。
+        head = int(parts[0])
+        parts[0] = f"20{head:02d}" if head < 70 else f"19{head:02d}"
+        s = "-".join(parts)
+    try:
+        datetime.strptime(s, "%Y-%m-%d")
+    except ValueError:
+        return ""
+    return s
 
 
 def _as_viewable_image(photo: str) -> str:
@@ -295,10 +350,15 @@ def _simulate_read_receipt(input_data: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("llm did not return a receipt object")
 
-    # 第二遍只在真对不上时才花钱。抄一次就对的票（绝大多数）零额外开销。
+    # 第二遍只在真出问题时才花钱。抄一次就对（而且齐）的票（绝大多数）
+    # 零额外开销。两种触发共用一次调用：
+    #   - 行算术对不上（抄错）
+    #   - 必填字段整行读空（漏抄）
+    # 只查前一种的话，最常见的漏抄反而没人管——见 _missing_required_fields。
     suspect = _looks_inconsistent(raw)
-    if suspect:
-        raw = _reread_suspect_lines(image, raw, suspect)
+    missing = _missing_required_fields(raw)
+    if suspect or missing:
+        raw = _reread_once(image, raw, suspect, missing)
     # 套一层 parsed：下游 op 的输入 = 上游 op 的输出，
     # 不包装的话 verify 收到的是 task input（只有 photo），parsed 取不到。
     return {"parsed": raw}
@@ -353,26 +413,77 @@ def _looks_inconsistent(parsed: dict[str, Any]) -> list[str]:
     return bad
 
 
-def _reread_suspect_lines(image: str, parsed: dict[str, Any], bad: list[int]) -> dict[str, Any]:
-    """把对不上的那几行原样摊回去，让模型重新看一眼图
+# 抄空了就是错的字段。merchant_name / receipt_no **不在这里**——
+# 那两个是「至少有一个」（票上可能只印其中之一），缺单个不算缺。
+_REQUIRED_FIELDS = ("receipt_date",)
 
-    合并策略：**只接受第二遍对这几个数字的改写**，其余字段保持第一遍。
+
+def _missing_required_fields(parsed: dict[str, Any]) -> list[str]:
+    """哪些必填字段是**整行读空**的（纯机械，零 LLM）
+
+    为什么查这个：实测抽取腿把 `2026.10.10 20:36` 整行塞进了 receipt_no、
+    让 receipt_date 空着——票上明明印着日期。行算术**查不出这种错**
+    （三行金额全对），但 `date_wellformed` 会红，而抽取腿毫无反应：
+    它从来不回头看自己抄的字段齐不齐，只能等验收闸拦。
+
+    这跟「行算术对不上就重问」是同一件事的两个面：**算错了要重问，
+    没抄到也要重问**。只查算术，等于只认「抄错」不认「漏抄」，
+    于是最常见的漏抄（日期塞错字段 → 日期空着）反而没人管。
+
+    边界（照实说）：这里只认「空」和「不空」，**不判断非空的值对不对**。
+    单号填成 `202610101 010 20:36` 这种「有值但是日期」的情形，
+    机器判不了——单号格式本来就没有统一标准。这是已声明的盲区。
+    """
+    out = []
+    for name in _REQUIRED_FIELDS:
+        value = parsed.get(name)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            out.append(name)
+    return out
+
+
+def _reread_problem(parsed: dict[str, Any], bad: list[int], missing: list[str]) -> str:
+    """把「哪儿不对」摊给模型看的那一段（纯拼字符串）"""
+    blocks: list[str] = []
+    if bad:
+        items = parsed.get("items") or []
+        shown = [
+            {"行号": i,
+             "品名": (items[i - 1] or {}).get("name") if isinstance(items[i - 1], dict) else None,
+             "数量": (items[i - 1] or {}).get("qty") if isinstance(items[i - 1], dict) else None,
+             "单价": (items[i - 1] or {}).get("unit_price") if isinstance(items[i - 1], dict) else None,
+             "金额": (items[i - 1] or {}).get("amount") if isinstance(items[i - 1], dict) else None}
+            for i in bad if 1 <= i <= len(items)
+        ]
+        blocks.append("【对不上的行】（你上一遍抄的）\n"
+                      + json.dumps(shown, ensure_ascii=False))
+    if missing:
+        blocks.append("【整行读空的字段】\n"
+                      + json.dumps(list(missing), ensure_ascii=False)
+                      + "\n这些字段你上一遍填了 null 或空串，但票上印着。")
+    return "\n\n".join(blocks)
+
+
+def _reread_once(image: str, parsed: dict[str, Any],
+                 bad: list[int], missing: list[str]) -> dict[str, Any]:
+    """把对不上的行 + 读空的字段一起摊回去，让模型重新看一眼图
+
+    合并策略：**只接受第二遍对这几处的改写**，其余字段保持第一遍。
     全量替换会让第二遍顺手改掉它本来抄对的东西。
+
+    两件事**共用一次调用**——「最多问一次」这条不变。拆成两次问，
+    代价翻倍，还会让模型拿到两份互相矛盾的上下文。
     """
     items = parsed.get("items") or []
-    shown = [
-        {"行号": i, "品名": (items[i - 1] or {}).get("name") if isinstance(items[i - 1], dict) else None,
-         "数量": (items[i - 1] or {}).get("qty") if isinstance(items[i - 1], dict) else None,
-         "单价": (items[i - 1] or {}).get("unit_price") if isinstance(items[i - 1], dict) else None,
-         "金额": (items[i - 1] or {}).get("amount") if isinstance(items[i - 1], dict) else None}
-        for i in bad if 1 <= i <= len(items)
-    ]
-    prompt = _REREAD_PROMPT.format(rows=json.dumps(shown, ensure_ascii=False))
+    prompt = _REREAD_PROMPT.format(
+        problem=_reread_problem(parsed, bad, missing) or "（没有具体问题）"
+    )
     # 第二遍挂了就让整条履约中止，不退回第一遍。
     #
-    # 走到这里的前提是**第一遍已经自相矛盾**。这种情况下退回一份
-    # 我们明知有问题、又没能复核的产出，就是静默降级——看起来成功了，
-    # 实际上交出去的是一份自己都说不清的账。中止是吵，但吵得对。
+    # 走到这里的前提是**第一遍自己都说不通**（算术对不上 / 必填字段空着）。
+    # 这种情况下退回一份我们明知有问题、又没能复核的产出，就是静默降级
+    # ——看起来成功了，实际上交出去的是一份自己都说不清的账。中止是吵，
+    # 但吵得对。
     fixed = complete_json(prompt, images=[image], thinking="disabled", max_tokens=4000)
     if not isinstance(fixed, dict):
         raise ValueError("llm rereread did not return an object")
@@ -394,6 +505,16 @@ def _reread_suspect_lines(image: str, parsed: dict[str, Any], bad: list[int]) ->
                 row[dst] = patch[src]
         new_items[i - 1] = row
     merged["items"] = new_items
+    # 补字段：**只接受读出来的非空值**。第二遍还是空就保持空——
+    # 让 date_wellformed 去红它。硬塞一个占位值才是造假信号。
+    patch_fields = fixed.get("补字段")
+    if isinstance(patch_fields, dict):
+        for name in missing:
+            value = patch_fields.get(name)
+            if isinstance(value, str) and value.strip():
+                merged[name] = value.strip()
+            elif value is not None and not isinstance(value, (list, dict)):
+                merged[name] = value
     if fixed.get("low_confidence_fields"):
         merged["low_confidence_fields"] = list(
             dict.fromkeys(list(parsed.get("low_confidence_fields") or [])
@@ -504,20 +625,21 @@ def _simulate_verify_receipt(input_data: dict[str, Any]) -> dict[str, Any]:
         and abs(subtotal + (tax or 0.0) - deducted - total) <= 0.01
     )
 
-    # 日期格式
-    date_raw = parsed.get("receipt_date") or ""
-    date_ok = bool(_ISO_DATE.match(str(date_raw)))
-    if date_ok:
-        try:
-            datetime.strptime(str(date_raw), "%Y-%m-%d")
-        except ValueError:
-            date_ok = False
+    # 日期：**先机械归一再判真假**（`_normalize_date` 写了为什么）
+    #
+    # 归一跟判真值是两件事：归一只放宽**写法**
+    # （`2026.10.10` 跟 `2026-10-10` 是同一天，不是抄错），
+    # 日期本身合不合法仍由 strptime 判——`2026.13.45` 照样红。
+    date_norm = _normalize_date(parsed.get("receipt_date"))
+    date_ok = bool(date_norm)
     time_raw = parsed.get("receipt_time") or ""
     time_ok = time_raw in ("", None) or bool(_HH_MM.match(str(time_raw)))
     date_wellformed = date_ok and time_ok
 
     return {
-        "parsed": parsed,
+        # 归一后的日期带下去，看板上跟产出里统一是 ISO。
+        # 不带的话同一个日期在两个地方长得不一样，对账的人得自己比。
+        "parsed": {**parsed, "receipt_date": date_norm},
         "field_completeness": field_completeness,
         "line_arithmetic": line_arithmetic,
         "sum_arithmetic": sum_arithmetic,

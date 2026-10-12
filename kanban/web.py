@@ -576,6 +576,9 @@ HTML_PAGE = f"""<!DOCTYPE html>
      不是任何一种判定结果。 */
   .rc-disc {{ color: #b45309; font-size: 10px; white-space: nowrap; }}
   .rc-disc:empty {{ background: transparent; }}
+  /* 「优惠 2.60（含在合计里）」——不标出来的话，用户拿 39.70 减 2.60
+     算出 37.10，跟实付对不上，以为盒子算错了。 */
+  .rc-incl {{ font-style: normal; font-size: 9px; color: #b45309; margin-left: 4px; }}
   .rc-empty {{ text-align: center; color: #94a3b8; padding: 10px; }}
   .rc-sum {{
     margin-top: 8px; display: flex; flex-direction: column; align-items: flex-end;
@@ -1340,7 +1343,8 @@ function renderReceipt(r) {{
     <div class="rc-sum">
       <div><span>小计</span><b>${{esc(money(r.subtotal))}}</b></div>
       <div><span>税额</span><b>${{esc(money(r.tax))}}</b></div>
-      <div><span>优惠</span><b>${{esc(money(r.discount))}}</b></div>
+      <div><span>优惠</span><b>${{esc(money(r.discount))}}</b>${{
+        r.included_discount ? `<i class="rc-incl">（含在合计里）</i>` : ''}}</div>
       <div class="rc-total"><span>实付</span><b>${{esc(money(r.total))}}</b></div>
     </div>
     <div class="rs-hint">机械校验只证明「数字对得上」，不证明「字认对了」——

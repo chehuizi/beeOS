@@ -371,3 +371,106 @@ class TestRereadOnInconsistency:
         from boxes.receipt.runner import _READ_PROMPT
 
         assert "low_confidence_fields" in _READ_PROMPT
+
+
+class TestDiscountAlreadyInTheSubtotal:
+    """优惠**含在合计里**的票（六贤记）——不是每张票都从合计里减优惠
+
+    实测那张票：
+        奶皮鞭子  原价 8.80  实收单价 7.50  数量 2  小计 15.00
+        合计:39.70(2.60)   折让金额:2.60   付款 39.70
+
+    2.60 = 2 × (8.80 − 7.50) —— 折让是**奶皮鞭子那一行的差价**，
+    而 39.70 已经等于 Σ行金额，折让含在里面。再减一次就成 37.10。
+    """
+
+    def _bakery(self, **over):
+        rec = next(r for r in RECEIPTS if r["id"] == "liuxianji_bakery")
+        base = json.loads(json.dumps(rec["parsed"]))
+        base.update(over)
+        return base
+
+    def test_it_balances_now(self):
+        """这张票之前是故意记红的，括号里那个数填上就该过"""
+        assert verify({"parsed": self._bakery()})["total_arithmetic"] is True
+
+    def test_the_old_formula_would_have_turned_it_red(self):
+        """退回去减全额优惠就是 39.70 − 2.60 = 37.10 ≠ 39.70"""
+        without = self._bakery()
+        without["included_discount"] = None
+        assert verify({"parsed": without})["total_arithmetic"] is False
+
+    def test_a_discount_deducted_afterwards_still_works(self):
+        """盒马那种另减的票不受影响——不是把优惠整个绕过去"""
+        rec = next(r for r in RECEIPTS if r["id"] == "hema_soy_sauce")
+        plain = json.loads(json.dumps(rec["parsed"]))
+        plain["included_discount"] = None
+        assert verify({"parsed": plain})["total_arithmetic"] is True
+
+    def test_a_percentage_mistaken_for_an_amount_is_refused(self):
+        """MUJI 的「实物总额(9%)」是税率不是金额，填进来不能把账算歪
+
+        折让不可能比「折让金额」还多——included > discount 一定是读错了，
+        这种当没含、照常减。
+        这里 subtotal = 实付 = 290、discount = 0，本来就该平；
+        要是那个 9 被当成金额用，账会算成 290 + 9 = 299 ≠ 290 而转红。
+        **是守卫让它平的**，所以这条同时证明守卫真的在起作用。
+        """
+        rec = next(r for r in RECEIPTS if r["id"] == "muji_discounted")
+        parsed = json.loads(json.dumps(rec["parsed"]))
+        parsed["subtotal"] = 290.0
+        parsed["included_discount"] = 9        # 把 9% 当成了金额
+        parsed["discount"] = 0.0
+        assert verify({"parsed": parsed})["total_arithmetic"] is True
+
+    def test_a_genuinely_unbalanced_ticket_still_goes_red(self):
+        """守卫只挡「含得比优惠还多」这种明显读错的，别把正常的账一起放过"""
+        parsed = self._bakery(included_discount=None)
+        assert verify({"parsed": parsed})["total_arithmetic"] is False
+
+    def test_the_field_is_declared(self):
+        fields = {f.name for f in
+                  __import__("boxes.receipt", fromlist=["get_definition"]).get_definition()
+                  .get_schema("schema_receipt_parsed").fields}
+        assert "included_discount" in fields, (
+            "schema 里没有 included_discount——括号里那个数就没有地方安放"
+        )
+
+    def test_the_prompt_names_the_real_pattern(self):
+        from boxes.receipt.runner import _READ_PROMPT
+
+        assert "39.70(2.60)" in _READ_PROMPT, (
+            "prompt 里没有真实的「合计(括号)」写法，模型不知道该抄什么"
+        )
+        assert "折让金额" in _READ_PROMPT and "含在" in _READ_PROMPT, (
+            "得说清「折让金额」和「含在合计里」的区别，否则模型分不清"
+        )
+
+    def test_the_prompt_warns_about_percentage_brackets(self):
+        from boxes.receipt.runner import _READ_PROMPT
+
+        assert "9%" in _READ_PROMPT, (
+            "MUJI 票上有「实物总额(9%)」，不说清楚模型会把 9 当金额抄进来"
+        )
+
+
+class TestIncludedDiscountIsVisible:
+    """算了就得画——上一轮的教训：折扣算进判据了但产出视图没画
+
+    「算了却看不见」跟「声明了却拿不到」是同一族病。
+    """
+
+    def test_the_sum_row_says_it_is_included(self):
+        """不标出来的话，用户拿 39.70 减 2.60 算出 37.10，以为盒子算错了"""
+        from kanban.web import HTML_PAGE
+
+        assert "含在合计里" in HTML_PAGE, (
+            "优惠行没标「含在合计里」——用户会自己减一遍，然后觉得是盒子错了"
+        )
+
+    def test_the_marker_only_shows_when_there_is_one(self):
+        from kanban.web import HTML_PAGE
+
+        assert "r.included_discount ?" in HTML_PAGE, (
+            "标记得由 included_discount 决定，不能一直摆着"
+        )

@@ -216,17 +216,19 @@
     {
       "id": "liuxianji_bakery",
       "photo": "liuxianji_bakery.jpg",
-      "shape": "烘焙店销售单 · 有单价栏 · **折让金额已含在合计里**",
+      "shape": "烘焙店销售单 · 有单价栏 · **折让已含在合计里**（含在合计，非另减）",
       "note": [
-        "第五种票型，也是这个文件里唯一一张「正确解析仍会红」的：",
-        "票面印「合计:39.70(2.60)」和「折让金额:2.60」，但 39.70 已经等于",
-        "15.90+8.80+15.00——折让**含在**合计里，不是从合计里减掉的。",
-        "而 subtotal + tax - discount == total 这条公式会算成 39.70 - 2.60 = 37.10 ≠ 39.70。",
+        "同一病根的第五次：不是所有票的优惠都从合计里减。",
         "",
-        "所以这条 expect 是**故意记 red 的**：它钉住的不是「这张票该过」，",
-        "而是「这张票目前过不了，且我们知道为什么」。等折让的处理方式定了，",
-        "这个文件要跟着改——改了以后如果没人记得改回来，测试会拦。",
-        "把这张写成 green 等于给一个还没解决的问题盖绿章。"
+        "    奶皮鞭子  原价 8.80  实收单价 7.50  数量 2  小计 15.00",
+        "    合计:39.70(2.60)   折让金额:2.60   付款 39.70",
+        "",
+        "2.60 = 2 × (8.80 − 7.50)：折让是**奶皮鞭子那一行的差价**，而 39.70 已经",
+        "等于 Σ行金额（15.90 + 8.80 + 15.00），也就是说折让**含在合计里**。",
+        "再减一次就成 37.10，跟实付对不上。",
+        "",
+        "括号里那个数是票面印着的，读它就行。减的应该是「另减的那部分」",
+        "= discount − included_discount。"
       ],
       "parsed": {
         "merchant_name": "六贤记 小河店",
@@ -264,19 +266,19 @@
         "discount": 2.6,
         "total": 39.7,
         "payment_method": "储值卡",
-        "low_confidence_fields": []
+        "low_confidence_fields": [],
+        "included_discount": 2.6
       },
       "expect": {
         "field_completeness": true,
         "line_arithmetic": true,
         "sum_arithmetic": true,
-        "total_arithmetic": false,
+        "total_arithmetic": true,
         "date_wellformed": true,
-        "totals_match": false,
+        "totals_match": true,
         "not_applicable": [],
-        "acceptance": "rejected"
-      },
-      "blocked_by": "折让 / 已含折让的合计（六贤记）"
+        "acceptance": "accepted"
+      }
     }
   ],
   "known_gaps": [
@@ -284,11 +286,6 @@
       "gap": "票上没有「小计」栏（MUJI POS）",
       "symptom": "只有「实收总额」；subtotal 抄不到 → field_completeness / sum_arithmetic / total_arithmetic 三条一起红",
       "status": "未解决。receipts[muji_discounted].expect 故意记 red 钉住现状。待定方向：缺小计时用 Σ行金额回落，还是判红不动。"
-    },
-    {
-      "gap": "折让 / 已含折让的合计（六贤记）",
-      "symptom": "subtotal + tax - discount == total 在「折让已含在合计里」的票上恒红",
-      "status": "未解决。receipts[liuxianji_bakery].expect 故意记 red 钉住现状。"
     },
     {
       "gap": "增值税电子发票（有税、无优惠、无单价行）",

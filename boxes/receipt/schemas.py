@@ -99,6 +99,18 @@ RECEIPT_PARSED = SchemaDef(
         # tax 和 discount 都留着：POS 小票只有 discount，增值税发票只有 tax。
         FieldDef(name="tax", type="number", description="税额（零售 POS 小票通常没有）"),
         FieldDef(name="discount", type="number", description="优惠 / 折扣 / 减免（正数=减免了多少）"),
+        # 合计里**已经含进去**的优惠额。跟 discount 是两回事：
+        #   盒马 `商品合计 28.80 / 支付宝优惠 -0.18 / 实付 28.62` → 优惠是从合计里减的
+        #   六贤记 `合计:39.70(2.60) / 折让金额:2.60 / 付款 39.70` → 折让**含在**39.70里
+        # 两种都写「优惠 2.60」，减不减它结果差 2.60。
+        # 括号里那个数是**票面印着的**，抄它就行，不用推。
+        FieldDef(
+            name="included_discount",
+            type="number",
+            required=False,
+            description="合计里已含的优惠（票面「合计:39.70(2.60)」里的 2.60）；"
+                        "优惠是在合计之后另减的则填 null",
+        ),
         FieldDef(name="total", type="number", description="实付合计"),
         FieldDef(name="payment_method", type="string"),
         # ---- 可机械验证的校验证据（详见 runner）----

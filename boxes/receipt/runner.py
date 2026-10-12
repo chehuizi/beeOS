@@ -110,11 +110,20 @@ _READ_PROMPT = """你是一张小票识别器。给你一张收银小票的照�
   discount_rate 只在票面**这一行**印了折扣时才填，照抄折数：「×5.83折」填 5.83、
   「8折」填 8。没有折扣就填 null。**不要填 10**——10 是「没折扣」的编造说法。
   它是**行**上的折扣，不是小票底部的「优惠金额」栏（那个填进顶部的 discount）。
-- subtotal: 小计 / 商品合计
+- subtotal: 小计 / 商品合计 / **合计**。标签是「合计」也要填——
+  实测六贤记烘焙单印的就是「合计:39.70(2.60)」，只认「小计」两个字
+  会把它当成实付、subtotal 留空，于是字段完整性和合计校验一起转红。
 - tax: 税额。**零售 POS 小票通常没有这一栏**（超市、便利店 POS 单是含税价），
   找不到就填 null，**不要拿别的数字凑**。
 - discount: 优惠 / 折扣 / 减免 / 抹零，填**正数**（票上印 -0.18 就填 0.18）。
   常见标签：支付宝优惠、微信优惠、满减、折扣、抹零、立减。
+- included_discount: **合计里已经含进去的**优惠额。只在票面写成
+  `合计:39.70(2.60)` 这种「合计(括号里有数)」的样子时才填括号里那个**金额**。
+  实测六贤记：`合计:39.70(2.60)` / `折让金额:2.60` / `付款 39.70`——
+  折让是**含在** 39.70 里的，不是从 39.70 里减掉的，填 2.60。
+  盒马那种 `商品合计 28.80` 后面没有括号，优惠是另减的，填 null。
+  **括号里是百分数的不要填**（MUJI 的 `实物总额(9%)` 是税率不是金额），
+  **分店名、规格之类的括号也不要填**。拿不准就填 null。
 - total: 实付合计（支付明细那一行）
 - payment_method: 支付方式（现金/微信/支付宝/银行卡/碰一下支付…）
 - low_confidence_fields: 你拿不准的字段名数组
@@ -464,16 +473,35 @@ def _simulate_verify_receipt(input_data: dict[str, Any]) -> dict[str, Any]:
         subtotal is not None and abs(line_sum - subtotal) <= 0.01
     )
 
-    # 小计 + 税 − 优惠 = 实付
+    # 小计 + 税 − **另减的**优惠 = 实付
+    #
     # 优惠这一项是零售 POS 小票的标配（支付宝优惠 / 满减 / 抹零），而 POS 小票
     # **没有税**。以前公式只写「小计 + 税 = 实付」，票上那个优惠数就无处安放，
     # 模型只能给 null，于是每张打过折的票都必然转红。
     # 两种票据都在这套公式里：POS 小票 tax 缺省 0、discount 有值；
     # 增值税发票 tax 有值、discount 缺省 0。
+    #
+    # **但不是每张票的优惠都是从合计里减掉的**（同一个病根的第五次）。
+    # 实测六贤记烘焙单：
+    #     奶皮鞭子   原价 8.80   实收单价 7.50   数量 2   小计 15.00
+    #     合计:39.70(2.60)   折让金额:2.60   付款 39.70
+    # 2.60 = 2 × (8.80 − 7.50) —— 折让是**奶皮鞭子那一行的差价**，
+    # 而 39.70 = 15.90 + 8.80 + 15.00 已经等于 Σ行金额，也就是说
+    # **折让含在合计里**。再减一次就成 37.10，跟实付对不上。
+    #
+    # 括号里那个数是票面印着的，读它就行，不用推。
+    # 减的应该是「另减的那部分」= discount − included_discount。
     discount = _num(parsed.get("discount"))
+    included = _num(parsed.get("included_discount"))
+    # 折让不可能比「折让金额」还多：included > discount 一定是读错了
+    # （MUJI 的「实物总额(9%)」是税率不是金额，模型可能把它填进来）。
+    # 这种就当没含，照常减——宁可让票红，也不要拿一个错数把公式凑平。
+    if included is not None and (discount is None or included > discount):
+        included = None
+    deducted = (discount or 0.0) - (included or 0.0)
     total_arithmetic = (
         subtotal is not None and total is not None
-        and abs(subtotal + (tax or 0.0) - (discount or 0.0) - total) <= 0.01
+        and abs(subtotal + (tax or 0.0) - deducted - total) <= 0.01
     )
 
     # 日期格式
@@ -550,6 +578,9 @@ def _simulate_package_receipt(input_data: dict[str, Any]) -> dict[str, Any]:
         "subtotal": _num(parsed.get("subtotal")),
         "tax": _num(parsed.get("tax")),
         "discount": _num(parsed.get("discount")),
+        # 合计里已含的优惠。带不出去，看板上就还是「优惠 2.60」，
+        # 而实付 39.70 跟 39.70 − 2.60 对不上——用户会以为算错了。
+        "included_discount": _num(parsed.get("included_discount")),
         "total": _num(parsed.get("total")),
         "payment_method": parsed.get("payment_method") or "",
         "field_completeness": bool(v.get("field_completeness")),

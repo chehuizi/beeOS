@@ -85,37 +85,32 @@ RUNNER_REGISTRY: dict[str, HandlerRunner] = {
     "receipt_capture_box": RECEIPT_RUNNER,
 }
 
-# Box 元信息（声明式归属，不从 box_id 关键词推断）：
-# Line = 企业价值流（value stream），Box = 业务责任单元
-BOX_META: dict[str, dict[str, Any]] = {
-    "requirement_capture_box": {
-        "display_name": "Requirement Capture Box",
-        "value_stream": "Software Delivery",
-        "role": "Business Requirement Capture Fulfillment",
-        # 本盒产出投给谁（看板产出口的"接力"按钮读它）。
-        # 声明在盒子上而不是硬编码在前端——盒子之间的关系是业务信息。
-        "feeds_into": ["business_modeling_box"],
-    },
-    "business_modeling_box": {
-        "display_name": "Business Modeling Box",
-        "value_stream": "Software Delivery",
-        "role": "Business Modeling Fulfillment",
-        "feeds_into": [],
-    },
-    # 小票识别归费用报销价值流，不归软件交付——填错价值流等于把盒子
-    # 挂到错误的业务线上，跟业务语义造假是一回事。
-    "receipt_capture_box": {
-        "display_name": "Receipt Capture Box",
-        "value_stream": "Expense Reimbursement",
-        "role": "Receipt Recognition Fulfillment",
-        "feeds_into": [],
-    },
-}
+# ~~Box 元信息（归属 / 接线）~~
+#
+# 原先这里有一张 BOX_META 表，写着每只盒子的 display_name / value_stream /
+# role / feeds_into。现在全部搬回各盒自己的 definition（placement）。
+#
+# 为什么搬：这些是**业务知识**。「盒子之间的关系是业务信息」这句注释本来
+# 就写在 BOX_META 头上——它自己承认了这件事，只是放错了地方。放在看板层
+# 的直接后果是：盒子只能通过看板去知道自己接谁，换掉看板接线就丢了。
+# 而接线是「这只盒子是什么」的一部分，恰恰属于盒子自己。
+#
+# 搬走之后看板变成纯读者：box_meta() 从 definition.placement 取值，
+# 看板自己一个字都不持有。
 
 
 def box_meta(box_id: str) -> dict[str, str]:
-    """盒子的展示元信息（未注册盒子返回空 dict）"""
-    return BOX_META.get(box_id, {})
+    """盒子的展示元信息（未注册盒子返回空 dict）
+
+    **来源是盒子自己的 definition，不是看板**。接线（feeds_into）和
+    价值流归属是业务知识，住在 `kanban/` 的话，换掉看板这只盒子
+    就不知道自己接谁——而接线是「这只盒子是什么」的一部分。
+    看板读它，不拥有它。
+    """
+    entry = BOX_REGISTRY.get(box_id)
+    if entry is None:
+        return {}
+    return entry[0]().placement.model_dump()
 
 
 def registered_box_ids() -> set[str]:
@@ -126,7 +121,8 @@ def registered_box_ids() -> set[str]:
 def order_boxes_by_flow(box_ids: Iterable[str]) -> list[str]:
     """按业务流向排盒子：产出方在前，消费方在后（需求捕获 → 业务建模）
 
-    顺序从 BOX_META 的 feeds_into 声明推导，不按 box_id 字母序也不按注册顺序。
+    顺序从各盒 definition.placement.feeds_into 推导，
+    不按 box_id 字母序也不按注册顺序。
     字母序会把 business_modeling_box 排在 requirement_capture_box 前面，
     而实际流程正好相反；注册顺序则只是开发历史的偶然（谁先加谁在前）。
 
@@ -137,7 +133,10 @@ def order_boxes_by_flow(box_ids: Iterable[str]) -> list[str]:
     # preds[b] = 哪些盒子把产出投给 b（b 的上游）
     preds: dict[str, set[str]] = {b: set() for b in ids}
     for src in ids:
-        for dst in BOX_META.get(src, {}).get("feeds_into", []):
+        entry = BOX_REGISTRY.get(src)
+        if entry is None:
+            continue
+        for dst in entry[0]().placement.feeds_into:
             if dst in preds:
                 preds[dst].add(src)
 
@@ -361,7 +360,7 @@ def box_manifest(box_id: str) -> dict[str, Any]:
 
     为什么要这么一份东西：要把 beeBox 当作可独立提供的 API 单元，
     调用方就得能在**不读源码、不看看板**的前提下知道这只盒子是什么、
-    怎么调它、它会吐出什么。以前的声明散在 definition / BOX_META /
+    怎么调它、它会吐出什么。以前的声明散在 definition / 看板 /
     measure.py 三处，调用方要凑齐得先读完整个 kanban 包。
 
     records 传 None 表示「还没跑过」，metrics 里的 actual 会是 None。
@@ -507,17 +506,19 @@ def box_context(
         })
 
     result_schema = definition.get_schema(result.result_schema)
+    placement = definition.placement
     return {
-        "value_stream": meta.get("value_stream", ""),
-        "role": meta.get("role", ""),
-        "self_name": meta.get("display_name", box_id),
-        # 上游从别人的 feeds_into 反推——BOX_META 只声明了「投给谁」，
-        # 「谁投给我」是同一条声明的另一边，不该在两处各写一遍
+        "value_stream": placement.value_stream,
+        "role": placement.role,
+        "self_name": placement.display_name or box_id,
+        # 上游从**别的盒子的 definition** 反推——接线只在「投给谁」那一侧
+        # 声明，「谁投给我」是同一条声明的另一边，两边各写一遍就会漂。
+        # 反推源是 BOX_REGISTRY（由各盒 definition 装起来的），不是看板的表。
         "fed_by": [
-            _hop(src) for src, m in BOX_META.items()
-            if box_id in m.get("feeds_into", [])
+            _hop(src) for src in BOX_REGISTRY
+            if box_id in BOX_REGISTRY[src][0]().placement.feeds_into
         ],
-        "feeds_into": [_hop(dst) for dst in meta.get("feeds_into", [])],
+        "feeds_into": [_hop(dst) for dst in placement.feeds_into],
         "consumes": consumes,
         "produces": {
             "type": result.type,

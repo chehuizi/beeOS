@@ -25,6 +25,7 @@ from core.models import (
     ExceptionRule,
     MetricDef,
     MetricsDef,
+    PlacementDef,
     QueenAuthorization,
     QueenDef,
     QueenRules,
@@ -43,6 +44,13 @@ BUSINESS_MODELING_BOX = BeeBoxDefinition(
     ),
 
     schemas=ALL_SCHEMAS,
+
+    placement=PlacementDef(
+        display_name="Business Modeling Box",
+        value_stream="Software Delivery",
+        role="Business Modeling Fulfillment",
+        feeds_into=[],
+    ),
 
     task=[
         TaskDef(

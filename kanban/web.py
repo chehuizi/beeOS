@@ -1515,7 +1515,8 @@ function renderBoxMetrics(metrics) {{
 function buildShell(boxId, box, entries) {{
   // 静态 shell：只建一次——工位图 DOM 不随 2s 刷新重建
   window._taskEntries = {{}};
-  // 接力目标：盒子之间的关系声明在后端 BOX_META.feeds_into（业务信息，不在前端硬编码）。
+  // 接力目标：盒子之间的关系声明在各盒 definition.placement.feeds_into
+  // （业务信息跟着盒子走，不在前端硬编码）。
   // 显示名取 box_context 随 id 一起给的那份——单盒过滤时前端手里只有
   // 当前这一只盒的名字表，自己补会直接露出 business_modeling_box 这种原始 id。
   window._feedsInto = ((box && box.box_context && box.box_context.feeds_into) || [])
@@ -1677,7 +1678,8 @@ function renderArtifactInto() {{
 // 接力：本盒产出 → 下游盒投料口
 // 渲染在 ACCEPTANCE 栏底部：这条链是「算 → 出 → 判 → 交」，
 // 「交」这个动作属于判完之后，不属于产物旁边。
-// 目标盒子来自后端 BOX_META.feeds_into（盒子之间的关系是业务信息，不在前端硬编码）。
+// 目标盒子来自各盒 definition.placement.feeds_into
+// （盒子之间的关系是业务信息，跟着盒子走，不在前端硬编码）。
 // 投料字段按下游 task_schema 裁剪——把捕获盒的 evidence / 抽取者等内部字段
 // 一起塞给下游会让人分不清哪些是对方需要的。
 function renderRelayBar() {{

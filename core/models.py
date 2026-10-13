@@ -236,6 +236,36 @@ class MetricsDef(BaseModel):
     cost: list[MetricDef] = Field(default_factory=list)
 
 
+class PlacementDef(BaseModel):
+    """盒子在企业里站在哪
+
+    **为什么这部分是 beeBox 自带的，不住在看板里**：盒子要能作为独立
+    单元被描述和调用，调用方就得能知道它接谁、投给谁。这些是**这只盒子
+    是什么**的一部分，不是「看板长什么样」。
+
+    之前它们住在 `kanban/trigger.py` 的 BOX_META 里，后果是：盒子只能通过
+    看板去知道自己接谁，换掉看板接线就丢了——而接线恰恰是描述的一部分。
+    「盒子之间的关系是业务信息」这句注释本来就写在 BOX_META 头上，
+    它自己承认了这件事，只是放错了地方。
+
+    这里只定义**形状**，跟 metrics 同一个套路：`core` 知道字段叫什么，
+    `boxes/` 声明具体值。`core` 里不该出现「费用报销」这种业务值——
+    那属于 `boxes/`。
+
+    **feeds_into 是接线的唯一声明，fed_by 不另写**：一边声明「投给谁」，
+    另一边从注册表反推。两侧各写一遍的话，A 改了 B 忘了，
+    B 的页面上游就悄悄空了，而没有任何东西会报错。
+    反过来算则结构上不可能不一致。
+    """
+
+    display_name: str = Field(default="", description="给人看的名字")
+    value_stream: str = Field(default="", description="所属企业价值流")
+    role: str = Field(default="", description="业务责任单元的职责")
+    feeds_into: list[str] = Field(
+        default_factory=list, description="本盒产出投给哪些 box_id（接线唯一声明）"
+    )
+
+
 # ============================================================
 # 顶层：BeeBox Definition
 # ============================================================
@@ -251,9 +281,12 @@ class BeeBoxDefinition(BaseModel):
     - 履约合同 Contract（result）
     - 履约政策 Policy（queen）
     - 履约度量 Metrics
+    - 业务归属 Placement（接谁 / 投给谁，见 PlacementDef）
 
     机制层独立：
     - task[].beeline_id + version（不作为顶层独立字段）
+
+    **placement 归盒子自己**：看板读它，不拥有它。
     """
 
     id: str = Field(description="definition 唯一标识")
@@ -265,6 +298,7 @@ class BeeBoxDefinition(BaseModel):
     result: ResultDef
     queen: QueenDef
     metrics: MetricsDef
+    placement: PlacementDef = Field(default_factory=PlacementDef)
 
     def get_schema(self, schema_id: str) -> Optional[SchemaDef]:
         """按 id 查找 schema"""

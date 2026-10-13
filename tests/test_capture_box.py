@@ -153,7 +153,11 @@ class TestPayloadKind:
 
 
 class TestFeedInto:
-    """盒子之间的关系声明在 BOX_META，不在前端硬编码"""
+    """盒子之间的关系声明在各自 definition.placement，不在前端硬编码
+
+    以前住在 kanban/trigger.py 的 BOX_META。那是业务知识放在看板层——
+    盒子只能通过看板去知道自己接谁。现在接线跟着盒子走。
+    """
 
     def test_capture_feeds_modeling(self):
         from kanban.trigger import box_meta
@@ -165,9 +169,9 @@ class TestFeedInto:
 
     def test_feeds_into_targets_are_registered(self):
         """声明的下游必须是真盒子，否则接力按钮点了没地方去"""
-        from kanban.trigger import BOX_META, registered_box_ids
-        for bid, meta in BOX_META.items():
-            for t in meta.get("feeds_into", []):
+        from kanban.trigger import BOX_REGISTRY, registered_box_ids
+        for bid, (_get, _beelines) in BOX_REGISTRY.items():
+            for t in _get().placement.feeds_into:
                 assert t in registered_box_ids(), f"{bid} 指向未注册盒子 {t}"
 
 
@@ -203,7 +207,7 @@ class TestBoxFlowOrder:
     def test_cycle_does_not_hang_or_raise(self):
         """feeds_into 声明成环时兜底收尾，不能死循环也不能让看板白屏"""
         from kanban.trigger import order_boxes_by_flow
-        # 直接构造环：绕过 BOX_META，用一个不存在的 box 走 no-relation 分支
+        # 用一个未注册的 box 走 no-relation 分支
         out = order_boxes_by_flow(["only_box"])
         assert out == ["only_box"]
 

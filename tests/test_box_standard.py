@@ -12,6 +12,9 @@
 
 from __future__ import annotations
 
+import ast
+import pathlib
+
 import pytest
 
 from boxes.modeling import get_definition as get_modeling_definition
@@ -27,6 +30,9 @@ from kanban.web import HTML_PAGE
 from runtime.store import TaskRunStore
 from tests.conftest import stub_compliant_llm
 
+REPO = pathlib.Path(__file__).resolve().parent.parent
+KANBAN_DIR = REPO / "kanban"
+
 
 CAPTURE = "requirement_capture_box"
 MODELING = "business_modeling_box"
@@ -34,7 +40,7 @@ RECEIPT = "receipt_capture_box"
 
 # 契约测试遍历注册表，而不是手抄盒子名单。
 # 手抄过一次就漏一次：receipt_capture_box 加进 BOX_REGISTRY 时，
-# 下面两条一致性测试压根没跑到它，漏 BOX_META 也没人喊。
+# 下面两条一致性测试压根没跑到它，归属没填也没人喊。
 # 「加一只新盒子要不要改测试」正是标准化的判据，不该由人记着。
 ALL_BOXES = sorted(BOX_REGISTRY)
 
@@ -228,21 +234,94 @@ class TestRegistryCoverage:
         missing = sorted(set(BOX_REGISTRY) - set(RUNNER_REGISTRY))
         assert not missing, f"注册了但没有 runner：{missing}"
 
-    def test_every_registered_box_has_meta(self):
-        """BOX_META 漏一只盒子 → 看板铭牌 VALUE STREAM / ROLE 全是「—」
+    def test_the_kanban_does_not_retype_business_facts(self):
+        """看板不许把业务事实的值重新敲一遍
 
-        反向漏检：原来的测试只遍历 BOX_META 检查 feeds_into 指向谁，
-        从没检查「注册了的盒子是不是都在 BOX_META 里」。
-        单向遍历看不见缺失，这只盒子就这么带着空铭牌上了看板。
+        它以前住在 `kanban/trigger.py` 的 BOX_META。后果不是「不好看」，
+        是盒子只能通过看板去知道自己接谁——换掉看板，接线就跟着丢了，
+        而接线恰恰是「这只盒子是什么」的一部分。
+
+        口径：**业务事实的值**（价值流 / 角色 / 显示名）不许作为字面量
+        出现在看板层。读 `placement.value_stream` 再传出去不算——
+        那是读，不是在这里声明。
+
+        为什么不管 box_id 字面量：注册表总得写出自己有哪些成员，
+        `BOX_REGISTRY["receipt_capture_box"] = ...` 是装配，不是业务知识。
+        曾经的病是「盒子的价值流归属写在看板里」，不是「看板认识 box_id」。
         """
-        from kanban.trigger import BOX_META
+        facts = set()
+        for _bid, (get, _bl) in BOX_REGISTRY.items():
+            p = get().placement
+            facts |= {p.display_name, p.value_stream, p.role}
+        facts = {f for f in facts if f}
 
-        missing = sorted(set(BOX_REGISTRY) - set(BOX_META))
-        assert not missing, f"注册了但 BOX_META 没声明：{missing}"
+        offenders = []
+        for path in sorted(KANBAN_DIR.glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            docs = set()
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Module, ast.FunctionDef,
+                                     ast.AsyncFunctionDef, ast.ClassDef)):
+                    d = ast.get_docstring(node, clean=False)
+                    if d is not None:
+                        docs.add(d)
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                        and node.value not in docs and node.value in facts):
+                    offenders.append(f"{path.name}:{node.lineno} {node.value!r}")
+        assert not offenders, (
+            "看板层又敲了一遍业务事实的值：\n  " + "\n  ".join(offenders)
+            + "\n它们应该只住在各盒 definition 的 placement 里"
+        )
+
+    def test_the_kanban_holds_no_per_box_table(self):
+        """看板层不许再出现「一张按 box_id 索引的表」
+
+        以前 BOX_META 就是这么一张表。守卫盯的是**形状**：
+        模块级赋值成 dict，键全是 box_id，值又是 dict——
+        这正是那张表的形状，不管它叫什么名字。
+        """
+        offenders = []
+        for path in sorted(KANBAN_DIR.glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            box_ids = {bid for bid in BOX_REGISTRY}
+            for node in ast.walk(tree):
+                # **Assign 和 AnnAssign 都要认**：原来那张表写的是
+                # `BOX_META: dict[str, ...] = {...}`，带注解，是 AnnAssign。
+                # 只认 Assign 的话守卫一声不响——写守卫时漏了带注解这一类，
+                # 守卫就等于没写。回退验证逮到的就是它。
+                if isinstance(node, ast.AnnAssign):
+                    targets = [node.target] if isinstance(node.target, ast.Name) else []
+                elif isinstance(node, ast.Assign):
+                    targets = [t for t in node.targets if isinstance(t, ast.Name)]
+                else:
+                    continue
+                if not isinstance(node.value, ast.Dict):
+                    continue
+                keys = [k.value for k in node.value.keys
+                        if isinstance(k, ast.Constant) and isinstance(k.value, str)]
+                if keys and set(keys) <= box_ids and len(keys) > 1:
+                    for t in targets:
+                        # BOX_REGISTRY / METRIC_COMPUTERS / RUNNER_REGISTRY 是
+                        # 按 box_id 索引没错，但值是注册元组 / 算法表，不是归属
+                        if t.id in ("BOX_REGISTRY", "METRIC_COMPUTERS", "RUNNER_REGISTRY"):
+                            continue
+                        offenders.append(f"{path.name}:{node.lineno} {t.id}")
+        assert not offenders, (
+            "看板层又出现一张按 box_id 索引的归属表：\n  " + "\n  ".join(offenders)
+            + "\n它应该住在各盒 definition 的 placement 里"
+        )
 
     @pytest.mark.parametrize("box_id", ALL_BOXES)
     def test_meta_fields_are_actually_filled(self, box_id):
-        """声明了字段却留空串，跟没声明一样——铭牌照样显示「—」"""
+        """归属字段留空串，跟没声明一样——铭牌照样显示「—」
+
+        **这条现在顺带顶着 `test_every_registered_box_has_meta` 的活**：
+        以前 BOX_META 漏一只盒子，那只盒子的三个字段全是空，
+        而只遍历 BOX_META 的测试看不见这个缺失。BOX_META 没了之后，
+        漏填变成 `placement` 落回默认值——同样是三个空字段，
+        这条按注册表逐只检查，照样能逮住。
+        """
         from kanban.trigger import box_meta
 
         meta = box_meta(box_id)

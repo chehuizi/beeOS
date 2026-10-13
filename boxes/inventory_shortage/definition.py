@@ -19,6 +19,7 @@ from core.models import (
     ExceptionRule,
     MetricDef,
     MetricsDef,
+    PlacementDef,
     QueenAuthorization,
     QueenDef,
     QueenRules,
@@ -37,6 +38,16 @@ ORDER_EXCEPTION_BOX = BeeBoxDefinition(
     ),
 
     schemas=ALL_SCHEMAS,
+
+    # 未注册进 BOX_REGISTRY（看板不显示、trigger 不接收），所以
+    # feeds_into 留空：运营线接线要恢复时跟 BOX_REGISTRY 一起挂回去。
+    # 归属信息照填，恢复那天不用再想一遍。
+    placement=PlacementDef(
+        display_name="Order Exception Box",
+        value_stream="Order Fulfillment",
+        role="Order Exception Resolution Fulfillment",
+        feeds_into=[],
+    ),
 
     task=[
         TaskDef(

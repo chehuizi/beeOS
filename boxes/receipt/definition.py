@@ -124,6 +124,7 @@ from core.models import (
     ExceptionRule,
     MetricDef,
     MetricsDef,
+    PlacementDef,
     QueenAuthorization,
     QueenDef,
     QueenRules,
@@ -143,6 +144,15 @@ RECEIPT_CAPTURE_BOX = BeeBoxDefinition(
     ),
 
     schemas=ALL_SCHEMAS,
+
+    placement=PlacementDef(
+        display_name="Receipt Capture Box",
+        # 小票识别归费用报销价值流，不归软件交付——填错价值流
+        # 等于把盒子挂到错误的业务线上，跟业务语义造假是一回事。
+        value_stream="Expense Reimbursement",
+        role="Receipt Recognition Fulfillment",
+        feeds_into=[],
+    ),
 
     task=[
         TaskDef(

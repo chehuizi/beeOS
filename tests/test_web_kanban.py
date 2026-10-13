@@ -127,10 +127,15 @@ class TestDashboardData:
             })
             store.append(tr, box_id=mod_def.id, acceptance_status="rejected")
 
-        # 无 filter：未注册盒子的记录被隐藏，只剩 2 条 mod
+        # 无 filter：未注册盒子的记录被隐藏，只剩 2 条 mod。
+        # 名单是注册表（三只都在），运行记录只影响计数。
         data = dashboard_data(store)
         assert data["metrics"]["total"] == 2
-        assert data["boxes"] == [mod_def.id]
+        assert data["boxes"] == [
+            "receipt_capture_box",
+            "requirement_capture_box",
+            "business_modeling_box",
+        ]
         # 过滤 mod
         data_mod = dashboard_data(store, box_filter=mod_def.id)
         assert data_mod["metrics"]["total"] == 2
@@ -169,9 +174,18 @@ class TestDashboardData:
         store.append(tr, box_id=mod_def.id, acceptance_status="rejected")
 
         stats = dashboard_data(store)["box_stats"]
-        assert len(stats) == 1
+        # 三只注册盒子都在，哪怕只有 1 只跑过——「没跑过」读成 0 次运行，
+        # 不是读成不存在。未注册的 order_exception_box 不在名单里。
+        assert [s["box_id"] for s in stats] == [
+            "receipt_capture_box",
+            "requirement_capture_box",
+            "business_modeling_box",
+        ]
+        assert all(s["total"] == 0 for s in stats if s["box_id"] != mod_def.id), (
+            "没跑过的盒子也该有统计条目，只是计数为 0"
+        )
 
-        mod_stat = stats[0]
+        mod_stat = next(s for s in stats if s["box_id"] == mod_def.id)
         assert mod_stat["box_id"] == mod_def.id
         assert mod_stat["total"] == 1
         assert mod_stat["accepted"] == 0
@@ -239,7 +253,18 @@ class TestKanbanServer:
         data = json.loads(resp.read())
         # 只展示已注册盒子：2 条 inv 历史记录被隐藏，只剩 1 条 mod
         assert data["metrics"]["total"] == 1
-        assert data["boxes"] == ["business_modeling_box"]
+        # **名单是注册表，不是运行记录**：三只注册盒子全在，哪怕只有 1 只跑过。
+        # 以前这里断言 ["business_modeling_box"]——它把「只显示跑过的盒子」
+        # 也写死了，于是清一次 RUNS 整个看板就空成「没有盒子」。
+        # 「没跑过」该读成 0 次运行，不是读成不存在。
+        # 同层按 box_id 字母序（receipt 与 requirement 都无上游），
+        # business_modeling 有上游所以垫后。传 set 会让这层顺序
+        # 随进程哈希随机化变，所以这里必须是稳定顺序。
+        assert data["boxes"] == [
+            "receipt_capture_box",
+            "requirement_capture_box",
+            "business_modeling_box",
+        ]
         assert data["box_filter"] is None
         conn.close()
 
@@ -694,3 +719,79 @@ class TestStructureApi:
         else:
             assert data["status"] == "completed"
             assert data["acceptance_status"] in ("accepted", "rejected")
+
+
+class TestTheRosterComesFromTheRegistry:
+    """看板列哪些盒子，由注册表说了算，不由运行记录说了算
+
+    以前 `all_boxes = order_boxes_by_flow(store.list_boxes())`，
+    而 `list_boxes()` 返回「跑过过的盒子」。后果是：一只还没跑过的盒子
+    在看板上根本不存在——清一次 RUNS 就能让整个看板空成「没有盒子」。
+
+    「没跑过」该读成 **0 次运行**，不是读成 **不存在**。前者是诚实的读数，
+    后者是谎报，而且没人会注意到。
+    """
+
+    def _fresh_store(self, tmp_path: Path) -> TaskRunStore:
+        return TaskRunStore(path=tmp_path / "empty.jsonl")
+
+    def test_an_empty_store_still_lists_every_registered_box(self, tmp_path: Path):
+        """刚开箱、一条都没跑过的看板，该是「3 只盒子 · 0 次运行」"""
+        from kanban.trigger import BOX_REGISTRY, registered_box_ids
+
+        data = dashboard_data(self._fresh_store(tmp_path))
+        assert set(data["boxes"]) == set(BOX_REGISTRY), (
+            "空 store 下看板列不出全部注册盒子——"
+            "读者会以为这些盒子不存在，而不是没跑过"
+        )
+        assert len(data["box_stats"]) == len(BOX_REGISTRY)
+        assert all(s["total"] == 0 for s in data["box_stats"]), (
+            "没跑过的盒子计数应为 0，不是缺条目"
+        )
+        # 未注册盒子（运营线那只）不进名单，但它的 runner 还在仓库里
+        assert "order_exception_box" not in data["boxes"]
+        assert "order_exception_box" not in registered_box_ids()
+
+    def test_ordering_is_the_same_for_a_set_as_for_a_list(self):
+        """本函数的结果不许依赖调用方传进来的迭代顺序
+
+        以前 `order_boxes_by_flow` 直接用传入顺序分层，而
+        `registered_box_ids()` 返回 set——Python 的字符串哈希按进程
+        随机化，于是同层里哪只盒子排前面会随进程重启而变。看板照常渲染，
+        只是顺序悄悄换了，而且没有任何东西会报错。
+
+        排序收进函数之后，「传 set 还是传 list」不再是调用方的隐含约定。
+        这条在**单进程内**就能确定性地验：同一个 set 和同样内容的 list
+        必须给出同一个答案。以前则会分道扬镳（看 PYTHONHASHSEED）。
+        """
+        from kanban.trigger import order_boxes_by_flow, registered_box_ids
+
+        ids = registered_box_ids()
+        assert not isinstance(ids, (list, tuple)), "前提变了：它现在不是 set 了"
+
+        # **倒序 list 而不是 set**：set 的迭代顺序随进程哈希变，
+        # 用它当对照，测试在某些 PYTHONHASHSEED 下会「碰巧」抓不到回退
+        # （实测 8 个 seed 里只有 4 个红）。倒序 list 一定跟正序不同，
+        # 不管哈希怎么随机化，回退都 100% 被逮住。
+        ascending = sorted(ids)
+        descending = sorted(ids, reverse=True)
+        assert order_boxes_by_flow(descending) == order_boxes_by_flow(ascending), (
+            "结果依赖入参顺序——同层顺序会随调用方怎么传而变"
+        )
+        assert order_boxes_by_flow(ids) == order_boxes_by_flow(ascending), (
+            "传 set 和传同样内容的 list 结果不同"
+        )
+
+    def test_the_names_land_in_flow_order(self):
+        """钉住具体顺序：同层按 box_id 字母序，有上游的垫后
+
+        只测「set == list」不够——那两条完全乱序也会一起变。
+        业务流向（需求捕获 → 业务建模）必须真的体现在顺序里。
+        """
+        from kanban.trigger import order_boxes_by_flow, registered_box_ids
+
+        assert order_boxes_by_flow(registered_box_ids()) == [
+            "receipt_capture_box",          # 无上游 → 同层最前
+            "requirement_capture_box",      # 无上游 → 同层
+            "business_modeling_box",        # 有上游（requirement_capture）→ 垫后
+        ]

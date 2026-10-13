@@ -128,8 +128,15 @@ def order_boxes_by_flow(box_ids: Iterable[str]) -> list[str]:
 
     稳定：同一层内保持传入顺序（Kahn 分层取出，不做字典序重排）。
     兜底：feeds_into 声明成环时不抛错，剩下的按传入顺序收尾——看板不能白屏。
+
+    **入参先 sorted**：本函数的结果不该依赖调用方传进来的迭代顺序。
+    `registered_box_ids()` 返回的是 set，而 Python 的字符串哈希按进程
+    随机化——直接把 set 传进来，同层里哪只盒子排前面会随进程重启而变。
+    后果是看板顺序随机抖动，而且**没有任何东西会报错**：页面照常渲染，
+    只是盒子换了位置。排序收在这里，是为了让「传 set 还是传 list」不再
+    是个调用方得记着的隐含约定。
     """
-    ids = list(box_ids)
+    ids = sorted(box_ids)
     # preds[b] = 哪些盒子把产出投给 b（b 的上游）
     preds: dict[str, set[str]] = {b: set() for b in ids}
     for src in ids:

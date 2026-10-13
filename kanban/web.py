@@ -101,7 +101,15 @@ def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[s
 
     # Boxes（按 filter）
     # 排序按业务流向（feeds_into 声明），不是字母序也不是注册序
-    all_boxes = order_boxes_by_flow(store.list_boxes())
+    #
+    # **名单来自注册表，不来自运行记录**。以前是 `store.list_boxes()`，
+    # 那个函数返回「跑过过的盒子」——于是一只还没跑过的盒子在看板上
+    # 根本不存在。清一次 RUNS 就能让整个看板变空：不是「0 次运行」，
+    # 是「没有盒子」。前者是诚实的读数，后者是谎报。
+    #
+    # 看板要回答的问题是「有哪些盒子可以跑」，那由注册表说了算；
+    # 「跑得怎么样」才是运行记录的事。
+    all_boxes = order_boxes_by_flow(registered_box_ids())
     if box_filter:
         boxes = [b for b in all_boxes if b == box_filter]
     else:

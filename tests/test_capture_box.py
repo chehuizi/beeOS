@@ -199,10 +199,25 @@ class TestBoxFlowOrder:
         b = order_boxes_by_flow(["requirement_capture_box", "business_modeling_box"])
         assert a == b == ["requirement_capture_box", "business_modeling_box"]
 
-    def test_unrelated_boxes_keep_input_order(self):
-        """没有任何 feeds_into 关系时保持传入顺序，不做字典序重排"""
+    def test_unrelated_boxes_keep_a_stable_order(self):
+        """没有 feeds_into 关系时，按 box_id 定序——不是按传入顺序
+
+        **这条的契约变了，方向也变了。** 以前是「同层保持传入顺序，
+        不做字典序重排」；现在改成同层按 box_id 定序。
+
+        为什么改：唯一的调用方 `kanban/web.py` 传的是
+        `registered_box_ids()`，那是个 **set**。Python 的字符串哈希按进程
+        随机化，所以「传入顺序」在那个调用点上根本不存在——它随进程
+        重启而变。看板照常渲染，只是同层盒子换了位置，没有任何东西报错。
+
+        「保持传入顺序」这个承诺对 set 入参是空的，对 list 入参又是个
+        陷阱（谁记得住这个隐含约定？）。倒不如把契约改成一句能验的：
+        **结果只依赖接线，不依赖入参**。同层用 box_id 排，重启不变。
+        """
         from kanban.trigger import order_boxes_by_flow
-        assert order_boxes_by_flow(["z_box", "a_box"]) == ["z_box", "a_box"]
+        assert order_boxes_by_flow(["z_box", "a_box"]) == ["a_box", "z_box"]
+        # 顺序再反过来，答案不变——这才叫「不依赖入参」
+        assert order_boxes_by_flow(["a_box", "z_box"]) == ["a_box", "z_box"]
 
     def test_cycle_does_not_hang_or_raise(self):
         """feeds_into 声明成环时兜底收尾，不能死循环也不能让看板白屏"""

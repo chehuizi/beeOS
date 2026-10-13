@@ -162,8 +162,8 @@ class TestManifest:
         assert m["produces"]["schema"], "ARTIFACTS OUT：产出契约"
         assert m["produces"]["view"], "ARTIFACTS OUT：形态声明"
         assert m["acceptance"], "ACCEPTANCE：判据"
-        assert m["metrics"], "DOMAIN CONTEXT：实测指标"
-        assert "fed_by" not in m or True  # fed_by 走 domain_context，不重复声明
+        assert m["metrics"], "BOX CONTEXT：实测指标"
+        assert "fed_by" not in m or True  # fed_by 走 box_context，不重复声明
 
     def test_manifest_is_json_safe(self):
         """manifest 要能直接当 API 响应体返回——不能夹带 pydantic 对象"""

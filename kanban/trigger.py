@@ -357,7 +357,7 @@ def box_manifest(box_id: str) -> dict[str, Any]:
       beeline→ BEELINE 跑哪条程序（id + 版本 + op 清单）
       result → ARTIFACTS OUT 产出什么（形态 / schema / 字段 / 判据 / 例外）
       acceptance 在 result 里，不另起一节
-      domain_context（含 metrics）→ DOMAIN CONTEXT 底座
+      box_context（含 metrics）→ BOX CONTEXT 底座
 
     为什么要这么一份东西：要把 beeBox 当作可独立提供的 API 单元，
     调用方就得能在**不读源码、不看看板**的前提下知道这只盒子是什么、
@@ -457,11 +457,19 @@ def box_metrics_readings(
     return core_metrics.measure(entry[0](), records, computers, window=window)
 
 
-def box_domain_context(
+def box_context(
     box_id: str,
     records: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
-    """盒子的领域上下文——这只盒子是谁、跟谁接、边界在哪、跑得怎么样
+    """盒子的上下文——这只盒子是谁、跟谁接、边界在哪、跑得怎么样
+
+    **为什么叫 box_context 而不是 domain_context**：`domain` 在这个项目里
+    已经有明确含义了——`core` 的分层守卫把 `domain_service` / `domain_event` /
+    `domain_metric` 列成业务词表（`tests/test_layering.py`），建模盒那边还有
+    一个 `renderDddModel`。叫 domain context 会跟 DDD 的 bounded context 撞车，
+    而这里根本不是领域模型：它就是这只盒子自己的声明。
+    邻居也全是 `box_*`（box_manifest / box_meta / box_metrics_readings），
+    夹个 domain 在中间像个混血。
 
     跟 task run 无关。看板上那四栏（投料 / 流水线 / 验收 / 产出）讲的全是
     「这一次履约发生了什么」，这里讲的是「这只盒子是什么」：它在价值流的哪一段、

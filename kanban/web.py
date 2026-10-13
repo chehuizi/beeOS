@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from kanban.trigger import (
     BOX_REGISTRY,
     TriggerError,
-    box_domain_context,
+    box_context,
     box_manifest,
     box_meta,
     list_task_entries,
@@ -132,7 +132,7 @@ def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[s
             "last_run_at": latest["created_at"] if latest else None,
             "last_run_status": latest["acceptance_status"] if latest else None,
             "task_entries": list_task_entries(b),
-            "domain_context": box_domain_context(b, b_records),
+            "box_context": box_context(b, b_records),
         })
 
     return {
@@ -336,7 +336,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .beebox-nameplate .spec-row .k {{ width: auto; text-align: left; padding-right: 0; }}
   /* ===== 单盒视图：一屏装下整只盒子，不出页面滚动条 =====
      之前 .beebox-body 写死 clamp(380px, 62vh, 560px)。加上 nameplate
-     和 domain context 底座之后总和超过一屏，页面开始滚——而看板的用处
+     和 box context 底座之后总和超过一屏，页面开始滚——而看板的用处
      就是一屏看完这盒子的全貌，滚了就等于把「四栏 + 底座并排对照」
      这个核心读法拆开了。
      改成整页 flex 吃满视口，盒子拿剩下的那份高度；四栏各自内部滚动
@@ -366,7 +366,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
       flex: 1 1 auto; min-height: 0; height: auto; padding: 12px 14px 10px;
     }}
     /* 四栏要能被压扁。grid item 默认不许缩到内容高度以下，不给 min-height:0
-       的话矮屏上内容直接溢出、压到 domain context 底座上。
+       的话矮屏上内容直接溢出、压到 box context 底座上。
        溢出内容由各栏自己收：投料框 / 判据区 / 产出槽本来就是内部滚动。 */
     body.single-box .beebox-body > * {{ min-height: 0; }}
     body.single-box .port, body.single-box .lane, body.single-box .lane-acc {{
@@ -384,7 +384,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
     body.single-box #acc-stage svg {{ max-height: 16vh; }}
     body.single-box .ctx-band {{ flex: 0 0 auto; margin-bottom: 12px; }}
   }}
-  /* ===== DOMAIN CONTEXT：四栏都站在这上面 =====
+  /* ===== BOX CONTEXT：四栏都站在这上面 =====
      它跟四栏不是先后关系，是依赖关系——四栏同时引用它，
      没有哪一栏排在它前面或后面。所以是底座不是第五栏：
      摆成第五个并列项，等于谎称「投料 → 算 → 判 → 出 → 上下文」这条链
@@ -1419,14 +1419,14 @@ const REJECT_LABEL = {{
   structural: '结构 / 引用 / 指标不达标',
 }};
 
-// ===== DOMAIN CONTEXT =====
+// ===== BOX CONTEXT =====
 // 四栏都站在这上面：投料口按消费契约投、op 按契约读写、验收栏按判据判、
 // 产出口按产出契约交。跟四栏是依赖不是先后，所以是底座不是第五栏。
 // 判据不在这里：声明值和实测值都归 ACCEPTANCE 栏，
 // 两处各留一份判据 = 每次改判据要改两个地方。
-function renderDomainContext(boxId, ctx) {{
+function renderBoxContext(boxId, ctx) {{
   if (!ctx) return '';
-  // 上游 / 下游的显示名由后端随 id 一起给（box_domain_context 里的 _hop）：
+  // 上游 / 下游的显示名由后端随 id 一起给（box_context 里的 _hop）：
   // 单盒过滤时前端只有当前这一只盒的名字表，自己补会露出原始 id
   const hops = [
     ...(ctx.fed_by || []).map((h) => `${{esc(h.name)}}<span class="ctx-hop">→</span>`),
@@ -1441,7 +1441,7 @@ function renderDomainContext(boxId, ctx) {{
   const p = ctx.produces || {{}};
   const outFields = (p.fields || []).map(esc).join(' · ');
   return `<div class="ctx-band">
-    <div class="ctx-head">DOMAIN CONTEXT · 领域上下文 — 四栏都站在这上面</div>
+    <div class="ctx-head">BOX CONTEXT · 盒子上下文 — 四栏都站在这上面</div>
     <div class="ctx-cols">
       <div>
         <div class="ctx-k">价值流位置</div>
@@ -1516,9 +1516,9 @@ function buildShell(boxId, box, entries) {{
   // 静态 shell：只建一次——工位图 DOM 不随 2s 刷新重建
   window._taskEntries = {{}};
   // 接力目标：盒子之间的关系声明在后端 BOX_META.feeds_into（业务信息，不在前端硬编码）。
-  // 显示名取 box_domain_context 随 id 一起给的那份——单盒过滤时前端手里只有
+  // 显示名取 box_context 随 id 一起给的那份——单盒过滤时前端手里只有
   // 当前这一只盒的名字表，自己补会直接露出 business_modeling_box 这种原始 id。
-  window._feedsInto = ((box && box.domain_context && box.domain_context.feeds_into) || [])
+  window._feedsInto = ((box && box.box_context && box.box_context.feeds_into) || [])
     .map((h) => ({{ box_id: h.id, display_name: h.name || h.id }}));
   let options = '';
   let ops = [];
@@ -1633,7 +1633,7 @@ function buildShell(boxId, box, entries) {{
           <div class="acc-detail" id="acc-detail"></div>
         </div>
       </div>
-      ${{renderDomainContext(boxId, (box && box.domain_context) || null)}}
+      ${{renderBoxContext(boxId, (box && box.box_context) || null)}}
     </div>
   </div>`;
   onTaskTypeChange();

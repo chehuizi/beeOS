@@ -204,14 +204,25 @@ HTML_PAGE = f"""<!DOCTYPE html>
     color: white; border-color: transparent;
   }}
 
-  /* ===== 3D cube beeBox（CSS 3D 玻璃盒） ===== */
+  /* ===== 3D cube beeBox（CSS 3D 盒） =====
+     尺寸收小：280×190×130 → 176×118×80。
+     280 宽的盒子并排三个时，「盒子」会读成「广告位」。beeBox 是容器，
+     不是版面——小一点反而更像容器。
+
+     立体感不靠尺寸，靠三样东西堆：
+       1. **六个面明暗分层**。以前六个面共用一条近乎全白的渐变，
+          所以立方体看起来是一块玻璃砖而不是六个面。现在按受光分档：
+          顶最亮 → 前面 → 左 → 右（背光）→ 后面/底最暗。
+       2. **实边**。1.4px 饱和边线 + 内阴影，边和面分开才立得住。
+       3. **构造线**（前脸两道缝 + 顶面蜂窝纹）。没有缝的立方体是
+          几何体，有缝的才是「盒子」。蜂窝顺带带一个 bee 的意思。 */
   .boxes-scene {{
-    display: flex; flex-wrap: wrap; gap: 80px;
-    margin-bottom: 32px; padding: 48px 16px 32px;
+    display: flex; flex-wrap: wrap; gap: 56px;
+    margin-bottom: 28px; padding: 44px 16px 28px;
     justify-content: center;
   }}
   .cube-scene {{
-    perspective: 1200px;
+    perspective: 1000px;
     width: var(--cw); height: var(--ch);
     position: relative; flex: 0 0 auto;
   }}
@@ -222,7 +233,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
   }}
   @keyframes cube-float {{
     0%, 100% {{ transform: translateY(0); }}
-    50% {{ transform: translateY(-7px); }}
+    50% {{ transform: translateY(-5px); }}
   }}
   .cube {{
     position: relative; width: 100%; height: 100%;
@@ -231,52 +242,90 @@ HTML_PAGE = f"""<!DOCTYPE html>
   }}
   .cube-face {{
     position: absolute; box-sizing: border-box;
-    border: 1px solid var(--edge);
-    background: linear-gradient(135deg, rgba(255,255,255,0.16), rgba(255,255,255,0.03) 55%, rgba(255,255,255,0.08));
-    box-shadow: inset 0 0 30px rgba(255,255,255,0.05);
+    border: 1.4px solid rgba(var(--edge-rgb), 0.88);
+    /* 内阴影给面一点厚度；没有它，面就是一张纸 */
+    box-shadow: inset 0 -7px 18px rgba(15, 23, 42, 0.10), inset 0 1px 0 rgba(255,255,255,0.6);
   }}
   .cube-front {{
     width: var(--cw); height: var(--ch); left: 0; top: 0;
     transform: translateZ(calc(var(--cd) / 2));
+    /* **底下垫一层近乎不透明的白**：以前六个面全是低透明度的色渐变，
+       于是能透过前脸看见后面三条边线——那是玻璃砖，不是盒子。
+       盒子要读成实心的，面就不能透。 */
+    background:
+      linear-gradient(160deg, rgba(255, 255, 255, 0.97), rgba(255, 255, 255, 0.90)),
+      /* 颜色是这一页的**语义通道**（紫=软件交付 / 青=费用报销），
+         前脸压到近白会把价值流身份洗掉。所以面做到不透明，但主题色
+         留在上面——「实」不等于「白」。 */
+      linear-gradient(160deg,
+        rgba(var(--core-rgb), 0.62), rgba(var(--core-rgb), 0.44) 62%,
+        rgba(var(--core-rgb), 0.54));
   }}
-  /* 玻璃高光斜纹 */
+  /* 前脸只留**一道横缝**：那是箱盖的合口。
+     原来横竖各一道，交叉之后读成窗棂——像玻璃温室，不像货箱。
+     缝的作用是让立方体从「几何体」变成「容器」，一道就够，两道反而画蛇添足。 */
+  .cube-front::before {{
+    content: ''; position: absolute; left: 0; right: 0; top: 24%;
+    height: 1px; background: rgba(var(--edge-rgb), 0.5); pointer-events: none;
+  }}
   .cube-front::after {{
     content: ''; position: absolute; inset: 0; pointer-events: none;
-    background: linear-gradient(115deg, transparent 30%, rgba(255,255,255,0.15) 42%, transparent 55%);
+    background: linear-gradient(118deg, transparent 34%,
+      rgba(255, 255, 255, 0.42) 46%, transparent 58%);
   }}
   .cube-back {{
     width: var(--cw); height: var(--ch); left: 0; top: 0;
     transform: rotateY(180deg) translateZ(calc(var(--cd) / 2));
-    background: linear-gradient(135deg, var(--tint), rgba(255,255,255,0.02));
+    background:
+      linear-gradient(135deg, rgba(255,255,255,0.35), rgba(255,255,255,0.2)),
+      linear-gradient(135deg,
+        rgba(var(--edge-rgb), 0.55), rgba(var(--edge-rgb), 0.78));
   }}
   .cube-left {{
     width: var(--cd); height: var(--ch);
     left: calc((var(--cw) - var(--cd)) / 2); top: 0;
     transform: rotateY(-90deg) translateZ(calc(var(--cw) / 2));
+    background:
+      linear-gradient(135deg, rgba(255,255,255,0.45), rgba(255,255,255,0.26)),
+      linear-gradient(135deg,
+        rgba(var(--core-rgb), 0.50), rgba(var(--core-rgb), 0.64));
   }}
   .cube-right {{
     width: var(--cd); height: var(--ch);
     left: calc((var(--cw) - var(--cd)) / 2); top: 0;
     transform: rotateY(90deg) translateZ(calc(var(--cw) / 2));
-    background: linear-gradient(135deg, var(--tint), rgba(255,255,255,0.03));
+    background:
+      linear-gradient(135deg, rgba(255,255,255,0.28), rgba(255,255,255,0.14)),
+      linear-gradient(135deg,
+        rgba(var(--edge-rgb), 0.58), rgba(var(--edge-rgb), 0.76));
   }}
+  /* 顶面最亮（光从上来），再叠一层极淡的蜂窝纹——
+     bee 就在这个纹路里，不用画只蜜蜂。 */
   .cube-top {{
     width: var(--cw); height: var(--cd);
     left: 0; top: calc((var(--ch) - var(--cd)) / 2);
     transform: rotateX(90deg) translateZ(calc(var(--ch) / 2));
-    background: linear-gradient(135deg, rgba(255,255,255,0.20), var(--tint));
+    background:
+      radial-gradient(circle at 25% 25%, rgba(var(--core-rgb), 0.30) 1.4px, transparent 1.7px),
+      radial-gradient(circle at 75% 75%, rgba(var(--core-rgb), 0.30) 1.4px, transparent 1.7px),
+      linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(255, 255, 255, 0.74)),
+      linear-gradient(135deg, rgba(var(--core-rgb), 0.30), rgba(var(--core-rgb), 0.16));
+    background-size: 20px 17px, 20px 17px, 100% 100%, 100% 100%;
   }}
   .cube-bottom {{
     width: var(--cw); height: var(--cd);
     left: 0; top: calc((var(--ch) - var(--cd)) / 2);
     transform: rotateX(-90deg) translateZ(calc(var(--ch) / 2));
-    background: var(--tint);
+    background:
+      linear-gradient(135deg, rgba(255,255,255,0.12), transparent),
+      linear-gradient(135deg,
+        rgba(var(--edge-rgb), 0.66), rgba(var(--edge-rgb), 0.88));
   }}
-  /* 地面软阴影 */
+  /* 接地阴影：盒子小了就跟着收窄，不然影子比盒子还宽 */
   .cube-shadow {{
-    position: absolute; left: 6%; right: 6%; bottom: -30px; height: 30px;
-    background: radial-gradient(ellipse at center, rgba(15,23,42,0.22), transparent 70%);
-    filter: blur(4px); pointer-events: none;
+    position: absolute; left: 12%; right: 12%; bottom: -20px; height: 20px;
+    background: radial-gradient(ellipse at center, rgba(15,23,42,0.26), transparent 72%);
+    filter: blur(3px); pointer-events: none;
   }}
   /* 2D 履约盒舞台 */
   #box2d-stage {{
@@ -868,14 +917,17 @@ function renderFilters(boxes, current) {{
 }}
 
 // 价值流 → 配色（归属数据来自服务端 box.meta，声明式，不再按 box_id 关键词猜测）
+// 两条 rgb，不是四条 rgba：面和面之间的明暗差要能**算**出来，
+// 不然六个面共用一个透明度，立方体就读成一块玻璃砖而不是六个面。
+// core = 主题色（受光面），edge = 同色系更深一档（背光面 + 边线）。
 const VS_PALETTE = {{
-  'Software Delivery': ['rgba(124,58,237,0.10)', 'rgba(124,58,237,0.40)'],
-  'Order Fulfillment': ['rgba(59,130,246,0.10)', 'rgba(37,99,235,0.40)'],
-  'Expense Reimbursement': ['rgba(13,148,136,0.10)', 'rgba(13,148,136,0.40)'],
+  'Software Delivery': {{ core: '124,58,237', edge: '91,33,182' }},
+  'Order Fulfillment': {{ core: '59,130,246', edge: '30,64,175' }},
+  'Expense Reimbursement': {{ core: '13,148,136', edge: '15,118,110' }},
 }};
 
 function vsPalette(box) {{
-  return VS_PALETTE[(box.meta || {{}}).value_stream] || ['rgba(59,130,246,0.10)', 'rgba(37,99,235,0.40)'];
+  return VS_PALETTE[(box.meta || {{}}).value_stream] || VS_PALETTE['Order Fulfillment'];
 }}
 
 function healthOf(box) {{
@@ -1080,13 +1132,15 @@ function initAccGate(container) {{
 
 function renderCube(box) {{
   // CSS 3D 玻璃履约盒（仅用于多盒总览的小盒；单盒聚焦视图是 2D 流水线）
-  const [tint, edge] = vsPalette(box);
-  const tilt = _boxState.tilt || {{ rx: -12, ry: -16 }};
+  const {{ core, edge }} = vsPalette(box);
+  // 默认角度比以前大（-14 / -24）。立体感靠角度露侧面，
+  // 角度给小了立方体就是一张正方形的纸。
+  const tilt = _boxState.tilt || {{ rx: -14, ry: -24 }};
 
   return `<div>
-    <div class="cube-scene" style="--cw:280px;--ch:190px;--cd:130px;">
+    <div class="cube-scene" style="--cw:176px;--ch:118px;--cd:80px;">
       <div class="cube-float">
-        <div class="cube" style="--tint:${{tint}};--edge:${{edge}};transform:rotateX(${{tilt.rx}}deg) rotateY(${{tilt.ry}}deg)">
+        <div class="cube" style="--core-rgb:${{core}};--edge-rgb:${{edge}};transform:rotateX(${{tilt.rx}}deg) rotateY(${{tilt.ry}}deg)">
           <div class="cube-face cube-back"></div>
           <div class="cube-face cube-left"></div>
           <div class="cube-face cube-right"></div>
@@ -1109,14 +1163,14 @@ function bindTilt() {{
     const r = scene.getBoundingClientRect();
     const dx = (e.clientX - r.left) / r.width - 0.5;
     const dy = (e.clientY - r.top) / r.height - 0.5;
-    _boxState.tilt = {{ rx: Math.round(-12 - dy * 10), ry: Math.round(-16 + dx * 14) }};
+    _boxState.tilt = {{ rx: Math.round(-14 - dy * 12), ry: Math.round(-24 + dx * 18) }};
     const cube = scene.querySelector('.cube');
     if (cube) cube.style.transform = `rotateX(${{_boxState.tilt.rx}}deg) rotateY(${{_boxState.tilt.ry}}deg)`;
   }});
   scene.addEventListener('mouseleave', () => {{
-    _boxState.tilt = {{ rx: -12, ry: -16 }};
+    _boxState.tilt = {{ rx: -14, ry: -24 }};
     const cube = scene.querySelector('.cube');
-    if (cube) cube.style.transform = 'rotateX(-12deg) rotateY(-16deg)';
+    if (cube) cube.style.transform = 'rotateX(-14deg) rotateY(-24deg)';
   }});
 }}
 

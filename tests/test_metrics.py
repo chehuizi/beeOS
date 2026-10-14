@@ -30,7 +30,7 @@ from tests.conftest import stub_compliant_llm
 
 
 CAPTURE = "requirement_capture_box"
-MODELING = "business_modeling_box"
+MODELING = "wms_modeling_box"
 
 NARRATIVE = (
     "wms的流程有入库流程、出库流程、盘点流程。\n"

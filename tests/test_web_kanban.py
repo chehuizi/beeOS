@@ -134,7 +134,7 @@ class TestDashboardData:
         assert data["boxes"] == [
             "receipt_capture_box",
             "requirement_capture_box",
-            "business_modeling_box",
+            "wms_modeling_box",
         ]
         # 过滤 mod
         data_mod = dashboard_data(store, box_filter=mod_def.id)
@@ -179,7 +179,7 @@ class TestDashboardData:
         assert [s["box_id"] for s in stats] == [
             "receipt_capture_box",
             "requirement_capture_box",
-            "business_modeling_box",
+            "wms_modeling_box",
         ]
         assert all(s["total"] == 0 for s in stats if s["box_id"] != mod_def.id), (
             "没跑过的盒子也该有统计条目，只是计数为 0"
@@ -254,16 +254,16 @@ class TestKanbanServer:
         # 只展示已注册盒子：2 条 inv 历史记录被隐藏，只剩 1 条 mod
         assert data["metrics"]["total"] == 1
         # **名单是注册表，不是运行记录**：三只注册盒子全在，哪怕只有 1 只跑过。
-        # 以前这里断言 ["business_modeling_box"]——它把「只显示跑过的盒子」
+        # 以前这里断言 ["wms_modeling_box"]——它把「只显示跑过的盒子」
         # 也写死了，于是清一次 RUNS 整个看板就空成「没有盒子」。
         # 「没跑过」该读成 0 次运行，不是读成不存在。
         # 同层按 box_id 字母序（receipt 与 requirement 都无上游），
-        # business_modeling 有上游所以垫后。传 set 会让这层顺序
+        # wms_modeling 有上游所以垫后。传 set 会让这层顺序
         # 随进程哈希随机化变，所以这里必须是稳定顺序。
         assert data["boxes"] == [
             "receipt_capture_box",
             "requirement_capture_box",
-            "business_modeling_box",
+            "wms_modeling_box",
         ]
         assert data["box_filter"] is None
         conn.close()
@@ -458,11 +458,11 @@ class TestKanbanServer:
         上游从别人的 feeds_into 反推，不另写一遍。"""
         url, _ = server_url
         conn = HTTPConnection(url.replace("http://", ""))
-        conn.request("GET", "/api/data?box=business_modeling_box")
+        conn.request("GET", "/api/data?box=wms_modeling_box")
         body = json.loads(conn.getresponse().read().decode("utf-8"))
         conn.close()
         ctx = body["box_stats"][0]["box_context"]
-        assert ctx["self_name"] == "Business Modeling Box"
+        assert ctx["self_name"] == "WMS Modeling Box"
         # 上游 = 声明了 feeds_into 包含本盒的那只盒
         assert [h["id"] for h in ctx["fed_by"]] == ["requirement_capture_box"]
         # 上游名字必须跟着 id 出，不能让前端自己补——单盒过滤时它只有一只盒的名字表
@@ -498,14 +498,19 @@ class TestTriggerApi:
         url, store = server_url
         before = len(store._cache)
         status, data = self._post(url, {
-            "box_id": "business_modeling_box",
+            "box_id": "wms_modeling_box",
             "task_type": "handle_modeling_request",
             "payload": {
                 "set_id": "req_api_1",
-                "business_goal": "建模退款流程",
+                "business_goal": "把入库上架和拣货出库管清楚",
+                # description 是真 WMS 需求。以前这里是 "x" 和「建模退款流程」——
+                # 现在盒子只服务 WMS 域，喂非 WMS 需求被 wms_binding 打回是对的，
+                # 而这条测试要验的是「有效触发 → accepted」，所以得给真需求。
                 "requirements": [
-                    {"requirement_id": "r_obj", "description": "x", "requirement_type": "object", "priority": "must_have"},
-                    {"requirement_id": "r_met", "description": "x", "requirement_type": "metric", "priority": "must_have"},
+                    {"requirement_id": "r_obj", "description": "库存按 SKU 和库位记账",
+                     "requirement_type": "object", "priority": "must_have"},
+                    {"requirement_id": "r_met", "description": "拣货准确率要达到 99.5%",
+                     "requirement_type": "metric", "priority": "must_have"},
                 ],
             },
         })
@@ -533,7 +538,7 @@ class TestTriggerApi:
         """履约完成但验收失败（无 metric 需求）→ completed + rejected"""
         url, _ = server_url
         status, data = self._post(url, {
-            "box_id": "business_modeling_box",
+            "box_id": "wms_modeling_box",
             "task_type": "handle_modeling_request",
             "payload": {
                 "set_id": "req_api_2",
@@ -569,7 +574,7 @@ class TestTriggerApi:
     def test_unknown_task_type_400(self, server_url: tuple[str, TaskRunStore]):
         url, _ = server_url
         status, data = self._post(url, {
-            "box_id": "business_modeling_box",
+            "box_id": "wms_modeling_box",
             "task_type": "handle_unknown_task",
             "payload": {},
         })
@@ -584,7 +589,7 @@ class TestTriggerApi:
 
     def test_missing_fields_400(self, server_url: tuple[str, TaskRunStore]):
         url, _ = server_url
-        status, data = self._post(url, {"box_id": "business_modeling_box"})
+        status, data = self._post(url, {"box_id": "wms_modeling_box"})
         assert status == 400
         assert "error" in data
 
@@ -594,7 +599,7 @@ class TestTriggerApi:
         mod_def = get_mod_def()
         tr = create_task_run(
             "pm", "i", mod_def.result.result_schema, f"{mod_def.id}@v{mod_def.version}",
-            "beeline_business_modeling_v1", 1, "rt", "in",
+            "beeline_wms_modeling_v1", 1, "rt", "in",
         )
         store.append(tr, box_id=mod_def.id, acceptance_status="accepted")
 
@@ -701,7 +706,7 @@ class TestStructureApi:
         conn.request(
             "POST", "/api/trigger",
             body=json.dumps({
-                "box_id": "business_modeling_box",
+                "box_id": "wms_modeling_box",
                 "task_type": "handle_modeling_request",
                 "payload": structured["payload"],
             }).encode("utf-8"),
@@ -793,5 +798,5 @@ class TestTheRosterComesFromTheRegistry:
         assert order_boxes_by_flow(registered_box_ids()) == [
             "receipt_capture_box",          # 无上游 → 同层最前
             "requirement_capture_box",      # 无上游 → 同层
-            "business_modeling_box",        # 有上游（requirement_capture）→ 垫后
+            "wms_modeling_box",        # 有上游（requirement_capture）→ 垫后
         ]

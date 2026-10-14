@@ -35,7 +35,7 @@ KANBAN_DIR = REPO / "kanban"
 
 
 CAPTURE = "requirement_capture_box"
-MODELING = "business_modeling_box"
+MODELING = "wms_modeling_box"
 RECEIPT = "receipt_capture_box"
 
 # 契约测试遍历注册表，而不是手抄盒子名单。

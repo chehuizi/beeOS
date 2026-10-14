@@ -23,6 +23,13 @@ boxes.modeling.schemas - 业务建模盒子的业务 schemas
 
 from __future__ import annotations
 
+from boxes.modeling.domain import (
+    WMS_CONSTRAINT_KINDS,
+    WMS_ENTITY_KINDS,
+    WMS_METRIC_KEYWORDS,
+)
+
+WMS_METRIC_KINDS: tuple[str, ...] = tuple(WMS_METRIC_KEYWORDS)
 from core.models import FieldDef, SchemaDef
 
 
@@ -175,6 +182,15 @@ MODEL_ELEMENTS = SchemaDef(
                     FieldDef(name="entity_id", type="string"),
                     FieldDef(name="name", type="string"),
                     FieldDef(name="pattern", type="enum", values=list(MODEL_PATTERNS)),  # entity
+                    # **这个盒子是 WMS 建模盒**：实体必须说得出自己是 WMS 的
+                    # 哪个概念。说不出（null）就不算 WMS 模型的一分子。
+                    FieldDef(
+                        name="wms_kind",
+                        type="enum",
+                        values=list(WMS_ENTITY_KINDS) + [None],
+                        required=False,
+                        description="WMS 领域实体类型；认不出填 null（会被 wms_binding 判红）",
+                    ),
                     FieldDef(name="trace_to", type="string"),  # 关联 requirement_id
                 ],
             ),
@@ -189,6 +205,13 @@ MODEL_ELEMENTS = SchemaDef(
                     FieldDef(name="event_id", type="string"),
                     FieldDef(name="name", type="string"),
                     FieldDef(name="pattern", type="enum", values=list(MODEL_PATTERNS)),  # domain_event
+                    FieldDef(
+                        name="wms_kind",
+                        type="enum",
+                        values=list(WMS_ENTITY_KINDS) + [None],
+                        required=False,
+                        description="这个事件在 WMS 里是哪个概念的变动；认不出填 null",
+                    ),
                     FieldDef(name="trace_to", type="string"),
                 ],
             ),
@@ -205,6 +228,16 @@ MODEL_ELEMENTS = SchemaDef(
                     FieldDef(name="condition", type="string"),
                     FieldDef(name="action", type="string"),
                     FieldDef(name="pattern", type="enum", values=list(MODEL_PATTERNS)),  # specification
+                    # 「当库存 > 0 时…」是通用规则；「同一 SKU 同库位不可重复
+                    # 占用」才是 WMS 规则。声明了约束的才算数——这条差别
+                    # wms_rule_binding 判据能数得出来。
+                    FieldDef(
+                        name="wms_constraint",
+                        type="enum",
+                        values=list(WMS_CONSTRAINT_KINDS) + [None],
+                        required=False,
+                        description="约束的 WMS 业务类型；不是 WMS 约束填 null",
+                    ),
                     FieldDef(name="trace_to", type="string"),
                 ],
             ),
@@ -219,6 +252,13 @@ MODEL_ELEMENTS = SchemaDef(
                     FieldDef(name="process_id", type="string"),
                     FieldDef(name="name", type="string"),
                     FieldDef(name="pattern", type="enum", values=list(MODEL_PATTERNS)),  # domain_service
+                    FieldDef(
+                        name="wms_kind",
+                        type="enum",
+                        values=list(WMS_ENTITY_KINDS) + [None],
+                        required=False,
+                        description="这条流程动的 WMS 概念；不是 WMS 流程填 null",
+                    ),
                     FieldDef(name="trace_to", type="string"),
                 ],
             ),
@@ -234,6 +274,16 @@ MODEL_ELEMENTS = SchemaDef(
                     FieldDef(name="name", type="string"),
                     FieldDef(name="target", type="number"),
                     FieldDef(name="pattern", type="enum", values=list(MODEL_PATTERNS)),  # domain_metric（扩展元素）
+                    # 指标型需求也得能声明它是哪个 WMS 指标——
+                    # 「拣货准确率 99.5%」是条 metric 类型的需求，
+                    # 只因为类型不是 object 就判它「没绑上 WMS」是判据在犯病
+                    FieldDef(
+                        name="wms_kind",
+                        type="enum",
+                        values=list(WMS_METRIC_KINDS),
+                        required=False,
+                        description="WMS 指标名；不是 WMS 指标填 null",
+                    ),
                     FieldDef(name="trace_to", type="string"),
                 ],
             ),
@@ -268,6 +318,16 @@ MODEL_EVIDENCE = SchemaDef(
                 FieldDef(name="broken_references", type="array", items=FieldDef(name="b", type="string")),
                 FieldDef(name="structure_violations", type="array", items=FieldDef(name="v", type="string")),
                 FieldDef(name="metrics_without_target", type="array", items=FieldDef(name="m", type="string")),
+                # WMS 判据的明细：不点名字，读者只知道「红了」，不知道红在哪
+                FieldDef(
+                    name="requirements_without_wms_binding",
+                    type="array",
+                    items=FieldDef(name="r", type="string"),
+                ),
+                FieldDef(
+                    name="unbound_requirements",
+                    type="array",
+                    items=FieldDef(name="r", type="string")),
             ],
         ),
     ],
@@ -300,6 +360,60 @@ BUSINESS_MODEL_PACKAGE = SchemaDef(
         FieldDef(name="reference_integrity", type="boolean"),
         FieldDef(name="structural_compliance", type="boolean"),
         FieldDef(name="metrics_defined", type="boolean"),
+        # ---- WMS 域专属的 2 条判据 ----
+        # 前 5 条验的是「模型自洽」——需求覆盖率、引用完整性、结构齐不齐。
+        # 这两条验的是「**这是不是一个 WMS 模型**」：需求有没有落到 WMS
+        # 概念上，规则有没有约束 WMS 业务。少了这两条，一个纯通用的
+        # 「当库存 > 0 时……」模型照样全绿，而盒子挂着 WMS 的招牌。
+        FieldDef(name="wms_binding", type="boolean"),
+        FieldDef(name="wms_rule_binding", type="boolean"),
+        # WMS 域摘要：模型里出现了哪些 WMS 概念、各自绑到哪些需求。
+        # 不带出来的后果是「算了却看不见」——judge 判了红，读者看不到红在哪。
+        FieldDef(
+            name="wms_domain",
+            type="object",
+            properties=[
+                FieldDef(name="domain", type="string"),
+                FieldDef(
+                    name="entities",
+                    type="array",
+                    items=FieldDef(
+                        name="e",
+                        type="object",
+                        properties=[
+                            FieldDef(name="kind", type="string"),
+                            FieldDef(name="label", type="string"),
+                            FieldDef(name="name", type="string"),
+                            FieldDef(name="trace_to", type="string"),
+                        ],
+                    ),
+                ),
+                FieldDef(
+                    name="constraints",
+                    type="array",
+                    items=FieldDef(
+                        name="c",
+                        type="object",
+                        properties=[
+                            FieldDef(name="kind", type="string"),
+                            FieldDef(name="label", type="string"),
+                            FieldDef(name="statement", type="string"),
+                            FieldDef(name="trace_to", type="string"),
+                        ],
+                    ),
+                ),
+                FieldDef(
+                    name="bound_requirement_count",
+                    type="integer",
+                    description="绑到至少一个 WMS 概念的需求数",
+                ),
+                FieldDef(
+                    name="modelable_requirement_count",
+                    type="integer",
+                    description="可建模需求总数（分母）",
+                ),
+            ],
+        ),
     ],
 )
 

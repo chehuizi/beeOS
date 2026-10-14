@@ -55,7 +55,7 @@ REQUIREMENT_CAPTURE_BOX = BeeBoxDefinition(
         # 接线只写「投给谁」。「谁投给我」由注册表反推——
         # 两侧各写一遍的话，这边改了那边忘了，那只盒子
         # 的上游就悄悄空了，而没有任何东西会报错。
-        feeds_into=["business_modeling_box"],
+        feeds_into=["wms_modeling_box"],
     ),
 
     task=[

@@ -53,9 +53,9 @@ BOX_REGISTRY: dict[
         get_capture_definition,
         {"beeline_requirement_capture_v1": get_requirement_capture_beeline},
     ),
-    "business_modeling_box": (
+    "wms_modeling_box": (
         get_mod_definition,
-        {"beeline_business_modeling_v1": get_modeling_beeline},
+        {"beeline_wms_modeling_v1": get_modeling_beeline},
     ),
     "receipt_capture_box": (
         get_receipt_definition,
@@ -68,7 +68,7 @@ BOX_REGISTRY: dict[
 # 否则 definition.metrics 里声明的指标在看板上是拿不到的数字。
 METRIC_COMPUTERS: dict[str, dict[str, core_metrics.Computer]] = {
     "requirement_capture_box": CAPTURE_COMPUTERS,
-    "business_modeling_box": MODELING_COMPUTERS,
+    "wms_modeling_box": MODELING_COMPUTERS,
     "receipt_capture_box": RECEIPT_COMPUTERS,
 }
 
@@ -78,7 +78,7 @@ METRIC_COMPUTERS: dict[str, dict[str, core_metrics.Computer]] = {
 # 内核（runtime/executor.py）只认分派协议，不认识任何一只盒子的 op。
 RUNNER_REGISTRY: dict[str, HandlerRunner] = {
     "requirement_capture_box": CAPTURE_RUNNER,
-    "business_modeling_box": MODELING_RUNNER,
+    "wms_modeling_box": MODELING_RUNNER,
     # 运营线盒子未注册进 BOX_REGISTRY（看板不显示、trigger 不接收），
     # 代码保留在仓库里，恢复时把它一起挂回 BOX_REGISTRY 即可
     "inventory_shortage": INVENTORY_RUNNER,
@@ -123,7 +123,7 @@ def order_boxes_by_flow(box_ids: Iterable[str]) -> list[str]:
 
     顺序从各盒 definition.placement.feeds_into 推导，
     不按 box_id 字母序也不按注册顺序。
-    字母序会把 business_modeling_box 排在 requirement_capture_box 前面，
+    字母序会把 wms_modeling_box 排在 requirement_capture_box 前面，
     而实际流程正好相反；注册顺序则只是开发历史的偶然（谁先加谁在前）。
 
     稳定：同一层内保持传入顺序（Kahn 分层取出，不做字典序重排）。
@@ -190,7 +190,7 @@ def _sample_field(field: FieldDef) -> Any:
 
 # 手写示例（演示效果优于 schema 骨架）；缺省回退到 schema 生成
 _EXAMPLE_PAYLOADS: dict[tuple[str, str], dict[str, Any]] = {
-    ("business_modeling_box", "handle_modeling_request"): {
+    ("wms_modeling_box", "handle_modeling_request"): {
         "set_id": "req_set_demo",
         "business_goal": "建模订单退款流程",
         "requirements": [

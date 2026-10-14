@@ -119,7 +119,7 @@ class TestPayloadKind:
 
     def test_modeling_is_json(self):
         """requirements 是嵌套数组 → 保持 JSON 编辑器"""
-        assert list_task_entries("business_modeling_box")[0]["payload_kind"] == "json"
+        assert list_task_entries("wms_modeling_box")[0]["payload_kind"] == "json"
 
     def test_kind_follows_schema_shape(self):
         from kanban.trigger import _payload_kind
@@ -161,11 +161,11 @@ class TestFeedInto:
 
     def test_capture_feeds_modeling(self):
         from kanban.trigger import box_meta
-        assert box_meta("requirement_capture_box")["feeds_into"] == ["business_modeling_box"]
+        assert box_meta("requirement_capture_box")["feeds_into"] == ["wms_modeling_box"]
 
     def test_modeling_has_no_downstream(self):
         from kanban.trigger import box_meta
-        assert box_meta("business_modeling_box")["feeds_into"] == []
+        assert box_meta("wms_modeling_box")["feeds_into"] == []
 
     def test_feeds_into_targets_are_registered(self):
         """声明的下游必须是真盒子，否则接力按钮点了没地方去"""
@@ -183,21 +183,21 @@ class TestFeedInto:
 class TestBoxFlowOrder:
     """看板盒子的先后由 feeds_into 声明决定
 
-    字母序会把 business_modeling_box 排在 requirement_capture_box 前面，
+    字母序会把 wms_modeling_box 排在 requirement_capture_box 前面，
     跟实际流程（先捕获需求再建模）正好反，必须按流向排。
     """
 
     def test_capture_comes_before_modeling(self):
         from kanban.trigger import order_boxes_by_flow
-        out = order_boxes_by_flow(["business_modeling_box", "requirement_capture_box"])
-        assert out.index("requirement_capture_box") < out.index("business_modeling_box")
+        out = order_boxes_by_flow(["wms_modeling_box", "requirement_capture_box"])
+        assert out.index("requirement_capture_box") < out.index("wms_modeling_box")
 
     def test_order_independent_of_input_order(self):
         """输入顺序不该影响结果（list_boxes 给的是字母序）"""
         from kanban.trigger import order_boxes_by_flow
-        a = order_boxes_by_flow(["business_modeling_box", "requirement_capture_box"])
-        b = order_boxes_by_flow(["requirement_capture_box", "business_modeling_box"])
-        assert a == b == ["requirement_capture_box", "business_modeling_box"]
+        a = order_boxes_by_flow(["wms_modeling_box", "requirement_capture_box"])
+        b = order_boxes_by_flow(["requirement_capture_box", "wms_modeling_box"])
+        assert a == b == ["requirement_capture_box", "wms_modeling_box"]
 
     def test_unrelated_boxes_keep_a_stable_order(self):
         """没有 feeds_into 关系时，按 box_id 定序——不是按传入顺序
@@ -229,7 +229,7 @@ class TestBoxFlowOrder:
     def test_empty_and_single(self):
         from kanban.trigger import order_boxes_by_flow
         assert order_boxes_by_flow([]) == []
-        assert order_boxes_by_flow(["business_modeling_box"]) == ["business_modeling_box"]
+        assert order_boxes_by_flow(["wms_modeling_box"]) == ["wms_modeling_box"]
 
     def test_web_api_boxes_are_in_flow_order(self):
         """看板 API 返回的 boxes 必须是流向序，不是字母序"""
@@ -251,7 +251,7 @@ class TestBoxFlowOrder:
                 store.append(tr, box_id=box.id)
             data = web_mod.dashboard_data(store, box_filter=None)
             boxes = data["boxes"]
-            assert boxes.index("requirement_capture_box") < boxes.index("business_modeling_box")
+            assert boxes.index("requirement_capture_box") < boxes.index("wms_modeling_box")
 
 
 # ============================================================
@@ -330,7 +330,7 @@ class TestCaptureEndToEnd:
         )
         pkg = cap["result"]
         mod = trigger_task(
-            "business_modeling_box", "handle_modeling_request",
+            "wms_modeling_box", "handle_modeling_request",
             {k: pkg[k] for k in ("set_id", "business_goal", "context", "requirements")},
             store,
         )

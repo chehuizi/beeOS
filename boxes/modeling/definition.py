@@ -35,20 +35,30 @@ from core.models import (
 from boxes.modeling.schemas import ALL_SCHEMAS
 
 
-BUSINESS_MODELING_BOX = BeeBoxDefinition(
-    id="business_modeling_box",
-    version=1,
+WMS_MODELING_BOX = BeeBoxDefinition(
+    id="wms_modeling_box",
+    version=2,
     description=(
-        "业务建模履约盒——按结构化业务需求产出可机械验证的业务模型包，"
-        "包含模型元素（实体 / 规则 / 流程 / 指标）和 5 项验证证据"
+        "WMS 仓储建模履约盒——按结构化仓储需求产出可机械验证的 WMS 模型包："
+        "WMS 领域实体（SKU / 货主 / 库位 / 库存 / 批次 / 波次 / 盘点）、"
+        "WMS 业务约束（库位占用唯一 / 先进先出 / 安全库存 / 波次合并…）、"
+        "WMS 运营指标，以及 7 项验证证据。\n\n"
+        "**7 条判据里有 2 条是 WMS 专属的**（wms_binding / wms_rule_binding）："
+        "前 5 条验「模型自洽」，这两条验「**这是不是一个 WMS 模型**」。"
+        "少了它们，一个纯通用的「当库存 > 0 时…」照样五分之五全绿，"
+        "而盒子挂着 WMS 的招牌。\n\n"
+        "**已知盲区（如实声明）**：WMS 绑定是关键词机械匹配，认不出同义改写"
+        "（「拣货」/「按订单取货」/「order picking」认作三个词）。"
+        "认不出的需求会被 wms_binding 判红并点名，不会静默放过——"
+        "宁可红，不要假装绑上了。"
     ),
 
     schemas=ALL_SCHEMAS,
 
     placement=PlacementDef(
-        display_name="Business Modeling Box",
-        value_stream="Software Delivery",
-        role="Business Modeling Fulfillment",
+        display_name="WMS Modeling Box",
+        value_stream="Warehouse Management",
+        role="WMS Domain Modeling Fulfillment",
         feeds_into=[],
     ),
 
@@ -56,12 +66,13 @@ BUSINESS_MODELING_BOX = BeeBoxDefinition(
         TaskDef(
             type="handle_modeling_request",
             task_schema="schema_business_requirement_set",
-            beeline_id="beeline_business_modeling_v1",
+            beeline_id="beeline_wms_modeling_v1",
             beeline_version=1,
             trigger=(
-                "产品经理提交结构化业务需求集\n"
-                "OR 业务方要求重新建模\n"
-                "OR 已有模型需要扩展新需求"
+                "仓储主管提交结构化 WMS 需求集（上架 / 拣货 / 盘点 / 波次合并）\n"
+                "OR 货主要求重新出 WMS 模型\n"
+                "OR 已有 WMS 模型要扩展新需求\n"
+                "OR 仓库换库位策略要重算模型"
             ),
         ),
     ],
@@ -96,6 +107,25 @@ BUSINESS_MODELING_BOX = BeeBoxDefinition(
                 op="eq",
                 value=True,
             ),
+            # ---- WMS 域专属 ----
+            #
+            # 这两条验的不是「模型自洽」，是「**这是不是一个 WMS 模型**」。
+            # 口径：分母是可建模需求，**要求 100% 落到 WMS 概念上**。
+            #
+            # 为什么卡 100 而不是「≥80% 算过」：这个盒子只服务 WMS 域，
+            # 混进来的非 WMS 需求说明**投料错了**，不是「质量差一点」。
+            # 判红的证据里会点名是哪几条（requirements_without_wms_binding），
+            # 踢出去就行——比悄悄放过一条「用户登录要密码」强。
+            AcceptanceRule(
+                metric="wms_binding",
+                op="eq",
+                value=True,
+            ),
+            AcceptanceRule(
+                metric="wms_rule_binding",
+                op="eq",
+                value=True,
+            ),
         ],
         exceptions=[
             ExceptionRule(
@@ -109,6 +139,14 @@ BUSINESS_MODELING_BOX = BeeBoxDefinition(
             ExceptionRule(
                 condition="business_owner_assigned == false",
                 action="no_deliver",
+            ),
+            # 投料里有非 WMS 需求：不是「建模失败」，是**投料错了**。
+            # 送回去让业务方重新给需求，别拿通用需求硬凑一个 WMS 模型。
+            ExceptionRule(
+                condition="requirements_without_wms_binding > 0",
+                # action 只有 escalate / rollback / no_deliver 三个值，
+                # 没有「退回去改投料」。投料不对就是 escalate——送人。
+                action="escalate",
             ),
         ],
     ),
@@ -191,4 +229,4 @@ BUSINESS_MODELING_BOX = BeeBoxDefinition(
 
 def get_definition() -> BeeBoxDefinition:
     """返回业务建模履约盒 Definition"""
-    return BUSINESS_MODELING_BOX
+    return WMS_MODELING_BOX

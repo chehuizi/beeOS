@@ -8,13 +8,16 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
-from boxes.modeling import BUSINESS_MODELING_BOX, get_definition
+from boxes.modeling import WMS_MODELING_BOX, get_definition
 from boxes.modeling.runner import RUNNER as MODELING_RUNNER
 from boxes.modeling.measure import COMPUTERS as MODEL_COMPUTERS
 from boxes.modeling.schemas import REQUIREMENT_TYPES
-from beelines.modeling import BUSINESS_MODELING_BEELINE, get_beeline
+from beelines.modeling import WMS_MODELING_BEELINE, get_beeline
 from beelines import get_inventory_shortage_beeline
 from core import metrics as m
 from runtime import (
@@ -33,18 +36,45 @@ from runtime.contract import validate_payload
 
 
 def _sample_requirement_set() -> dict:
-    """示例业务需求集"""
+    """示例 WMS 需求集
+
+    原来是**退款域**的需求（「订单实体 / 退款必须在 7 天内」）。
+    盒子变成 WMS 建模盒之后，那套语料就该被 wms_binding 打回——
+    「退款必须在 7 天内」跟仓储一点关系都没有，拿它当「应该通过」的样本
+    等于教这个盒子在不属于自己的域里说通过。
+
+    换成真 WMS 需求：每一条都能落到一个 WMS 概念上。
+    """
     return {
-        "set_id": "req_set_001",
-        "business_goal": "建模订单退款流程",
+        "set_id": "wms_req_set_001",
+        "business_goal": "把入库上架和拣货出库管清楚",
         "requirements": [
-            {"requirement_id": "req_obj_1", "description": "订单实体", "requirement_type": "object", "priority": "must_have"},
-            {"requirement_id": "req_obj_2", "description": "退款实体", "requirement_type": "object", "priority": "must_have"},
-            {"requirement_id": "req_rule_3", "description": "退款必须在 7 天内", "requirement_type": "rule", "priority": "must_have"},
-            {"requirement_id": "req_proc_5", "description": "退款申请流程", "requirement_type": "process", "priority": "must_have"},
-            {"requirement_id": "req_metric_7", "description": "退款处理时长", "requirement_type": "metric", "priority": "should_have"},
+            {"requirement_id": "req_obj_1", "description": "库存记录要按 SKU 和库位分别记账",
+             "requirement_type": "object", "priority": "must_have"},
+            {"requirement_id": "req_obj_2", "description": "批次要记录生产日期和失效日期",
+             "requirement_type": "object", "priority": "must_have"},
+            {"requirement_id": "req_rule_3", "description": "同一 SKU 在同一库位不可重复占用",
+             "requirement_type": "rule", "priority": "must_have"},
+            {"requirement_id": "req_proc_5", "description": "收货后按库位策略上架",
+             "requirement_type": "process", "priority": "must_have"},
+            {"requirement_id": "req_metric_7", "description": "拣货准确率要达到 99.5%",
+             "requirement_type": "metric", "priority": "should_have"},
         ],
     }
+
+
+def _off_domain_requirement_set() -> dict:
+    """**故意非 WMS** 的需求集——用来证明 wms_binding 会打回投料错误
+
+    「用户登录要用密码」这种需求混进 WMS 建模盒，说明**投料错了**，
+    不是「建模质量差一点」。该打回，而且要能点名是哪几条。
+    """
+    base = _sample_requirement_set()
+    base = json.loads(json.dumps(base))
+    base["requirements"].append(
+        {"requirement_id": "req_off_1", "description": "用户登录要用密码",
+         "requirement_type": "object", "priority": "must_have"})
+    return base
 
 
 # ============================================================
@@ -55,12 +85,15 @@ def _sample_requirement_set() -> dict:
 class TestModelingBoxDefinition:
     def test_module_exports(self):
         assert callable(get_definition)
-        assert isinstance(BUSINESS_MODELING_BOX, __import__("core.models").models.BeeBoxDefinition)
+        assert isinstance(WMS_MODELING_BOX, __import__("core.models").models.BeeBoxDefinition)
 
     def test_id_and_version(self):
         d = get_definition()
-        assert d.id == "business_modeling_box"
-        assert d.version == 1
+        assert d.id == "wms_modeling_box"
+        # version 2 = 从 business_modeling_box 迁到 wms_modeling_box 那一刀。
+        # 契约变了（多两条 WMS 判据、模型元素多两个 WMS 字段），版本得跟着涨——
+        # 版本号不涨的话，调用方没法区分「同一个盒子的新版本」和「另一个盒子」。
+        assert d.version == 2
 
     def test_schemas_complete(self):
         d = get_definition()
@@ -84,20 +117,26 @@ class TestModelingBoxDefinition:
         # task_schema 必须真实存在
         assert d.get_schema(t.task_schema) is not None
         # beeline 引用
-        assert t.beeline_id == "beeline_business_modeling_v1"
+        assert t.beeline_id == "beeline_wms_modeling_v1"
         assert t.beeline_version == 1
 
     def test_acceptance_all_machine_verifiable(self):
-        """5 条 acceptance 必须是机器可验字段（无主观项）"""
+        """7 条 acceptance 必须是机器可验字段（无主观项）
+
+        **后两条是 WMS 专属的**。前 5 条验「模型自洽」，后 2 条验
+        「**这是不是一个 WMS 模型**」——盒子挂着 WMS 的招牌，
+        就不能只验自洽性。
+        """
         d = get_definition()
         metrics = [a.metric for a in d.result.acceptance]
-        # 5 项 + 全是数值 / 布尔类型（无 narrative）
         assert set(metrics) == {
             "requirement_coverage",
             "rule_consistency",
             "reference_integrity",
             "structural_compliance",
             "metrics_defined",
+            "wms_binding",
+            "wms_rule_binding",
         }
         for a in d.result.acceptance:
             assert a.value in (True, 100, 100.0) or (isinstance(a.value, (int, float)) and a.value >= 100)
@@ -133,8 +172,8 @@ class TestModelingBoxDefinition:
 class TestModelingBeeline:
     def test_module_exports(self):
         assert callable(get_beeline)
-        assert BUSINESS_MODELING_BEELINE.id == "beeline_business_modeling_v1"
-        assert BUSINESS_MODELING_BEELINE.version == 1
+        assert WMS_MODELING_BEELINE.id == "beeline_wms_modeling_v1"
+        assert WMS_MODELING_BEELINE.version == 1
 
     def test_seven_op_linear_chain(self):
         b = get_beeline()
@@ -236,6 +275,8 @@ class TestModelingEndToEnd:
             "reference_integrity",
             "structural_compliance",
             "metrics_defined",
+            "wms_binding",
+            "wms_rule_binding",
         ]
         assert eval_result.failed_rules == []
 
@@ -336,8 +377,20 @@ class TestModelingMockSemantics:
 
     def test_five_types_all_present_accepted(self):
         """五类需求齐全（含 goal）：goal 不计入覆盖率，5 类全覆盖 → ACCEPTED"""
+        # description 必须**每条都含 WMS 概念**。以前这里是 "x"——
+        # 那时盒子是通用的，"x" 无所谓。现在是 WMS 盒，需求讲的是
+        # 仓储本身，「x」既绑不上实体也绑不上规则，wms_binding 会红。
+        WMS_TEXT = {
+            "object": "库存要按 SKU 和库位记账",
+            "rule": "同一 SKU 在同一库位不可重复占用",
+            "process": "收货后按库位策略上架",
+            "metric": "拣货准确率要达到 99.5%",
+            "goal": "把仓储管清楚",
+            "event": "上架完成事件",
+        }
         reqs = [
-            {"requirement_id": f"r_{t}", "description": "x", "requirement_type": t, "priority": "must_have"}
+            {"requirement_id": f"r_{t}", "description": WMS_TEXT[t],
+             "requirement_type": t, "priority": "must_have"}
             for t in ("object", "rule", "process", "metric", "goal")
         ]
         box = get_definition()
@@ -425,15 +478,20 @@ class TestModelingMockSemantics:
         assert task_run.result["business_goal"] == "g"
     def test_event_type_produces_domain_event(self):
         """event 类需求 → 领域事件元素（DDD 战术设计），计入覆盖率；不指派聚合根"""
+        # 需求文案也 WMS 化了：以前是「订单 / 退款已完成 / 时长」——
+        # 那是退款域的语料，盒子变 WMS 之后它就该被 wms_binding 打回。
         task_run = self._run([
-            {"requirement_id": "r_obj", "description": "订单", "requirement_type": "object", "priority": "must_have"},
-            {"requirement_id": "r_evt", "description": "退款已完成", "requirement_type": "event", "priority": "must_have"},
-            {"requirement_id": "r_met", "description": "时长", "requirement_type": "metric", "priority": "must_have"},
+            {"requirement_id": "r_obj", "description": "库存按 SKU 记账", "requirement_type": "object", "priority": "must_have"},
+            {"requirement_id": "r_evt", "description": "上架已完成", "requirement_type": "event", "priority": "must_have"},
+            {"requirement_id": "r_met", "description": "拣货准确率", "requirement_type": "metric", "priority": "must_have"},
         ])
         events = task_run.operations["generate_model_elements"].output["events"]
+        # wms_kind 一并断言：它跟 pattern 是两回事——pattern 说「这是领域
+        # 事件」，wms_kind 说「这是仓储哪个概念的变动」。少了后者，
+        # 事件可以随便叫，盒子就退回通用建模了。
         assert events == [
-            {"event_id": "evt_r_evt", "name": "退款已完成",
-             "pattern": "domain_event", "trace_to": "r_evt"}
+            {"event_id": "evt_r_evt", "name": "上架已完成",
+             "pattern": "domain_event", "wms_kind": "inbound", "trace_to": "r_evt"}
         ]
         assert task_run.result["requirement_coverage"] == 100.0
         model = task_run.result["model_elements"]
@@ -442,3 +500,125 @@ class TestModelingMockSemantics:
         assert "aggregate_roots" not in model
         # object 一律建模为实体
         assert all(e["pattern"] == "entity" for e in model["entities"])
+
+
+class TestWmsDomainIsRealNotJustTheName:
+    """盒子写着 WMS，schema 和判据里就得真有 WMS
+
+    只改 `display_name` 而不动 schema / 判据，等于**换个招牌的通用盒**——
+    跟这个项目反复治的那个病一个样（判据说覆盖了，实际验的不是那件事）。
+    """
+
+    def _run(self, requirements, set_id="wms_dom"):
+        """跑一遍完整 beeline，拿产出包——判据要在真实链路上验过才算数"""
+        box = get_definition()
+        beeline = get_beeline()
+        task_run = create_task_run(
+            "pm", "handle_modeling_request", box.result.result_schema,
+            f"{box.id}@v{box.version}", beeline.id, beeline.version, "rt", "in",
+        )
+        return BeelineExecutor(MODELING_RUNNER).execute(
+            task_run, beeline,
+            {"set_id": set_id, "business_goal": "g", "requirements": requirements},
+        )
+
+    def test_the_vocabulary_lives_in_the_box_not_in_core(self):
+        """WMS 是业务词汇，词表必须跟着盒子走
+
+        放 core 的话，内核就知道了「仓储有 SKU 和波次」——那是业务知识。
+        """
+        import boxes.modeling.domain as domain
+
+        assert len(domain.WMS_ENTITIES) >= 8, "WMS 实体词表太空，说不出口袋"
+        assert "sku" in domain.WMS_ENTITIES
+        assert "location" in domain.WMS_ENTITIES
+        assert "wave" in domain.WMS_ENTITIES
+
+        # core 不许 import 盒子
+        core_src = (Path(__file__).resolve().parent.parent / "core").rglob("*.py")
+        offenders = [p.name for p in core_src
+                     if "boxes." in p.read_text(encoding="utf-8")
+                     and "boxes.modeling" in p.read_text(encoding="utf-8")]
+        assert not offenders, f"core 里引用了 WMS 词表：{offenders}"
+
+    def test_every_model_element_type_can_declare_a_wms_kind(self):
+        """**每一类**模型元素都得有 wms_kind——漏一类就有一类需求绑不上
+
+        这个坑踩了五次：先漏了 metric（「拣货准确率 99.5%」绑不上），
+        再漏了 process（「收货后按库位策略上架」绑不上）。每次都是
+        「判据假定了需求的形状」。
+
+        守卫盯的是**不变量**（每类都有 wms_kind），不是某一个实例——
+        再加一类需求类型时漏了字段，这里立刻转红。
+        """
+        schema = get_definition().get_schema("schema_model_elements")
+        by_name = {f.name: f for f in schema.fields}
+        # 规则用的是 wms_constraint 而不是 wms_kind：一条规则约束的是
+        # **业务约束**（先进先出 / 库位占用唯一），不是某个实体概念。
+        # 所以守卫查「有没有 WMS 绑定字段」，不是死盯 wms_kind 这一个名字。
+        expected = {
+            "entities": "wms_kind",
+            "rules": "wms_constraint",
+            "processes": "wms_kind",
+            "metrics": "wms_kind",
+            "events": "wms_kind",
+        }
+        for arr, field in expected.items():
+            assert arr in by_name, f"model_elements 少了 {arr}"
+            props = {p.name for p in by_name[arr].items.properties}
+            assert field in props, (
+                f"{arr} 没有 {field} —— 这一类需求的 WMS 归属绑不上，"
+                f"wms_binding 会把它误判成「非 WMS 需求」"
+            )
+
+    def test_the_two_wms_rules_are_declared_not_just_computed(self):
+        """判据得**声明**在 contract 里，否则算出来的值没人读"""
+        metrics = [a.metric for a in get_definition().result.acceptance]
+        assert "wms_binding" in metrics
+        assert "wms_rule_binding" in metrics
+
+    def test_an_off_domain_requirement_gets_rejected_and_named(self):
+        """投料错了要打回，而且要**点名是哪几条**
+
+        「用户登录要用密码」混进 WMS 建模盒，说明投料错了，不是质量差一点。
+        只给一个布尔值的话，读者知道红了但不知道该踢哪条出去。
+        """
+        box = get_definition()
+        task_run = self._run(_off_domain_requirement_set()["requirements"])
+        assert task_run.result["wms_binding"] is False
+        named = task_run.result["evidence"]["evidence_detail"][
+            "requirements_without_wms_binding"]
+        assert named == ["req_off_1"], f"该点名的是 req_off_1，实际 {named}"
+        assert evaluate_acceptance(task_run, box.result).status == AcceptanceStatus.REJECTED
+
+    def test_no_rule_requirement_means_not_applicable_not_failed(self):
+        """一批需求里一条 rule 都没有 → 这条判据**用不上**，不是「没过」
+
+        「投料本来就不讲规则」和「模型漏了 WMS 规则」是两件事。
+        混为一谈的话，任何只讲实体和指标的需求集都被判红——
+        那是判据假定了「每批需求都该有规则」。
+        """
+        box = get_definition()
+        task_run = self._run([
+            {"requirement_id": "r_obj", "description": "库存按 SKU 和库位记账",
+             "requirement_type": "object", "priority": "must_have"},
+            {"requirement_id": "r_met", "description": "拣货准确率要达到 99.5%",
+             "requirement_type": "metric", "priority": "must_have"},
+        ])
+        assert task_run.result["wms_rule_binding"] == "n/a", (
+            "没有 rule 需求时 wms_rule_binding 应该是 n/a，"
+            "判红等于说「你该有规则」——可你没要求过规则"
+        )
+        assert evaluate_acceptance(task_run, box.result).status == AcceptanceStatus.ACCEPTED
+
+    def test_the_wms_summary_is_actually_carried_out(self):
+        """判了就要看得见——`wms_domain` 不带出来的话，看板上只有红叉"""
+        task_run = self._run(_sample_requirement_set()["requirements"])
+        w = task_run.result["wms_domain"]
+        assert w["domain"] == "WMS"
+        assert w["bound_requirement_count"] == w["modelable_requirement_count"]
+        assert {e["kind"] for e in w["entities"]} >= {"sku", "lot"}
+        assert {c["kind"] for c in w["constraints"]} >= {"unique_slot"}
+        # 每条都得带中文标签：读者看的是「库位占用唯一」，不是 unique_slot
+        assert all(e["label"] for e in w["entities"])
+        assert all(c["statement"] for c in w["constraints"])

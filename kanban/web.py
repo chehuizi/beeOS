@@ -923,6 +923,9 @@ function renderFilters(boxes, current) {{
 const VS_PALETTE = {{
   'Software Delivery': {{ core: '124,58,237', edge: '91,33,182' }},
   'Order Fulfillment': {{ core: '59,130,246', edge: '30,64,175' }},
+  // WMS 走琥珀色：跟紫（软件交付）、青（费用报销）都不撞，
+  // 三条价值流在一屏上分得开
+  'Warehouse Management': {{ core: '217,119,6', edge: '180,83,9' }},
   'Expense Reimbursement': {{ core: '13,148,136', edge: '15,118,110' }},
 }};
 
@@ -1580,7 +1583,7 @@ function buildShell(boxId, box, entries) {{
   // 接力目标：盒子之间的关系声明在各盒 definition.placement.feeds_into
   // （业务信息跟着盒子走，不在前端硬编码）。
   // 显示名取 box_context 随 id 一起给的那份——单盒过滤时前端手里只有
-  // 当前这一只盒的名字表，自己补会直接露出 business_modeling_box 这种原始 id。
+  // 当前这一只盒的名字表，自己补会直接露出 wms_modeling_box 这种原始 id。
   window._feedsInto = ((box && box.box_context && box.box_context.feeds_into) || [])
     .map((h) => ({{ box_id: h.id, display_name: h.name || h.id }}));
   let options = '';

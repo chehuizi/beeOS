@@ -1,4 +1,4 @@
-# 业务建模履约盒（business_modeling_box）
+# 业务建模履约盒（wms_modeling_box）
 
 > Software Line 第一只盒子——按结构化业务需求产出可机械验证的业务模型包。
 
@@ -40,7 +40,7 @@ flowchart TB
     Schemas --> S7[requirement 内部]
 
     Task --> T1[handle_modeling_request]
-    T1 --> BL[beeline_business_modeling_v1]
+    T1 --> BL[beeline_wms_modeling_v1]
 
     Result --> R1[5 acceptance rules]
     Result --> R2[3 exception rules]

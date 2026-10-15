@@ -33,7 +33,7 @@ runtime/
 .venv/bin/python -m kanban.cli
 
 # 只看业务建模盒
-.venv/bin/python -m kanban.cli --box wms_modeling_box
+.venv/bin/python -m kanban.cli --box wms_design_box
 
 # 自定义 store + recent 数量
 .venv/bin/python -m kanban.cli --store path/to/store.jsonl --recent 20

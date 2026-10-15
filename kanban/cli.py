@@ -12,7 +12,7 @@ CLI 输出（终端友好的纯文本）：
   
   Boxes Registered
     - inventory_shortage (Order Fulfillment)
-    - wms_modeling (Warehouse Management)
+    - wms_design (Warehouse Management)
   
   Status Counts
     completed:  10
@@ -182,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--box",
         default=None,
-        help="Filter to a single beeBox (by box_id, e.g. wms_modeling_box)",
+        help="Filter to a single beeBox (by box_id, e.g. wms_design_box)",
     )
     args = parser.parse_args(argv)
 

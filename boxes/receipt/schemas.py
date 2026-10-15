@@ -91,6 +91,12 @@ RECEIPT_PARSED = SchemaDef(
         FieldDef(name="receipt_date", type="string", description="ISO 日期 YYYY-MM-DD"),
         FieldDef(name="receipt_time", type="string", description="HH:MM 或空串"),
         FieldDef(name="items", type="ref:schema_receipt_item"),
+        # exception `items_count == 0`（没读出任何商品行 → 不交付）读的量。
+        # 以前产出里只有 items 数组、没有这个计数，于是那条规则指向一个
+        # 不存在的字段，**从来没触发过**：一张只拍到票头、没拍到商品的
+        # 照片照样会被交付出去。数组长度条件求不了，标量才有得比。
+        FieldDef(name="items_count", type="integer",
+                 description="读出的商品行数（为 0 说明这张票没读出商品行）"),
         FieldDef(name="subtotal", type="number", description="小计 / 商品合计"),
         # 零售 POS 小票**没有税**，只有优惠（支付宝优惠 / 满减 / 抹零）。
         # 漏掉这一栏，票上最常见的那个数字就无处安放——模型只能给 null，

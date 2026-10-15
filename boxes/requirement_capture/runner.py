@@ -502,4 +502,4 @@ CAPTURE_HANDLERS: dict[str, Any] = {
     "requirement_set_packager": _simulate_requirement_set_packager,
 }
 
-RUNNER = HandlerRunner(CAPTURE_HANDLERS, owner="requirement_capture_box")
+RUNNER = HandlerRunner(CAPTURE_HANDLERS, owner="wms_requirement_box")

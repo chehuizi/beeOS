@@ -38,8 +38,8 @@ from core.models import (
 from boxes.requirement_capture.schemas import ALL_SCHEMAS
 
 
-REQUIREMENT_CAPTURE_BOX = BeeBoxDefinition(
-    id="requirement_capture_box",
+WMS_REQUIREMENT_BOX = BeeBoxDefinition(
+    id="wms_requirement_box",
     version=1,
     description=(
         "需求捕获履约盒——把自然语言业务表述抽成可机械验证的结构化业务需求集，"
@@ -49,20 +49,21 @@ REQUIREMENT_CAPTURE_BOX = BeeBoxDefinition(
     schemas=ALL_SCHEMAS,
 
     placement=PlacementDef(
-        display_name="Requirement Capture Box",
+        display_name="WMS Requirement Box",
         value_stream="Software Delivery",
-        role="Business Requirement Capture Fulfillment",
+        role="WMS Requirement Capture Fulfillment",
+        domain="WMS",
         # 接线只写「投给谁」。「谁投给我」由注册表反推——
         # 两侧各写一遍的话，这边改了那边忘了，那只盒子
         # 的上游就悄悄空了，而没有任何东西会报错。
-        feeds_into=["wms_modeling_box"],
+        feeds_into=["wms_design_box", "wms_system_box"],
     ),
 
     task=[
         TaskDef(
             type="capture_business_requirement",
             task_schema="schema_business_narrative",
-            beeline_id="beeline_requirement_capture_v1",
+            beeline_id="beeline_wms_requirement_v1",
             beeline_version=1,
             trigger=(
                 "业务方用自然语言描述业务\n"
@@ -177,4 +178,4 @@ REQUIREMENT_CAPTURE_BOX = BeeBoxDefinition(
 
 
 def get_definition() -> BeeBoxDefinition:
-    return REQUIREMENT_CAPTURE_BOX
+    return WMS_REQUIREMENT_BOX

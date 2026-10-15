@@ -13,11 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from boxes.modeling import WMS_MODELING_BOX, get_definition
+from boxes.modeling import WMS_DESIGN_BOX, get_definition
 from boxes.modeling.runner import RUNNER as MODELING_RUNNER
 from boxes.modeling.measure import COMPUTERS as MODEL_COMPUTERS
 from boxes.modeling.schemas import REQUIREMENT_TYPES
-from beelines.modeling import WMS_MODELING_BEELINE, get_beeline
+from beelines.modeling import WMS_DESIGN_BEELINE, get_beeline
 from beelines import get_inventory_shortage_beeline
 from core import metrics as m
 from runtime import (
@@ -85,12 +85,12 @@ def _off_domain_requirement_set() -> dict:
 class TestModelingBoxDefinition:
     def test_module_exports(self):
         assert callable(get_definition)
-        assert isinstance(WMS_MODELING_BOX, __import__("core.models").models.BeeBoxDefinition)
+        assert isinstance(WMS_DESIGN_BOX, __import__("core.models").models.BeeBoxDefinition)
 
     def test_id_and_version(self):
         d = get_definition()
-        assert d.id == "wms_modeling_box"
-        # version 2 = 从 business_modeling_box 迁到 wms_modeling_box 那一刀。
+        assert d.id == "wms_design_box"
+        # version 2 = 从 business_modeling_box 迁到 wms_design_box 那一刀。
         # 契约变了（多两条 WMS 判据、模型元素多两个 WMS 字段），版本得跟着涨——
         # 版本号不涨的话，调用方没法区分「同一个盒子的新版本」和「另一个盒子」。
         assert d.version == 2
@@ -117,7 +117,7 @@ class TestModelingBoxDefinition:
         # task_schema 必须真实存在
         assert d.get_schema(t.task_schema) is not None
         # beeline 引用
-        assert t.beeline_id == "beeline_wms_modeling_v1"
+        assert t.beeline_id == "beeline_wms_design_v1"
         assert t.beeline_version == 1
 
     def test_acceptance_all_machine_verifiable(self):
@@ -172,8 +172,8 @@ class TestModelingBoxDefinition:
 class TestModelingBeeline:
     def test_module_exports(self):
         assert callable(get_beeline)
-        assert WMS_MODELING_BEELINE.id == "beeline_wms_modeling_v1"
-        assert WMS_MODELING_BEELINE.version == 1
+        assert WMS_DESIGN_BEELINE.id == "beeline_wms_design_v1"
+        assert WMS_DESIGN_BEELINE.version == 1
 
     def test_seven_op_linear_chain(self):
         b = get_beeline()

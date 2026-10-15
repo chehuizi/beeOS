@@ -29,8 +29,8 @@ from runtime.store import TaskRunStore
 from tests.conftest import stub_compliant_llm
 
 
-CAPTURE = "requirement_capture_box"
-MODELING = "wms_modeling_box"
+CAPTURE = "wms_requirement_box"
+MODELING = "wms_design_box"
 
 NARRATIVE = (
     "wms的流程有入库流程、出库流程、盘点流程。\n"

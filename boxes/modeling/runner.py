@@ -456,6 +456,16 @@ def _simulate_package_model(input_data: dict[str, Any]) -> dict[str, Any]:
             "bound_requirement_count": input_data.get("bound_modelable_count", 0),
             "modelable_requirement_count": len(input_data.get("modelable_ids", [])),
         },
+        # exception 规则 `requirements_without_wms_binding > 0` 读的量。
+        # 以前这条规则指向一个产出里没有的字段，**从来没触发过**——
+        # 有需求绑不上 WMS 概念，规则说要 escalate，实际什么都不会发生。
+        # 上面 wms_domain 里已经有两个数能算出来，这里只是摆到顶层，
+        # 让 exception 条件读得到。
+        "requirements_without_wms_binding": max(
+            0,
+            len(input_data.get("modelable_ids", []))
+            - input_data.get("bound_modelable_count", 0),
+        ),
         "requirement_count": input_data.get("requirement_count", 0),
         # **这块以前一直缺**：`schema_business_model_package` 从头就声明了
         # `evidence: ref:schema_model_evidence`，而打包腿从来没产出过它。
@@ -486,4 +496,4 @@ MODEL_HANDLERS: dict[str, Any] = {
     "model_packager": _simulate_package_model,
 }
 
-RUNNER = HandlerRunner(MODEL_HANDLERS, owner="wms_modeling_box")
+RUNNER = HandlerRunner(MODEL_HANDLERS, owner="wms_design_box")

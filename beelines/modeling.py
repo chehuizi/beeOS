@@ -41,8 +41,8 @@ from core.beeline_models import (
 IDEMPOTENT_BY_SET = Idempotency(mode="required", key="set_id")
 
 
-WMS_MODELING_BEELINE = Beeline(
-    id="beeline_wms_modeling_v1",
+WMS_DESIGN_BEELINE = Beeline(
+    id="beeline_wms_design_v1",
     version=1,
     description=(
         "业务建模履约作业路线——按结构化业务需求产出可验证的业务模型包"
@@ -131,4 +131,4 @@ WMS_MODELING_BEELINE = Beeline(
 
 def get_beeline() -> Beeline:
     """返回业务建模履约 beeline"""
-    return WMS_MODELING_BEELINE
+    return WMS_DESIGN_BEELINE

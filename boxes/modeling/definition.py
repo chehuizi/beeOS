@@ -35,8 +35,8 @@ from core.models import (
 from boxes.modeling.schemas import ALL_SCHEMAS
 
 
-WMS_MODELING_BOX = BeeBoxDefinition(
-    id="wms_modeling_box",
+WMS_DESIGN_BOX = BeeBoxDefinition(
+    id="wms_design_box",
     version=2,
     description=(
         "WMS 仓储建模履约盒——按结构化仓储需求产出可机械验证的 WMS 模型包："
@@ -56,17 +56,20 @@ WMS_MODELING_BOX = BeeBoxDefinition(
     schemas=ALL_SCHEMAS,
 
     placement=PlacementDef(
-        display_name="WMS Modeling Box",
-        value_stream="Warehouse Management",
-        role="WMS Domain Modeling Fulfillment",
-        feeds_into=[],
+        display_name="WMS Design Box",
+        value_stream="Software Delivery",
+        role="WMS Design Fulfillment",
+        # 需求 → 设计 → 开发 是生命周期主链；设计还直接投给系统档案盒，
+        # 因为「系统由哪些服务组成」这个问题，最早由设计给出答案。
+        domain="WMS",
+        feeds_into=["wms_development_box", "wms_system_box"],
     ),
 
     task=[
         TaskDef(
             type="handle_modeling_request",
             task_schema="schema_business_requirement_set",
-            beeline_id="beeline_wms_modeling_v1",
+            beeline_id="beeline_wms_design_v1",
             beeline_version=1,
             trigger=(
                 "仓储主管提交结构化 WMS 需求集（上架 / 拣货 / 盘点 / 波次合并）\n"
@@ -229,4 +232,4 @@ WMS_MODELING_BOX = BeeBoxDefinition(
 
 def get_definition() -> BeeBoxDefinition:
     """返回业务建模履约盒 Definition"""
-    return WMS_MODELING_BOX
+    return WMS_DESIGN_BOX

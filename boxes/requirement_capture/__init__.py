@@ -19,8 +19,8 @@ LLM 实测仍有边界错判。这条走人工确认，不写进 acceptance 假�
 """
 
 from boxes.requirement_capture.definition import (
-    REQUIREMENT_CAPTURE_BOX,
+    WMS_REQUIREMENT_BOX,
     get_definition,
 )
 
-__all__ = ["REQUIREMENT_CAPTURE_BOX", "get_definition"]
+__all__ = ["WMS_REQUIREMENT_BOX", "get_definition"]

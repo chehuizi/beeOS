@@ -4,7 +4,7 @@
 以前要改，因为：
 - 产出形态靠「result 里有没有 nodes」猜，猜错就把一只盒子的产出
   渲染成另一只盒子的形状，而且不报错
-- /api/structure 写死了 requirement_capture_box + capture_business_requirement，
+- /api/structure 写死了 wms_requirement_box + capture_business_requirement，
   调用方必须知道某一只盒子的 task 类型名
 
 这组测试盯住契约本身：契约一旦退化回硬编码，这里就红。
@@ -34,8 +34,8 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 KANBAN_DIR = REPO / "kanban"
 
 
-CAPTURE = "requirement_capture_box"
-MODELING = "wms_modeling_box"
+CAPTURE = "wms_requirement_box"
+MODELING = "wms_design_box"
 RECEIPT = "receipt_capture_box"
 
 # 契约测试遍历注册表，而不是手抄盒子名单。
@@ -148,7 +148,7 @@ class TestTextIntakeResolution:
 
     def test_structure_endpoint_carries_no_hardcoded_box_id(self):
         """/api/structure 里不能再出现某只盒子的 id 或 task 类型名"""
-        assert "requirement_capture_box" not in HTML_PAGE
+        assert "wms_requirement_box" not in HTML_PAGE
         assert "capture_business_requirement" not in HTML_PAGE
 
 
@@ -223,6 +223,157 @@ class TestDeclarationCoherence:
     def test_result_schema_is_listed_in_the_manifest(self):
         d = get_capture_definition()
         assert box_manifest(CAPTURE)["produces"]["schema"] == d.result.result_schema
+
+    @pytest.mark.parametrize("box_id", ALL_BOXES)
+    def test_beeline_only_names_schemas_the_box_declares(self, box_id):
+        """beeline 每个 op 的 input / output 都必须是这只盒子声明过的 schema
+
+        指着一个不存在的 schema id，声明就落空了：调用方按 beeline 拼
+        数据，拼出来的东西没有任何 schema 说它长什么样，也没有校验会响。
+        「声明了却拿不到」的又一族。
+        """
+        get_def, beeline_loaders = BOX_REGISTRY[box_id]
+        declared = {s.id for s in get_def().schemas}
+        for _beeline_id, load in beeline_loaders.items():
+            for op in load().operations:
+                for role, sid in (("input", op.input), ("output", op.output)):
+                    assert sid in declared, (
+                        f"{box_id}: beeline {load().id} 的 op "
+                        f"{op.op_id!r} {role} 指向未声明的 schema {sid!r}"
+                    )
+
+
+class TestExceptionConditionsAreReachable:
+    """exception.condition 的字段必须是产出里真有的量
+
+    `_evaluate_condition` 拿到 `result.get(field)` 是 None 就直接
+    `return False`——**不报错、不提示**。后果是这条规则写在那里，
+    看上去在守着某件事，实际永远不会触发：构建失败不会 rollback，
+    组件数为空不会 no_deliver。
+
+    这比判据读不到值更隐蔽：判据读不到会判红（吵），异常读不到
+    只是永远不响（安静地没做）。
+    """
+
+    @pytest.mark.parametrize("box_id", ALL_BOXES)
+    def test_condition_names_a_field_the_result_can_carry(self, box_id):
+        import re
+
+        d = BOX_REGISTRY[box_id][0]()
+        fields = {f.name for f in d.get_schema(d.result.result_schema).fields}
+        for rule in d.result.exceptions:
+            cond = rule.condition.strip()
+            # 裸标识符（没有比较符）永远不触发——_evaluate_condition
+            # 一个 op 都匹配不上就 return False
+            assert re.search(r"(>=|<=|==|!=|>|<)", cond), (
+                f"{box_id}: exception {cond!r} 不是 `field op value` 三段式，"
+                f"它永远不会触发"
+            )
+            field = re.split(r"(>=|<=|==|!=|>|<)", cond, maxsplit=1)[0].strip()
+            assert field in fields, (
+                f"{box_id}: exception {cond!r} 的字段 {field!r} 不在产出 "
+                f"schema 里 → result.get() 返回 None → 这条规则永远不触发"
+            )
+
+
+class TestSkeletonIsHonest:
+    """骨架盒：判据真声明、腿真没实现
+
+    `evaluate_acceptance` 里是 `if not failed: ACCEPTED`。所以一只
+    **零判据**的盒子会被判成「全过」——那是「看起来成功，其实什么
+    都没验」的谎。骨架盒的正确做法是反过来：真声明它将来要验的东西，
+    产出**不带**那些量 → 全红 → 看板标「未实现」。
+    """
+
+    @pytest.mark.parametrize("box_id", ALL_BOXES)
+    def test_every_box_declares_a_maturity_it_actually_has(self, box_id):
+        assert BOX_REGISTRY[box_id][0]().result.maturity in ("live", "skeleton")
+
+    def test_maturity_is_a_closed_set_not_a_free_string(self):
+        """maturity 必须是封闭的两值，前端的显示表也得**正好**是这两值
+
+        两头都要封闭：
+
+        - 后端 `ResultDef.maturity` 是 `Literal`，多写一个 `imperfect`
+          会在构造时炸；改成 `str` 就什么都能塞进来。
+        - 前端 `MATURITY_DISPLAY` 的键必须**等于**后端的合法值集合。
+          少一个值，那只盒子落进 fallback，看起来跟实现了没区别；
+          多一个值，说明两边已经开始各说各话。
+
+        这个字段是看板「未实现」徽章的唯一依据。
+        """
+        import re
+        import typing
+
+        from core.models import ResultDef
+
+        legal = set(typing.get_args(ResultDef.model_fields["maturity"].annotation))
+        assert legal == {"live", "skeleton"}, (
+            f"ResultDef.maturity 的合法值变成了 {legal}——"
+            f"看板只认 live / skeleton，多出来的值会让「未实现」徽章消失"
+        )
+
+        block = re.search(
+            r"const MATURITY_DISPLAY = \{(.*?)\n\};", HTML_PAGE, re.S)
+        assert block, "看板里没有 MATURITY_DISPLAY：成熟度没有对应的显示逻辑"
+        front = set(re.findall(r"^\s{2}(\w+):\s*\{", block.group(1), re.M))
+        assert front == legal, (
+            f"前端 MATURITY_DISPLAY 的键 {sorted(front)} != 后端合法值 "
+            f"{sorted(legal)}。少一个 = 那只盒子落进 fallback 看着跟实现了"
+            f"没区别；多一个 = 两边各说各话"
+        )
+
+    @pytest.mark.parametrize("box_id", ALL_BOXES)
+    def test_a_skeleton_box_declares_criteria_and_no_metrics(self, box_id):
+        """骨架盒不能空声明判据（有则会被判全过），也不能声明没采集器的指标"""
+        d = BOX_REGISTRY[box_id][0]()
+        if d.result.maturity != "skeleton":
+            return
+        assert d.result.acceptance, (
+            f"{box_id}: 骨架盒零判据 = 会被判成全过 = 谎"
+        )
+        declared = [m for group in d.metrics.model_dump().values() for m in group]
+        assert not declared, (
+            f"{box_id}: 骨架盒没有产出，却声明了指标 {declared}——"
+            f"声明了却拿不到"
+        )
+
+    def test_a_skeleton_box_actually_fails_its_criteria(self, tmp_path):
+        """跑一只骨架盒：必须真的 REJECTED，而且每条判据都红
+
+        这条是「未实现」这三个字的**唯一凭据**。只看 `maturity`
+        字段的话，那只是一行声明；真跑一遍红，才知道这条声明是真的。
+        """
+        store = TaskRunStore(tmp_path / "runs.jsonl")
+        r = trigger_task(
+            "wms_system_box",
+            "handle_system_request",
+            {
+                "snapshot_id": "snap-1",
+                "components": ["wms-api", "wms-core"],
+                "interfaces": ["inbound.order"],
+                # 骨架盒还没定义部署拓扑的形状，所以投料里是一个引用
+                "deployment": "deploy://prod/2026-10-15",
+                "observed_at": "2026-10-15T08:00:00",
+            },
+            store,
+        )
+        assert r["acceptance_status"] == "rejected", (
+            f"骨架盒跑成了 {r['acceptance_status']}——"
+            f"要么桩在替没实现的检查点打勾，要么判据读到了它不该读到的值"
+        )
+        outcomes = {d["metric"]: d["outcome"] for d in r["acceptance_detail"]}
+        assert outcomes == {
+            "component_completeness": "failed",
+            "interface_compliance": "failed",
+            "version_traceability": "failed",
+            "version_drift_free": "failed",
+        }, (
+            f"骨架盒不该有判据通过或被判不适用：{outcomes}"
+        )
+        # 实测值一个都取不到——这正是「未实现」的真实读数，
+        # 而不是「跑了但没过」
+        assert r["result"].get("evidence") == {}
 
 
 class TestRegistryCoverage:
@@ -340,3 +491,74 @@ class TestRegistryCoverage:
         vs = box_meta(box_id).get("value_stream")
         assert vs, f"{box_id}: 没声明 value_stream"
         assert f"'{vs}'" in HTML_PAGE, f"{box_id}: 价值流 {vs} 在 VS_PALETTE 里没登记"
+
+    def test_the_kanban_does_not_redeclare_domains(self):
+        """看板层不许把域名的值重新敲一遍
+
+        跟 value_stream 同一条规矩，域也一样：它是业务知识，住在各盒
+        自己的 placement.domain 里。看板读它来分菜单，不拥有它。
+
+        一旦有人为了让菜单好看，在 JS 里写死一句 `if (name.includes('WMS'))`，
+        域的归属就变成第二份知识——加了新域、改了某只盒子的归属，
+        看板会安静地按旧的那份分组，而且不报错。
+        """
+        declared = {
+            get().placement.domain
+            for get, _bl in BOX_REGISTRY.values()
+        } - {""}
+
+        offenders = []
+        for path in sorted(KANBAN_DIR.glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            docs = set()
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Module, ast.FunctionDef,
+                                     ast.AsyncFunctionDef, ast.ClassDef)):
+                    d = ast.get_docstring(node, clean=False)
+                    if d is not None:
+                        docs.add(d)
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                        and node.value not in docs
+                        and node.value in declared):
+                    offenders.append(f"{path.name}:{node.lineno} {node.value!r}")
+        assert not offenders, (
+            "看板层又敲了一遍域名的值：\n  " + "\n  ".join(offenders)
+            + "\n它应该只住在各盒 definition 的 placement.domain 里"
+        )
+
+    def test_the_kanban_holds_no_domain_table(self):
+        """看板层不许出现「一张按域名索引的表」
+
+        `box_domains` 是**算出来的**（遍历注册表读各盒 placement）。
+        如果有人图省事写成 `DOMAINS = {"WMS": [...]}`，域成员就有了
+        两份来源，改盒子忘了改表，看板会按旧名单分组——而域成员一旦
+        对不上，接线视图、菜单计数、单盒面包屑会各说各话。
+
+        盯的是形状：模块级 dict，键全是已声明的域名。
+        """
+        from kanban.trigger import box_domains, registered_box_ids
+
+        declared = set(box_domains(registered_box_ids())) - {""}
+        offenders = []
+        for path in sorted(KANBAN_DIR.glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    continue
+                if not isinstance(node.value, ast.Dict):
+                    continue
+                keys = [k.value for k in node.value.keys
+                        if isinstance(k, ast.Constant) and isinstance(k.value, str)]
+                if keys and set(keys) <= declared:
+                    targets = ([node.target] if isinstance(node, ast.AnnAssign)
+                               else [t for t in node.targets if isinstance(t, ast.Name)])
+                    for t in targets:
+                        name = getattr(t, "id", None)
+                        if name == "DOMAINS":
+                            continue  # 这个名字将来若真需要，得先想清楚
+                        offenders.append(f"{path.name}:{node.lineno} {name}")
+        assert not offenders, (
+            "看板层又出现一张按域名索引的表：\n  " + "\n  ".join(offenders)
+            + "\n域成员应该由 box_domains() 从各盒 placement 算出来"
+        )

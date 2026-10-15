@@ -42,8 +42,8 @@ from core.beeline_models import (
 IDEMPOTENT_BY_SET = Idempotency(mode="required", key="set_id")
 
 
-REQUIREMENT_CAPTURE_BEELINE = Beeline(
-    id="beeline_requirement_capture_v1",
+WMS_REQUIREMENT_BEELINE = Beeline(
+    id="beeline_wms_requirement_v1",
     version=1,
     description=(
         "需求捕获履约作业路线——把自然语言业务表述抽成可机械验证的"
@@ -110,4 +110,4 @@ REQUIREMENT_CAPTURE_BEELINE = Beeline(
 
 
 def get_beeline() -> Beeline:
-    return REQUIREMENT_CAPTURE_BEELINE
+    return WMS_REQUIREMENT_BEELINE

@@ -697,6 +697,9 @@ def _simulate_package_receipt(input_data: dict[str, Any]) -> dict[str, Any]:
         "receipt_date": parsed.get("receipt_date") or "",
         "receipt_time": parsed.get("receipt_time") or "",
         "items": normalized_items,
+        # exception `items_count == 0` 读的量。以前规则指向一个产出里
+        # 没有的字段，所以「没读出商品行就不交付」这条从来没生效过。
+        "items_count": len(normalized_items),
         "subtotal": _num(parsed.get("subtotal")),
         "tax": _num(parsed.get("tax")),
         "discount": _num(parsed.get("discount")),

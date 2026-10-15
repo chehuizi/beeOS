@@ -179,6 +179,28 @@ class ResultDef(BaseModel):
     acceptance: list[AcceptanceRule]
     exceptions: list[ExceptionRule]
 
+    # 这只盒子的腿实现到哪一步了。
+    #
+    # **为什么要有这个**：`evaluate_acceptance` 里是 `if not failed: ACCEPTED`。
+    # 所以一只**零条判据**的盒子会被判成「全过」——那就是
+    # 「看起来成功，其实什么也没验」的谎。加骨架盒时最容易踩这个坑。
+    #
+    # 于是骨架盒的做法反过来：**真声明判据**（它将来要验的东西），
+    # 产出**不带**这些 metric → 全部判红 → REJECTED。
+    # 「交不出东西」本身就是诚实的信号。
+    #
+    # 但「未实现」和「实现了但不达标」在看板上必须分得开，而且
+    # 骨架盒**不该拖低整体验收率**——那跟拿开发期调试记录算验收率
+    # 是同一个病。所以成熟度写在盒子上，由看板和聚合读它。
+    maturity: Literal["live", "skeleton"] = Field(
+        default="live",
+        description=(
+            "live = 腿已实现，acceptance 的读数有意义；"
+            "skeleton = 结构已立、判据已声明、腿还没实现，"
+            "读数不代表能力，不计入验收率"
+        ),
+    )
+
     # 产出的展示形态。盒子自己声明它的产出长什么样，而不是让看板去猜
     # （以前靠「result 里有没有 nodes 字段」猜，猜错就把一只盒子的产出
     #  渲染成另一只盒子的形状，看起来像渲染成功，其实是彻底错读）。
@@ -261,6 +283,16 @@ class PlacementDef(BaseModel):
     display_name: str = Field(default="", description="给人看的名字")
     value_stream: str = Field(default="", description="所属企业价值流")
     role: str = Field(default="", description="业务责任单元的职责")
+    domain: str = Field(
+        default="",
+        description=(
+            "所属业务领域（如 WMS）。**跟 value_stream 是两个维度**："
+            "value_stream 答「在价值流哪一段」，domain 答「属于哪个业务领域」。"
+            "一只盒子可以既在软件交付价值流、又属于 WMS 域。"
+            "域的成员由各盒自己声明派生，不另立一张域表——"
+            "那正是 BOX_META 当年被拆掉的原因。"
+        ),
+    )
     feeds_into: list[str] = Field(
         default_factory=list, description="本盒产出投给哪些 box_id（接线唯一声明）"
     )

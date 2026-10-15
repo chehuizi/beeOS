@@ -53,13 +53,13 @@ def no_llm(monkeypatch):
 
 class TestDefinition:
     def test_box_registered(self):
-        assert "requirement_capture_box" in registered_box_ids()
+        assert "wms_requirement_box" in registered_box_ids()
 
     def test_task_and_beeline_pinned(self):
         d = get_capture_definition()
         t = d.task[0]
         assert t.type == "capture_business_requirement"
-        assert t.beeline_id == "beeline_requirement_capture_v1"
+        assert t.beeline_id == "beeline_wms_requirement_v1"
         assert t.beeline_version == 1
         assert d.get_schema(t.task_schema) is not None
 
@@ -105,7 +105,7 @@ class TestBeeline:
             assert o.bee.type.endswith("_impl")
 
     def test_task_entry_exposes_ops(self):
-        e = list_task_entries("requirement_capture_box")[0]
+        e = list_task_entries("wms_requirement_box")[0]
         assert e["task_type"] == "capture_business_requirement"
         assert len(e["beeline_ops"]) == 5
 
@@ -115,11 +115,11 @@ class TestPayloadKind:
 
     def test_capture_is_text(self):
         """narrative 是自由文本 → 纯文本框，别套 JSON 编辑器"""
-        assert list_task_entries("requirement_capture_box")[0]["payload_kind"] == "text"
+        assert list_task_entries("wms_requirement_box")[0]["payload_kind"] == "text"
 
     def test_modeling_is_json(self):
         """requirements 是嵌套数组 → 保持 JSON 编辑器"""
-        assert list_task_entries("wms_modeling_box")[0]["payload_kind"] == "json"
+        assert list_task_entries("wms_design_box")[0]["payload_kind"] == "json"
 
     def test_kind_follows_schema_shape(self):
         from kanban.trigger import _payload_kind
@@ -159,13 +159,49 @@ class TestFeedInto:
     盒子只能通过看板去知道自己接谁。现在接线跟着盒子走。
     """
 
-    def test_capture_feeds_modeling(self):
+    def test_capture_feeds_design_and_system(self):
         from kanban.trigger import box_meta
-        assert box_meta("requirement_capture_box")["feeds_into"] == ["wms_modeling_box"]
+        assert box_meta("wms_requirement_box")["feeds_into"] == [
+            "wms_design_box",
+            "wms_system_box",
+        ]
 
-    def test_modeling_has_no_downstream(self):
+    def test_design_feeds_development_and_system(self):
         from kanban.trigger import box_meta
-        assert box_meta("wms_modeling_box")["feeds_into"] == []
+        assert box_meta("wms_design_box")["feeds_into"] == [
+            "wms_development_box",
+            "wms_system_box",
+        ]
+
+    def test_system_is_the_sink(self):
+        """系统档案盒是终点：它是「关于那个系统的描述」，描述完了没有下游"""
+        from kanban.trigger import box_meta
+        assert box_meta("wms_system_box")["feeds_into"] == []
+
+    def test_the_whole_wms_chain_is_pinned(self):
+        """把 6 只 WMS 盒的接线整条钉住
+
+        为什么要钉全链而不是一条条钉：接线是「盒子是什么」的一部分，
+        改一只盒子顺手改了下游，这组测试会一片绿地带过去。
+        需求 → 设计 → 开发 → 测试 → 运维 → 系统档案，是一条**生命周期链**，
+        每一环还额外直投系统档案盒（各自领域的事实先落档案）。
+        """
+        from kanban.trigger import BOX_REGISTRY
+
+        chain = {
+            "wms_requirement_box": ["wms_design_box", "wms_system_box"],
+            "wms_design_box": ["wms_development_box", "wms_system_box"],
+            "wms_development_box": ["wms_testing_box", "wms_system_box"],
+            "wms_testing_box": ["wms_ops_box", "wms_system_box"],
+            "wms_ops_box": ["wms_system_box"],
+            "wms_system_box": [],
+            # 费用报销线不属于 WMS 域，自成一条独立的线
+            "receipt_capture_box": [],
+        }
+        for bid, expected in chain.items():
+            assert BOX_REGISTRY[bid][0]().placement.feeds_into == expected, (
+                f"{bid} 的下游变了"
+            )
 
     def test_feeds_into_targets_are_registered(self):
         """声明的下游必须是真盒子，否则接力按钮点了没地方去"""
@@ -183,21 +219,21 @@ class TestFeedInto:
 class TestBoxFlowOrder:
     """看板盒子的先后由 feeds_into 声明决定
 
-    字母序会把 wms_modeling_box 排在 requirement_capture_box 前面，
+    字母序会把 wms_design_box 排在 wms_requirement_box 前面，
     跟实际流程（先捕获需求再建模）正好反，必须按流向排。
     """
 
     def test_capture_comes_before_modeling(self):
         from kanban.trigger import order_boxes_by_flow
-        out = order_boxes_by_flow(["wms_modeling_box", "requirement_capture_box"])
-        assert out.index("requirement_capture_box") < out.index("wms_modeling_box")
+        out = order_boxes_by_flow(["wms_design_box", "wms_requirement_box"])
+        assert out.index("wms_requirement_box") < out.index("wms_design_box")
 
     def test_order_independent_of_input_order(self):
         """输入顺序不该影响结果（list_boxes 给的是字母序）"""
         from kanban.trigger import order_boxes_by_flow
-        a = order_boxes_by_flow(["wms_modeling_box", "requirement_capture_box"])
-        b = order_boxes_by_flow(["requirement_capture_box", "wms_modeling_box"])
-        assert a == b == ["requirement_capture_box", "wms_modeling_box"]
+        a = order_boxes_by_flow(["wms_design_box", "wms_requirement_box"])
+        b = order_boxes_by_flow(["wms_requirement_box", "wms_design_box"])
+        assert a == b == ["wms_requirement_box", "wms_design_box"]
 
     def test_unrelated_boxes_keep_a_stable_order(self):
         """没有 feeds_into 关系时，按 box_id 定序——不是按传入顺序
@@ -229,7 +265,7 @@ class TestBoxFlowOrder:
     def test_empty_and_single(self):
         from kanban.trigger import order_boxes_by_flow
         assert order_boxes_by_flow([]) == []
-        assert order_boxes_by_flow(["wms_modeling_box"]) == ["wms_modeling_box"]
+        assert order_boxes_by_flow(["wms_design_box"]) == ["wms_design_box"]
 
     def test_web_api_boxes_are_in_flow_order(self):
         """看板 API 返回的 boxes 必须是流向序，不是字母序"""
@@ -251,7 +287,7 @@ class TestBoxFlowOrder:
                 store.append(tr, box_id=box.id)
             data = web_mod.dashboard_data(store, box_filter=None)
             boxes = data["boxes"]
-            assert boxes.index("requirement_capture_box") < boxes.index("wms_modeling_box")
+            assert boxes.index("wms_requirement_box") < boxes.index("wms_design_box")
 
 
 # ============================================================
@@ -289,7 +325,7 @@ class TestCaptureEndToEnd:
 
     def test_accepted_with_all_four_checks_passing(self, store: TaskRunStore):
         r = trigger_task(
-            "requirement_capture_box", "capture_business_requirement",
+            "wms_requirement_box", "capture_business_requirement",
             {"narrative": self.TEXT}, store,
         )
         assert r["status"] == "completed"
@@ -302,7 +338,7 @@ class TestCaptureEndToEnd:
 
     def test_all_five_ops_executed(self, store: TaskRunStore):
         r = trigger_task(
-            "requirement_capture_box", "capture_business_requirement",
+            "wms_requirement_box", "capture_business_requirement",
             {"narrative": self.TEXT}, store,
         )
         assert [s["op_id"] for s in r["op_trace"]] == [
@@ -313,7 +349,7 @@ class TestCaptureEndToEnd:
 
     def test_每条需求都溯源到真实句子_id(self, store: TaskRunStore):
         r = trigger_task(
-            "requirement_capture_box", "capture_business_requirement",
+            "wms_requirement_box", "capture_business_requirement",
             {"narrative": self.TEXT}, store,
         )
         res = r["result"]
@@ -325,12 +361,12 @@ class TestCaptureEndToEnd:
     def test_产出可直接投建模盒(self, store: TaskRunStore):
         """schema 归建模盒所有——捕获盒换实现，建模盒零改动"""
         cap = trigger_task(
-            "requirement_capture_box", "capture_business_requirement",
+            "wms_requirement_box", "capture_business_requirement",
             {"narrative": self.TEXT}, store,
         )
         pkg = cap["result"]
         mod = trigger_task(
-            "wms_modeling_box", "handle_modeling_request",
+            "wms_design_box", "handle_modeling_request",
             {k: pkg[k] for k in ("set_id", "business_goal", "context", "requirements")},
             store,
         )
@@ -339,24 +375,24 @@ class TestCaptureEndToEnd:
 
     def test_task_run_persisted(self, store: TaskRunStore):
         trigger_task(
-            "requirement_capture_box", "capture_business_requirement",
+            "wms_requirement_box", "capture_business_requirement",
             {"narrative": self.TEXT}, store,
         )
         rec = store.list_recent()[0]
-        assert rec["box_id"] == "requirement_capture_box"
+        assert rec["box_id"] == "wms_requirement_box"
         assert rec["acceptance_status"] == "accepted"
 
     def test_缺_narrative_被结构闸拦下(self, store: TaskRunStore):
         with pytest.raises(TriggerError, match="violates task_schema"):
             trigger_task(
-                "requirement_capture_box", "capture_business_requirement",
+                "wms_requirement_box", "capture_business_requirement",
                 {}, store,
             )
         assert store.list_recent() == []
 
     def test_空表述_产出零需求_被_no_deliver_拦下(self, store: TaskRunStore):
         r = trigger_task(
-            "requirement_capture_box", "capture_business_requirement",
+            "wms_requirement_box", "capture_business_requirement",
             {"narrative": "   "}, store,
         )
         assert r["status"] == "completed"
@@ -397,7 +433,7 @@ def _run_capture(store, narrative, llm_result=None):
         from runtime import llm
         llm.complete_json = lambda *a, **kw: llm_result
     return trigger_task(
-        "requirement_capture_box", "capture_business_requirement",
+        "wms_requirement_box", "capture_business_requirement",
         {"narrative": narrative}, store,
     )
 
@@ -600,7 +636,7 @@ class TestAcceptanceGate:
 
     def _run(self, store, text):
         return trigger_task(
-            "requirement_capture_box", "capture_business_requirement",
+            "wms_requirement_box", "capture_business_requirement",
             {"narrative": text}, store,
         )
 

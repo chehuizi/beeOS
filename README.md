@@ -36,9 +36,9 @@ flowchart TB
     Core --> C1[models.py Definition shapes]
     Core --> C2[beeline_models.py Beeline shapes]
     Boxes --> B1[inventory_shortage Order Exception Box - Operations Line]
-    Boxes --> B2[modeling WMS Modeling Box - Software Line]
+    Boxes --> B2[modeling WMS Design Box - Software Line]
     Beelines --> BL1[inventory_shortage procedure v12]
-    Beelines --> BL2[wms_modeling procedure v1]
+    Beelines --> BL2[wms_design procedure v1]
     Runtime --> R1[executor + TaskRun + Acceptance]
     Kanban --> K1[CLI + Web 看板]
     Tests --> T1[test_definition.py]
@@ -73,7 +73,7 @@ flowchart TB
 
 - **`beelines/`** — 履约作业路线（procedure 实现，独立维护）
   - `inventory_shortage.py` — beeline_inventory_shortage_v3 v12（8 ops + 4 分支）
-  - `modeling.py` — beeline_wms_modeling_v1 v1（7 ops 顺序链）
+  - `modeling.py` — beeline_wms_design_v1 v1（7 ops 顺序链）
 
 - **`runtime/`** — 执行运行时（PoC 2 落地）
   - `models.py` — TaskRun durable object + 9 状态机 + Acceptance 4 状态

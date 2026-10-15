@@ -19,13 +19,29 @@ from uuid import uuid4
 
 from beelines import (
     get_modeling_beeline,
+    get_wms_development_beeline,
+    get_wms_ops_beeline,
+    get_wms_system_beeline,
+    get_wms_testing_beeline,
     get_receipt_capture_beeline,
     get_requirement_capture_beeline,
 )
 from boxes.inventory_shortage.runner import RUNNER as INVENTORY_RUNNER
+from boxes.wms_development.measure import COMPUTERS as WMS_DEV_COMPUTERS
+from boxes.wms_development.runner import RUNNER as WMS_DEV_RUNNER
+from boxes.wms_ops.measure import COMPUTERS as WMS_OPS_COMPUTERS
+from boxes.wms_ops.runner import RUNNER as WMS_OPS_RUNNER
+from boxes.wms_system.measure import COMPUTERS as WMS_SYS_COMPUTERS
+from boxes.wms_system.runner import RUNNER as WMS_SYS_RUNNER
+from boxes.wms_testing.measure import COMPUTERS as WMS_TEST_COMPUTERS
+from boxes.wms_testing.runner import RUNNER as WMS_TEST_RUNNER
 from boxes.modeling import get_definition as get_mod_definition
 from boxes.modeling.measure import COMPUTERS as MODELING_COMPUTERS
 from boxes.modeling.runner import RUNNER as MODELING_RUNNER
+from boxes.wms_development import get_definition as get_wms_development_definition
+from boxes.wms_ops import get_definition as get_wms_ops_definition
+from boxes.wms_system import get_definition as get_wms_system_definition
+from boxes.wms_testing import get_definition as get_wms_testing_definition
 from boxes.receipt.runner import RUNNER as RECEIPT_RUNNER
 from boxes.receipt import get_definition as get_receipt_definition
 from boxes.receipt.measure import COMPUTERS as RECEIPT_COMPUTERS
@@ -49,13 +65,29 @@ BOX_REGISTRY: dict[
     str,
     tuple[Callable[[], BeeBoxDefinition], dict[str, Callable[[], Beeline]]],
 ] = {
-    "requirement_capture_box": (
+    "wms_requirement_box": (
         get_capture_definition,
-        {"beeline_requirement_capture_v1": get_requirement_capture_beeline},
+        {"beeline_wms_requirement_v1": get_requirement_capture_beeline},
     ),
-    "wms_modeling_box": (
+    "wms_design_box": (
         get_mod_definition,
-        {"beeline_wms_modeling_v1": get_modeling_beeline},
+        {"beeline_wms_design_v1": get_modeling_beeline},
+    ),
+    "wms_system_box": (
+        get_wms_system_definition,
+        {"beeline_wms_system_v1": get_wms_system_beeline},
+    ),
+    "wms_development_box": (
+        get_wms_development_definition,
+        {"beeline_wms_development_v1": get_wms_development_beeline},
+    ),
+    "wms_testing_box": (
+        get_wms_testing_definition,
+        {"beeline_wms_testing_v1": get_wms_testing_beeline},
+    ),
+    "wms_ops_box": (
+        get_wms_ops_definition,
+        {"beeline_wms_ops_v1": get_wms_ops_beeline},
     ),
     "receipt_capture_box": (
         get_receipt_definition,
@@ -67,9 +99,13 @@ BOX_REGISTRY: dict[
 # 在这里注册一只盒子，就必须同时给出它的指标采集算法，
 # 否则 definition.metrics 里声明的指标在看板上是拿不到的数字。
 METRIC_COMPUTERS: dict[str, dict[str, core_metrics.Computer]] = {
-    "requirement_capture_box": CAPTURE_COMPUTERS,
-    "wms_modeling_box": MODELING_COMPUTERS,
+    "wms_requirement_box": CAPTURE_COMPUTERS,
+    "wms_design_box": MODELING_COMPUTERS,
     "receipt_capture_box": RECEIPT_COMPUTERS,
+    "wms_system_box": WMS_SYS_COMPUTERS,
+    "wms_development_box": WMS_DEV_COMPUTERS,
+    "wms_testing_box": WMS_TEST_COMPUTERS,
+    "wms_ops_box": WMS_OPS_COMPUTERS,
 }
 
 # box_id → 该盒自带的 op 实现。
@@ -77,12 +113,16 @@ METRIC_COMPUTERS: dict[str, dict[str, core_metrics.Computer]] = {
 # 盒子必须带得走自己的实现，否则它只是个声明，不是可独立交付的单元。
 # 内核（runtime/executor.py）只认分派协议，不认识任何一只盒子的 op。
 RUNNER_REGISTRY: dict[str, HandlerRunner] = {
-    "requirement_capture_box": CAPTURE_RUNNER,
-    "wms_modeling_box": MODELING_RUNNER,
+    "wms_requirement_box": CAPTURE_RUNNER,
+    "wms_design_box": MODELING_RUNNER,
     # 运营线盒子未注册进 BOX_REGISTRY（看板不显示、trigger 不接收），
     # 代码保留在仓库里，恢复时把它一起挂回 BOX_REGISTRY 即可
     "inventory_shortage": INVENTORY_RUNNER,
     "receipt_capture_box": RECEIPT_RUNNER,
+    "wms_system_box": WMS_SYS_RUNNER,
+    "wms_development_box": WMS_DEV_RUNNER,
+    "wms_testing_box": WMS_TEST_RUNNER,
+    "wms_ops_box": WMS_OPS_RUNNER,
 }
 
 # ~~Box 元信息（归属 / 接线）~~
@@ -118,12 +158,42 @@ def registered_box_ids() -> set[str]:
     return set(BOX_REGISTRY)
 
 
+def box_maturity(box_id: str) -> str:
+    """盒子的成熟度：live（能跑）| skeleton（判据已声明，腿还没实现）
+
+    声明住在 `ResultDef.maturity`——**产出契约**的属性，不是看板属性。
+    看板读它来标「未实现」，但不拥有它：一只盒子换到别的看板，
+    「它还没实现」这个事实不会跟着丢。
+    """
+    entry = BOX_REGISTRY.get(box_id)
+    if entry is None:
+        return ""
+    return entry[0]().result.maturity
+
+
+def box_domains(box_ids: Iterable[str]) -> dict[str, list[str]]:
+    """按 domain 分组盒子（域成员从各盒 placement 派生，不另立域表）
+
+    **为什么没有一张「域 → 成员」的表**：它会跟各盒自己的 domain 声明
+    漂。BOX_META 教训的同一个形状——两边各写一遍，改了一边另一边悄悄
+    过时，而没有任何东西会报错。所以域成员是**算出来的**。
+
+    `""`（没声明 domain）单独归到「未归域」，不假装它属于某个域。
+    """
+    groups: dict[str, list[str]] = {}
+    for bid in box_ids:
+        entry = BOX_REGISTRY.get(bid)
+        domain = entry[0]().placement.domain if entry else ""
+        groups.setdefault(domain, []).append(bid)
+    return {k: groups[k] for k in sorted(groups)}
+
+
 def order_boxes_by_flow(box_ids: Iterable[str]) -> list[str]:
     """按业务流向排盒子：产出方在前，消费方在后（需求捕获 → 业务建模）
 
     顺序从各盒 definition.placement.feeds_into 推导，
     不按 box_id 字母序也不按注册顺序。
-    字母序会把 wms_modeling_box 排在 requirement_capture_box 前面，
+    字母序会把 wms_design_box 排在 wms_requirement_box 前面，
     而实际流程正好相反；注册顺序则只是开发历史的偶然（谁先加谁在前）。
 
     稳定：同一层内保持传入顺序（Kahn 分层取出，不做字典序重排）。
@@ -190,7 +260,7 @@ def _sample_field(field: FieldDef) -> Any:
 
 # 手写示例（演示效果优于 schema 骨架）；缺省回退到 schema 生成
 _EXAMPLE_PAYLOADS: dict[tuple[str, str], dict[str, Any]] = {
-    ("wms_modeling_box", "handle_modeling_request"): {
+    ("wms_design_box", "handle_modeling_request"): {
         "set_id": "req_set_demo",
         "business_goal": "建模订单退款流程",
         "requirements": [
@@ -201,7 +271,7 @@ _EXAMPLE_PAYLOADS: dict[tuple[str, str], dict[str, Any]] = {
             {"requirement_id": "req_met_sla", "description": "退款处理时长", "requirement_type": "metric", "priority": "should_have"},
         ],
     },
-    ("requirement_capture_box", "capture_business_requirement"): {
+    ("wms_requirement_box", "capture_business_requirement"): {
         "narrative": (
             "建模订单退款流程。\n"
             "订单是核心实体。\n"
@@ -249,7 +319,7 @@ def resolve_text_intake(
     """解析「一段自然语言」该投给哪只盒子的哪个 task
 
     按**能力**解析（谁吃 text），不按 id 硬编码。以前这里是写死
-    requirement_capture_box + capture_business_requirement 的——那等于让
+    wms_requirement_box + capture_business_requirement 的——那等于让
     调用方知道某一只盒子的 task 类型名，盒子就不再是可插拔单元：
     加一只吃自然语言的新盒，这条路不会跟着它走。
 

@@ -360,6 +360,19 @@ BUSINESS_MODEL_PACKAGE = SchemaDef(
         FieldDef(name="reference_integrity", type="boolean"),
         FieldDef(name="structural_compliance", type="boolean"),
         FieldDef(name="metrics_defined", type="boolean"),
+        # ---- exception 条件读到的量 ----
+        # 这三个以前**产出里一直有、schema 里一直没写**。
+        # 后果不是产出缺东西，是三条 exception 规则各自指向一个
+        # schema 里不存在的字段——而 exception 规则不在 schema 里，
+        # 没人会去对，于是它们安安静静地从来没触发过：
+        # 需求超过 1000 条不 escalate、业务方没指定不 no_deliver、
+        # 有需求绑不上 WMS 概念也不报。规则写着，护不住任何东西。
+        FieldDef(name="requirement_count", type="integer",
+                 description="本次建模覆盖的需求条数（异常阈值读它）"),
+        FieldDef(name="business_owner_assigned", type="boolean",
+                 description="需求集是否指定了业务负责人"),
+        FieldDef(name="requirements_without_wms_binding", type="integer",
+                 description="可建模需求里没能绑上 WMS 实体的条数（应为 0）"),
         # ---- WMS 域专属的 2 条判据 ----
         # 前 5 条验的是「模型自洽」——需求覆盖率、引用完整性、结构齐不齐。
         # 这两条验的是「**这是不是一个 WMS 模型**」：需求有没有落到 WMS

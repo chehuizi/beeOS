@@ -29,6 +29,19 @@ from beelines.inventory_shortage import get_beeline as get_inv_beeline
 from boxes.modeling import get_definition as get_mod_def
 from beelines.modeling import get_beeline as get_mod_beeline
 
+# 看板盒子名单 = 注册表按业务流向排出来的那一串。
+# 手抄进各个测试会漂：加一只盒子就得改 N 处，漏一处就是一条假绿。
+# 这里钉一次，各处共用；真正要盯「顺序对不对」的地方仍单独断言。
+FLOW_ORDER = [
+    "receipt_capture_box",    # 费用报销线，独立于 WMS 域
+    "wms_requirement_box",
+    "wms_design_box",
+    "wms_development_box",
+    "wms_testing_box",
+    "wms_ops_box",
+    "wms_system_box",        # WMS 生命周期链的终点
+]
+
 
 def _find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -93,9 +106,11 @@ class TestDashboardData:
             "box_filter",
             "boxes",
             "box_stats",
+            "domains",
             "status_counts",
             "acceptance_counts",
             "metrics",
+            "excluded_skeleton_boxes",
             "recent",
             "exceptions",
         }
@@ -128,14 +143,10 @@ class TestDashboardData:
             store.append(tr, box_id=mod_def.id, acceptance_status="rejected")
 
         # 无 filter：未注册盒子的记录被隐藏，只剩 2 条 mod。
-        # 名单是注册表（三只都在），运行记录只影响计数。
+        # 名单是注册表（7 只都在），运行记录只影响计数。
         data = dashboard_data(store)
         assert data["metrics"]["total"] == 2
-        assert data["boxes"] == [
-            "receipt_capture_box",
-            "requirement_capture_box",
-            "wms_modeling_box",
-        ]
+        assert data["boxes"] == FLOW_ORDER
         # 过滤 mod
         data_mod = dashboard_data(store, box_filter=mod_def.id)
         assert data_mod["metrics"]["total"] == 2
@@ -174,13 +185,9 @@ class TestDashboardData:
         store.append(tr, box_id=mod_def.id, acceptance_status="rejected")
 
         stats = dashboard_data(store)["box_stats"]
-        # 三只注册盒子都在，哪怕只有 1 只跑过——「没跑过」读成 0 次运行，
+        # 所有注册盒子都在，哪怕只有 1 只跑过——「没跑过」读成 0 次运行，
         # 不是读成不存在。未注册的 order_exception_box 不在名单里。
-        assert [s["box_id"] for s in stats] == [
-            "receipt_capture_box",
-            "requirement_capture_box",
-            "wms_modeling_box",
-        ]
+        assert [s["box_id"] for s in stats] == FLOW_ORDER
         assert all(s["total"] == 0 for s in stats if s["box_id"] != mod_def.id), (
             "没跑过的盒子也该有统计条目，只是计数为 0"
         )
@@ -254,17 +261,12 @@ class TestKanbanServer:
         # 只展示已注册盒子：2 条 inv 历史记录被隐藏，只剩 1 条 mod
         assert data["metrics"]["total"] == 1
         # **名单是注册表，不是运行记录**：三只注册盒子全在，哪怕只有 1 只跑过。
-        # 以前这里断言 ["wms_modeling_box"]——它把「只显示跑过的盒子」
+        # 以前这里断言 ["wms_design_box"]——它把「只显示跑过的盒子」
         # 也写死了，于是清一次 RUNS 整个看板就空成「没有盒子」。
         # 「没跑过」该读成 0 次运行，不是读成不存在。
-        # 同层按 box_id 字母序（receipt 与 requirement 都无上游），
-        # wms_modeling 有上游所以垫后。传 set 会让这层顺序
-        # 随进程哈希随机化变，所以这里必须是稳定顺序。
-        assert data["boxes"] == [
-            "receipt_capture_box",
-            "requirement_capture_box",
-            "wms_modeling_box",
-        ]
+        # 顺序 = WMS 生命周期链 + 费用报销线。
+        # 传 set 会让同层顺序随进程哈希随机化变，所以这里必须是稳定顺序。
+        assert data["boxes"] == FLOW_ORDER
         assert data["box_filter"] is None
         conn.close()
 
@@ -458,16 +460,19 @@ class TestKanbanServer:
         上游从别人的 feeds_into 反推，不另写一遍。"""
         url, _ = server_url
         conn = HTTPConnection(url.replace("http://", ""))
-        conn.request("GET", "/api/data?box=wms_modeling_box")
+        conn.request("GET", "/api/data?box=wms_design_box")
         body = json.loads(conn.getresponse().read().decode("utf-8"))
         conn.close()
         ctx = body["box_stats"][0]["box_context"]
-        assert ctx["self_name"] == "WMS Modeling Box"
+        assert ctx["self_name"] == "WMS Design Box"
         # 上游 = 声明了 feeds_into 包含本盒的那只盒
-        assert [h["id"] for h in ctx["fed_by"]] == ["requirement_capture_box"]
+        assert [h["id"] for h in ctx["fed_by"]] == ["wms_requirement_box"]
         # 上游名字必须跟着 id 出，不能让前端自己补——单盒过滤时它只有一只盒的名字表
-        assert ctx["fed_by"][0]["name"] == "Requirement Capture Box"
-        assert ctx["feeds_into"] == []
+        assert ctx["fed_by"][0]["name"] == "WMS Requirement Box"
+        assert [h["id"] for h in ctx["feeds_into"]] == [
+            "wms_development_box",
+            "wms_system_box",
+        ]
         assert ctx["consumes"][0]["task_type"] == "handle_modeling_request"
         assert ctx["produces"]["type"] == "business_model_produced"
         assert "model_elements" in ctx["produces"]["fields"]
@@ -498,7 +503,7 @@ class TestTriggerApi:
         url, store = server_url
         before = len(store._cache)
         status, data = self._post(url, {
-            "box_id": "wms_modeling_box",
+            "box_id": "wms_design_box",
             "task_type": "handle_modeling_request",
             "payload": {
                 "set_id": "req_api_1",
@@ -538,7 +543,7 @@ class TestTriggerApi:
         """履约完成但验收失败（无 metric 需求）→ completed + rejected"""
         url, _ = server_url
         status, data = self._post(url, {
-            "box_id": "wms_modeling_box",
+            "box_id": "wms_design_box",
             "task_type": "handle_modeling_request",
             "payload": {
                 "set_id": "req_api_2",
@@ -574,7 +579,7 @@ class TestTriggerApi:
     def test_unknown_task_type_400(self, server_url: tuple[str, TaskRunStore]):
         url, _ = server_url
         status, data = self._post(url, {
-            "box_id": "wms_modeling_box",
+            "box_id": "wms_design_box",
             "task_type": "handle_unknown_task",
             "payload": {},
         })
@@ -589,7 +594,7 @@ class TestTriggerApi:
 
     def test_missing_fields_400(self, server_url: tuple[str, TaskRunStore]):
         url, _ = server_url
-        status, data = self._post(url, {"box_id": "wms_modeling_box"})
+        status, data = self._post(url, {"box_id": "wms_design_box"})
         assert status == 400
         assert "error" in data
 
@@ -599,7 +604,7 @@ class TestTriggerApi:
         mod_def = get_mod_def()
         tr = create_task_run(
             "pm", "i", mod_def.result.result_schema, f"{mod_def.id}@v{mod_def.version}",
-            "beeline_wms_modeling_v1", 1, "rt", "in",
+            "beeline_wms_design_v1", 1, "rt", "in",
         )
         store.append(tr, box_id=mod_def.id, acceptance_status="accepted")
 
@@ -706,7 +711,7 @@ class TestStructureApi:
         conn.request(
             "POST", "/api/trigger",
             body=json.dumps({
-                "box_id": "wms_modeling_box",
+                "box_id": "wms_design_box",
                 "task_type": "handle_modeling_request",
                 "payload": structured["payload"],
             }).encode("utf-8"),
@@ -791,12 +796,19 @@ class TestTheRosterComesFromTheRegistry:
         """钉住具体顺序：同层按 box_id 字母序，有上游的垫后
 
         只测「set == list」不够——那两条完全乱序也会一起变。
-        业务流向（需求捕获 → 业务建模）必须真的体现在顺序里。
+        业务流向（WMS 生命周期：需求 → 设计 → 开发 → 测试 → 运维 → 系统档案）
+        必须真的体现在顺序里。
         """
         from kanban.trigger import order_boxes_by_flow, registered_box_ids
 
         assert order_boxes_by_flow(registered_box_ids()) == [
-            "receipt_capture_box",          # 无上游 → 同层最前
-            "requirement_capture_box",      # 无上游 → 同层
-            "wms_modeling_box",        # 有上游（requirement_capture）→ 垫后
+            # 无上游 → 同层最前，按 box_id 字母序
+            "receipt_capture_box",
+            "wms_requirement_box",
+            # 每一环都被上一环挡住，必须严格垫后
+            "wms_design_box",
+            "wms_development_box",
+            "wms_testing_box",
+            "wms_ops_box",
+            "wms_system_box",          # 全链的终点
         ]

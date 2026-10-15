@@ -174,8 +174,8 @@ class TestBoxIsSelfContained:
 
         for handlers, runner, name in [
             (INVENTORY_HANDLERS, INV, "inventory_shortage"),
-            (MODEL_HANDLERS, MOD, "wms_modeling_box"),
-            (CAPTURE_HANDLERS, CAP, "requirement_capture_box"),
+            (MODEL_HANDLERS, MOD, "wms_design_box"),
+            (CAPTURE_HANDLERS, CAP, "wms_requirement_box"),
         ]:
             assert handlers, f"{name} 没有 op 实现"
             assert runner.owner == name

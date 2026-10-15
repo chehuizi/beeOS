@@ -179,7 +179,7 @@ class TestIntakeRejectsBeforeFulfillment:
     def test_bad_payload_raises_and_creates_nothing(self, store: TaskRunStore):
         with pytest.raises(TriggerError, match="violates task_schema"):
             trigger_task(
-                "wms_modeling_box", "handle_modeling_request",
+                "wms_design_box", "handle_modeling_request",
                 {"set_id": "s1", "requirements": []}, store,
             )
         assert store.list_recent() == []
@@ -192,7 +192,7 @@ class TestIntakeRejectsBeforeFulfillment:
     def test_empty_requirements_passes_gate_then_rejected(self, store: TaskRunStore):
         """空需求集结构上合法（0 条违规）→ 放行 → acceptance 按业务判据拦下"""
         r = trigger_task(
-            "wms_modeling_box", "handle_modeling_request",
+            "wms_design_box", "handle_modeling_request",
             {"set_id": "s1", "business_goal": "wms", "requirements": []}, store,
         )
         assert r["status"] == "completed"
@@ -260,7 +260,7 @@ class TestRejectionClassification:
 class TestAcceptanceOutcomeCarriesReason:
     def test_accepted_has_no_rejection_class(self, store: TaskRunStore):
         r = trigger_task(
-            "wms_modeling_box", "handle_modeling_request",
+            "wms_design_box", "handle_modeling_request",
             {
                 "set_id": "s1",
                 "business_goal": "wms 的流程",
@@ -281,7 +281,7 @@ class TestAcceptanceOutcomeCarriesReason:
 
     def test_rejection_class_persisted_to_store(self, store: TaskRunStore):
         trigger_task(
-            "wms_modeling_box", "handle_modeling_request",
+            "wms_design_box", "handle_modeling_request",
             {"set_id": "s1", "business_goal": "wms", "requirements": []}, store,
         )
         rec = store.list_recent()[0]

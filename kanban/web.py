@@ -38,7 +38,9 @@ from kanban.trigger import (
     BOX_REGISTRY,
     TriggerError,
     box_context,
+    box_domains,
     box_manifest,
+    box_maturity,
     box_meta,
     list_task_entries,
     order_boxes_by_flow,
@@ -133,6 +135,7 @@ def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[s
         box_stats.append({
             "box_id": b,
             "meta": box_meta(b),
+            "maturity": box_maturity(b),
             "total": b_total,
             "accepted": b_accepted,
             "rejected": b_rejected,
@@ -143,13 +146,41 @@ def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[s
             "box_context": box_context(b, b_records),
         })
 
+    # ---- 顶层聚合：排除骨架盒，但**必须说清楚排除了谁** ----
+    #
+    # 骨架盒的判据是真声明的、腿还没实现，所以它跑出来一定是 REJECTED。
+    # 把这些记录算进整体验收率，等于用「本来就不该过」的运行去拉低一个
+    # 真信号——看板上会显示「验收率 60%」，读的人以为实现了 6 只盒子、
+    # 其中 4 只没过。实际是 3 只里有 1 只没过，另外 4 只压根没写。
+    #
+    # 更要紧的是**不能静默**：把骨架盒的记录悄悄丢掉，聚合数字就变成
+    # 「说不清来源的数」了。所以排除名单一起返回，前端照实显示。
+    skeleton_boxes = sorted(b for b in all_boxes if box_maturity(b) == "skeleton")
+    live_box_ids = [b for b in all_boxes if b not in set(skeleton_boxes)]
+
+    if box_filter:
+        # 单盒视图：这只盒子自己就是全部口径，不该拿全局骨架名单去说事。
+        # 单盒视图的聚合**要按这只盒子过滤**——不过滤的话，点开一只盒子
+        # 看到的「运行数」是全平台的数，跟卡片上显示的对不上。
+        excluded: list[str] = []
+        metrics_store = store.view({box_filter}) if box_filter in all_boxes else store.view(set())
+    else:
+        excluded = skeleton_boxes
+        # 复用 store 已有的聚合口径（view + aggregate_metrics），
+        # 不在这里另写一遍——复制聚合逻辑等于埋一个「两处口径迟早漂」的雷
+        metrics_store = store.view(set(live_box_ids))
+
     return {
         "box_filter": box_filter,
         "boxes": boxes,
         "box_stats": box_stats,
+        "domains": box_domains(all_boxes),
         "status_counts": status_counts,
         "acceptance_counts": acc_counts,
-        "metrics": store.aggregate_metrics(box_id=box_filter),
+        "metrics": metrics_store.aggregate_metrics(),
+        # 骨架盒自己的运行记录仍在 recent / exceptions / 各自的 box_stats 里，
+        # 只是不参与顶层聚合。名单显式返回，不让人猜。
+        "excluded_skeleton_boxes": excluded,
         "recent": recent_all,
         "exceptions": exceptions,
     }
@@ -203,6 +234,40 @@ HTML_PAGE = f"""<!DOCTYPE html>
     background: linear-gradient(135deg, #2563eb, #1d4ed8);
     color: white; border-color: transparent;
   }}
+
+  /* ===== Domain 视图切换 =====
+     域成员从各盒 placement.domain 派生（服务端 box_domains），
+     这里只渲染菜单，不自己认哪只盒子属于哪个域。
+     空串 = 盒子没声明域，单独归「未归域」，不塞进任何真域。 */
+  .domain-bar {{ margin-top: 8px; }}
+  .domain-bar .domain-label {{
+    font-size: 11px; color: #94a3b8; margin-right: 8px;
+    letter-spacing: 0.06em; text-transform: uppercase;
+  }}
+  .domain-bar a.active {{ background: linear-gradient(135deg, #0f766e, #115e59); }}
+
+  /* ===== 骨架盒 =====
+     「未实现」和「实现了但不达标」必须看起来不一样。
+     不做视觉区分的话，一只从没跑过的盒子会跟一只跑挂的盒子长得一样。 */
+  .cube-scene.is-skeleton {{ opacity: 0.55; filter: grayscale(0.75); }}
+  .cube-scene.is-skeleton:hover {{ opacity: 0.9; }}
+  .skeleton-badge {{
+    display: inline-block; margin-left: 6px; padding: 1px 7px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+    color: #92400e; background: #fef3c7; border: 1px solid #fcd34d;
+    border-radius: 9px; vertical-align: middle;
+  }}
+  .skeleton-note {{
+    font-size: 12px; color: #92400e; background: #fffbeb;
+    border: 1px solid #fde68a; border-radius: 8px;
+    padding: 7px 12px; margin: 0 0 14px 0;
+  }}
+
+  /* 每张盒子卡片定宽：flex 换行靠的是**子项宽度**，不定宽的话
+     flex item 会撑到 max-content，7 只盒子就竖成一条七屏长的页。
+     一屏能扫完「有哪些盒子」才是看板的用处。 */
+  .box-card {{ flex: 0 0 262px; max-width: 262px; }}
+  .box-card .spec-row .v {{ overflow-wrap: anywhere; }}
 
   /* ===== 3D cube beeBox（CSS 3D 盒） =====
      尺寸收小：280×190×130 → 176×118×80。
@@ -892,6 +957,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
     <div class="head-right">
       <span class="refresh-tag" id="last-refresh">never</span>
       <div class="filter-bar" id="filter-bar"></div>
+      <div class="filter-bar domain-bar" id="domain-bar"></div>
     </div>
   </div>
 
@@ -914,6 +980,92 @@ function renderFilters(boxes, current) {{
     html += `<a href="/?box=${{encodeURIComponent(b)}}" class="${{active}}">${{b}}</a>`;
   }}
   return html;
+}}
+
+// ===== Domain 视图切换 =====
+//
+// **域成员是服务端算好的**（box_domains 从各盒 placement.domain 派生）。
+// 前端不再自己判断「哪只盒子算 WMS」——那种判断写在 JS 里就是第二份
+// 业务知识，改了盒子忘了改 JS，看板就会把一只盒子归错域，而且不报错。
+//
+// 空串（没声明 domain）显示成「未归域」：不假装它属于任何真域。
+const UNASSIGNED_DOMAIN = '（未归域）';
+// 「全部域」的哨兵值。**不能用 ''**——'' 同时是「未归域」那组的 key，
+// 于是两个 chip 会一起亮成 active，看起来像「同时选中了全部域和未归域」。
+const ALL_DOMAINS = '__all__';
+
+function domainLabel(d) {{
+  return d === '' ? UNASSIGNED_DOMAIN : d;
+}}
+
+let _domainFilter = ALL_DOMAINS;
+
+function renderDomainBar(domains) {{
+  const keys = Object.keys(domains || {{}});
+  if (keys.length <= 1) return '';   // 只有一个域，切换没意义
+  let html = `<span class="domain-label">DOMAIN</span>`;
+  html += `<a href="#" class="${{_domainFilter === ALL_DOMAINS ? 'active' : ''}}"
+             data-domain="${{ALL_DOMAINS}}">全部域</a>`;
+  for (const d of keys) {{
+    const active = _domainFilter === d ? 'active' : '';
+    html += `<a href="#" class="${{active}}" data-domain="${{esc(d)}}"
+             >${{esc(domainLabel(d))}}<span class="bid"> (${{domains[d].length}})</span></a>`;
+  }}
+  return html;
+}}
+
+// **域菜单不能每 2 秒重建一次**。
+//
+// 看板每 2s 拉一次数据重绘，重绘时如果把域菜单也 innerHTML 重建，
+// chip 上的 click 监听器就跟着一起没了——于是每一次点击都落在
+// 「刚被换掉、还没绑上监听」的那一瞬。真人也点不准，而且它不会报错：
+// 看板上域菜单看着好好的，就是按下去没反应。
+//
+// 所以：**域集合没变就不重建**，只同步 active 态。
+function ensureDomainBar(dbar, domains) {{
+  const sig = Object.keys(domains || {{}}).sort().join('|');
+  if (dbar.dataset.sig !== sig) {{
+    dbar.innerHTML = renderDomainBar(domains);
+    dbar.dataset.sig = sig;
+    for (const a of dbar.querySelectorAll('a')) {{
+      a.addEventListener('click', (ev) => {{
+        ev.preventDefault();
+        _domainFilter = a.getAttribute('data-domain');
+        syncDomainBar(dbar);
+        applyDomainFilter();
+      }});
+    }}
+  }}
+  syncDomainBar(dbar);
+}}
+
+function syncDomainBar(dbar) {{
+  for (const a of dbar.querySelectorAll('a')) {{
+    a.classList.toggle('active', a.getAttribute('data-domain') === _domainFilter);
+  }}
+}}
+
+function esc(s) {{
+  return String(s).replace(/[&<>"]/g, c => (
+    {{ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }}[c]));
+}}
+
+// 域切换：纯显示过滤，不改服务端口径。
+// 换域只该换「看哪些盒子」，不该悄悄换掉验收率的算法——
+// 所以顶部分母一直是服务端给的那个数。
+function applyDomainFilter() {{
+  const cards = document.querySelectorAll('[data-box-domain]');
+  let shown = 0;
+  for (const el of cards) {{
+    const match = _domainFilter === ALL_DOMAINS
+      || el.getAttribute('data-box-domain') === _domainFilter;
+    el.style.display = match ? '' : 'none';
+    if (match) shown += 1;
+  }}
+  const note = document.getElementById('domain-empty');
+  if (note) note.style.display = shown === 0 ? '' : 'none';
+  const cnt = document.getElementById('box-count');
+  if (cnt) cnt.textContent = shown;
 }}
 
 // 价值流 → 配色（归属数据来自服务端 box.meta，声明式，不再按 box_id 关键词猜测）
@@ -942,17 +1094,31 @@ function healthOf(box) {{
   return 'bad';
 }}
 
+// 成熟度 → 铭牌怎么显示。**两个值都显式写出来**，不留「默认=live」的隐式
+// else——ResultDef.maturity 是封闭两值，这里也该是封闭两值。
+// 多一个合法值而这里没跟上，那只盒子就会落进 else，看起来跟 live 没区别。
+const MATURITY_DISPLAY = {{
+  live: {{ badge: '', acceptance: null }},
+  // 骨架盒的判据是真声明的、腿还没实现，跑出来必然全红。
+  // 显示成红色的 0.0% 等于说「实现了但一个都没过」——两件事完全不同。
+  skeleton: {{ badge: '<span class="skeleton-badge">未实现</span>', acceptance: '未实现' }},
+}};
+
 // 盒子铭牌：Line 是价值流，Box 是业务责任单元
 function captionHtml(box) {{
   const meta = box.meta || {{}};
+  const maturity = MATURITY_DISPLAY[box.maturity] || MATURITY_DISPLAY.live;
+  const isSkeleton = box.maturity === 'skeleton';
   const healthColor = {{ good: '#16a34a', warn: '#f59e0b', bad: '#dc2626', none: '#cbd5e1' }}[healthOf(box)];
   const row = (k, v) => `<div class="spec-row"><span class="k">${{k}}</span><span class="v">${{v ?? '—'}}</span></div>`;
-  return `<div class="name"><span class="health-dot" style="background:${{healthColor}}"></span>${{meta.display_name || box.box_id}}<span class="bid">${{box.box_id}}</span></div>
+  const rate = maturity.acceptance ?? box.acceptance_rate;
+  return `<div class="name"><span class="health-dot" style="background:${{isSkeleton ? '#cbd5e1' : healthColor}}"></span>${{meta.display_name || box.box_id}}${{maturity.badge}}<span class="bid">${{box.box_id}}</span></div>
     <div class="spec">
+      ${{row('DOMAIN', domainLabel(meta.domain || ''))}}
       ${{row('VALUE STREAM', meta.value_stream)}}
       ${{row('ROLE', meta.role)}}
       ${{row('RUNS', box.total)}}
-      ${{row('ACCEPTANCE', box.acceptance_rate)}}
+      ${{row('ACCEPTANCE', rate)}}
     </div>`;
 }}
 
@@ -1139,9 +1305,12 @@ function renderCube(box) {{
   // 默认角度比以前大（-14 / -24）。立体感靠角度露侧面，
   // 角度给小了立方体就是一张正方形的纸。
   const tilt = _boxState.tilt || {{ rx: -14, ry: -24 }};
+  const isSkeleton = box.maturity === 'skeleton';
+  // data-box-domain 供域切换用；值取自各盒自己的 placement.domain。
+  const domain = (box.meta || {{}}).domain || '';
 
-  return `<div>
-    <div class="cube-scene" style="--cw:176px;--ch:118px;--cd:80px;">
+  return `<div class="box-card" data-box-domain="${{esc(domain)}}">
+    <div class="cube-scene ${{isSkeleton ? 'is-skeleton' : ''}}" style="--cw:176px;--ch:118px;--cd:80px;">
       <div class="cube-float">
         <div class="cube" style="--core-rgb:${{core}};--edge-rgb:${{edge}};transform:rotateX(${{tilt.rx}}deg) rotateY(${{tilt.ry}}deg)">
           <div class="cube-face cube-back"></div>
@@ -1160,21 +1329,27 @@ function renderCube(box) {{
 
 function bindTilt() {{
   // 鼠标跟随倾斜（真实感）；状态存 _boxState.tilt，跨 2s 刷新保持
-  const scene = document.querySelector('.cube-scene');
-  if (!scene) return;
-  scene.addEventListener('mousemove', (e) => {{
-    const r = scene.getBoundingClientRect();
-    const dx = (e.clientX - r.left) / r.width - 0.5;
-    const dy = (e.clientY - r.top) / r.height - 0.5;
-    _boxState.tilt = {{ rx: Math.round(-14 - dy * 12), ry: Math.round(-24 + dx * 18) }};
-    const cube = scene.querySelector('.cube');
-    if (cube) cube.style.transform = `rotateX(${{_boxState.tilt.rx}}deg) rotateY(${{_boxState.tilt.ry}}deg)`;
-  }});
-  scene.addEventListener('mouseleave', () => {{
-    _boxState.tilt = {{ rx: -14, ry: -24 }};
-    const cube = scene.querySelector('.cube');
-    if (cube) cube.style.transform = 'rotateX(-14deg) rotateY(-24deg)';
-  }});
+  // **每个场景各绑一个**：以前 querySelector 只取到第一个盒子，
+  // 于是 3 只盒子里只有 1 只会跟着鼠标转。加上骨架盒一共 7 只之后，
+  // 「只有第一只会动」变成了肉眼可见的坏，而不是没人提的小瑕疵。
+  const scenes = document.querySelectorAll('.cube-scene');
+  for (const scene of scenes) {{
+    scene.addEventListener('mousemove', (e) => {{
+      const r = scene.getBoundingClientRect();
+      const dx = (e.clientX - r.left) / r.width - 0.5;
+      const dy = (e.clientY - r.top) / r.height - 0.5;
+      _boxState.tilt = {{ rx: Math.round(-14 - dy * 12), ry: Math.round(-24 + dx * 18) }};
+      for (const c of document.querySelectorAll('.cube')) {{
+        c.style.transform = `rotateX(${{_boxState.tilt.rx}}deg) rotateY(${{_boxState.tilt.ry}}deg)`;
+      }}
+    }});
+    scene.addEventListener('mouseleave', () => {{
+      _boxState.tilt = {{ rx: -14, ry: -24 }};
+      for (const c of document.querySelectorAll('.cube')) {{
+        c.style.transform = 'rotateX(-14deg) rotateY(-24deg)';
+      }}
+    }});
+  }}
 }}
 
 function renderCard(label, value, cssClass) {{
@@ -1583,7 +1758,7 @@ function buildShell(boxId, box, entries) {{
   // 接力目标：盒子之间的关系声明在各盒 definition.placement.feeds_into
   // （业务信息跟着盒子走，不在前端硬编码）。
   // 显示名取 box_context 随 id 一起给的那份——单盒过滤时前端手里只有
-  // 当前这一只盒的名字表，自己补会直接露出 wms_modeling_box 这种原始 id。
+  // 当前这一只盒的名字表，自己补会直接露出 wms_design_box 这种原始 id。
   window._feedsInto = ((box && box.box_context && box.box_context.feeds_into) || [])
     .map((h) => ({{ box_id: h.id, display_name: h.name || h.id }}));
   let options = '';
@@ -2237,6 +2412,8 @@ function render(data) {{
   );
 
   document.getElementById('filter-bar').innerHTML = renderFilters(data.boxes, box);
+  const dbar = document.getElementById('domain-bar');
+  if (dbar) ensureDomainBar(dbar, data.domains);
   document.getElementById('last-refresh').textContent =
     'refreshed ' + new Date().toLocaleTimeString();
 
@@ -2262,17 +2439,32 @@ function render(data) {{
   _scene2d = null;
   _accGate = null;
   let html = '';
+  // 骨架盒的运行记录不计入顶部分母，但**必须说出来**——
+  // 悄悄排除等于给出一个说不清来源的数字。
+  const skipped = data.excluded_skeleton_boxes || [];
+  if (skipped.length) {{
+    html += `<div class="skeleton-note">${{skipped.length}} 只骨架盒的运行记录未计入上方指标
+      （判据已声明、腿还没实现，跑出来必然全红，计进去会拿「没写」冒充「没做好」）：
+      ${{skipped.map(esc).join(' · ')}}</div>`;
+  }}
   if (data.box_stats && data.box_stats.length > 0) {{
-    html += `<div class="section"><div class="section-title">beeBoxes in Flight (${{data.box_stats.length}})</div>`;
+    html += `<div class="section"><div class="section-title">beeBoxes in Flight
+      (<span id="box-count">${{data.box_stats.length}}</span>)</div>`;
     html += `<div class="boxes-scene">`;
     for (const b of data.box_stats) {{
       html += renderCube(b);
     }}
-    html += `</div></div>`;
+    html += `</div>`;
+    html += `<div class="empty" id="domain-empty" style="display:none">(该域下没有盒子)</div>`;
+    html += `</div>`;
   }} else {{
     html += `<div class="empty">(no beeBoxes registered)</div>`;
   }}
   document.getElementById('content').innerHTML = html;
+  // **必须在 innerHTML 之后**。放前面的话它过滤的是上一轮的旧 DOM，
+  // 新插进来的卡片一个都没过滤——于是每 2 秒刷新一次，域选择就被悄悄清掉，
+  // 而看板上菜单还亮着「WMS」，看着像选了没反应。
+  applyDomainFilter();
   bindTilt();
 }}
 
@@ -2378,7 +2570,7 @@ class KanbanRequestHandler(BaseHTTPRequestHandler):
             # 走**盒子的 task**（不再是影子函数）——每一次抽取都产生 TaskRun、
             # 都过 4 条 acceptance、失败有 rejection_class 归因。
             # box_id / task_type 可以显式指定；不给时按「谁吃自然语言」解析。
-            # 以前这里是写死 requirement_capture_box 的——那让看板服务器
+            # 以前这里是写死 wms_requirement_box 的——那让看板服务器
             # 知道了某一只具体盒子的 task 类型，盒子就不再是可插拔单元。
             text = body.get("text")
             if not isinstance(text, str) or not text.strip():

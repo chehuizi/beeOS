@@ -18,6 +18,6 @@ Software Line 第一只盒子——按结构化需求产出可验证的业务模
 基础设施可以是假的（每个 op 是 mock，下一阶段实现真实 modeling engine）。
 """
 
-from boxes.modeling.definition import WMS_MODELING_BOX, get_definition
+from boxes.modeling.definition import WMS_DESIGN_BOX, get_definition
 
-__all__ = ["WMS_MODELING_BOX", "get_definition"]
+__all__ = ["WMS_DESIGN_BOX", "get_definition"]

@@ -562,3 +562,117 @@ class TestRegistryCoverage:
             "看板层又出现一张按域名索引的表：\n  " + "\n  ".join(offenders)
             + "\n域成员应该由 box_domains() 从各盒 placement 算出来"
         )
+
+
+class TestRadialLayoutIsDerived:
+    """环形视图：中心、环序、两类边都从接线推导，前端不许自己决定
+
+    「以 System box 为中心」这个设计是对的，但它必须**由接线算出来**，
+    不能在前端写死 `center = "wms_system_box"`——那等于在看板层
+    声明了业务事实，跟 BOX_META 一模一样的病，只是换了张脸。
+
+    写死的后果还更隐蔽一点：接线改了（比如某只盒子不再投给系统档案盒），
+    看板还是把系统档案盒摆在圆心，结构看上去跟接线完全一致，
+    没有任何东西会报错。
+    """
+
+    @staticmethod
+    def _domains():
+        from kanban.trigger import box_domains, registered_box_ids
+
+        return box_domains(registered_box_ids())
+
+    def test_the_center_is_the_unique_sink_not_a_named_box(self):
+        """圆心 = 域内唯一汇点（出度 0 且入度 > 0），与它是谁无关"""
+        from kanban.trigger import domain_layout
+
+        for domain in self._domains():
+            lay = domain_layout(domain)
+            if lay["layout"] != "radial":
+                assert lay["center"] is None, (
+                    f"{domain!r} 已经退回平铺，却还报了一个中心 "
+                    f"{lay['center']!r}——那是半个答案"
+                )
+                assert lay["reason"], f"{domain!r} 退回平铺但没说为什么"
+                continue
+
+            center = lay["center"]
+            assert center in lay["boxes"]
+            # 中心必须是「只被投、不投人」的那只：它在所有边里只出现在终点位置
+            sources = {b for b in lay["boxes"]
+                       for t in BOX_REGISTRY[b][0]().placement.feeds_into}
+            fed_by = {b for b in lay["boxes"]
+                      if center in BOX_REGISTRY[b][0]().placement.feeds_into}
+            assert center not in sources, f"{center} 是圆心，却还投给别人"
+            assert fed_by, f"{center} 是圆心，却没有任何盒子投给它"
+
+            # 域内如果有第二个汇点，中心就不该被选出来
+            others = [b for b in lay["boxes"] if b != center
+                      and not BOX_REGISTRY[b][0]().placement.feeds_into]
+            assert not others, (
+                f"{domain!r} 有第二个汇点 {others}，中心不唯一，应该退回平铺"
+            )
+
+    def test_every_declared_edge_is_drawn_exactly_once(self):
+        """域内每条已声明的边，要么是交接要么是累积，一条都不能漏
+
+        漏画一条边 = 看板上「谁跟谁有关系」少了一条，而布局看上去是完整的。
+        分类错一条 = 把「交给下一只验」画成「并进档案」，两件事的读法相反。
+        """
+        from kanban.trigger import domain_layout
+
+        for domain in self._domains():
+            lay = domain_layout(domain)
+            declared = {
+                (b, t) for b in lay["boxes"]
+                for t in BOX_REGISTRY[b][0]().placement.feeds_into
+                if t in set(lay["boxes"])
+            }
+            drawn = {tuple(e) for e in lay["handoffs"]} | {
+                (s, lay["center"]) for s in lay["feeds_center"]}
+            if lay["layout"] != "radial":
+                assert not drawn, f"{domain!r} 退回平铺却还报了边"
+                continue
+            assert drawn == declared, (
+                f"{domain!r}: 声明了 {len(declared)} 条边，画出来的是 {drawn}"
+            )
+
+    def test_the_ring_follows_the_handoff_chain(self):
+        """环序必须是交接边的顺序，不是字母序也不是注册序
+
+        环上相邻 = 有交接边。环序错了，读者会以为相邻两只之间有交接，
+        而实际中间隔着别人——比少画一条边更难发现。
+        """
+        from kanban.trigger import domain_layout
+
+        for domain in self._domains():
+            lay = domain_layout(domain)
+            if lay["layout"] != "radial":
+                continue
+            handoffs = {tuple(e) for e in lay["handoffs"]}
+            ring = lay["ring"]
+            assert set(ring) | {lay["center"]} == set(lay["boxes"]), (
+                f"{domain!r}: 环 + 圆心没覆盖全域的盒子"
+            )
+            seen = set()
+            for i in range(len(ring) - 1):
+                pair = (ring[i], ring[i + 1])
+                assert pair in handoffs, (
+                    f"{domain!r}: 环上第 {i}→{i + 1} 位 {pair} 之间没有交接边"
+                )
+                seen.add(pair)
+            assert len(seen) == len(handoffs), (
+                f"{domain!r}: 有交接边没画在环上相邻位置"
+            )
+
+    def test_the_frontend_names_no_box(self):
+        """前端一个 box_id 字面量都不许有——中心尤其不许
+
+        布局的数据全部来自服务端 layout。前端要是认得某只盒子的名字，
+        那它就有能力决定「谁在中心」，而那件事属于接线。
+        """
+        offenders = [b for b in BOX_REGISTRY if b in HTML_PAGE]
+        assert not offenders, (
+            f"看板前端里出现了写死的 box_id：{offenders}——"
+            f"如果是为了指定中心，那是 BOX_META 的老毛病换了个位置"
+        )

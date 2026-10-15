@@ -42,6 +42,7 @@ from kanban.trigger import (
     box_manifest,
     box_maturity,
     box_meta,
+    domain_layout,
     list_task_entries,
     order_boxes_by_flow,
     registered_box_ids,
@@ -175,6 +176,9 @@ def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[s
         "boxes": boxes,
         "box_stats": box_stats,
         "domains": box_domains(all_boxes),
+        "domain_layouts": {
+            d: domain_layout(d) for d in box_domains(all_boxes)
+        },
         "status_counts": status_counts,
         "acceptance_counts": acc_counts,
         "metrics": metrics_store.aggregate_metrics(),
@@ -268,6 +272,38 @@ HTML_PAGE = f"""<!DOCTYPE html>
      一屏能扫完「有哪些盒子」才是看板的用处。 */
   .box-card {{ flex: 0 0 262px; max-width: 262px; }}
   .box-card .spec-row .v {{ overflow-wrap: anywhere; }}
+
+  /* ===== 环形视图 ===== */
+  .radial {{ position: relative; margin: 0 auto 30px; }}
+  .radial-edges {{ position: absolute; inset: 0; pointer-events: none; }}
+  .radial .box-card {{
+    position: absolute; width: 252px; height: 330px; overflow: visible;
+  }}
+  /* 环形视图里卡片是定高的，规格行压紧一点，
+     免得铭牌撑出卡片、压到相邻那张上 */
+  .radial .spec-row {{ line-height: 1.6; }}
+  .radial .cube-caption {{ margin-top: 18px; }}
+  /* 圆心那只：比环上的大一圈，免得读成「环上的一只」 */
+  .radial .radial-center {{ z-index: 2; }}
+  .radial .radial-center .cube-scene {{ transform: scale(1.12); }}
+  .radial .radial-center .cube-caption .name {{ font-size: 16px; }}
+  /* 标签走文档流，不绝对定位：绝对定位 + top:-26px 会压在后面那张卡上，
+     「汇点」两个字正好落在别人的铭牌里 */
+  .center-tag {{
+    text-align: center; font-size: 10px; color: #0f766e;
+    letter-spacing: 0.05em; margin-bottom: 4px;
+  }}
+  .radial .radial-center .cube-caption {{ margin-top: 6px; }}
+  .radial-legend {{
+    display: flex; gap: 20px; justify-content: center; align-items: center;
+    font-size: 11px; color: #475569; margin: 4px 0 10px;
+  }}
+  .radial-legend span {{ display: inline-flex; align-items: center; gap: 6px; }}
+  .radial-legend .muted {{ color: #94a3b8; }}
+  /* 两类边必须一眼分得开：实线粗一点走环，虚线细一点走向心 */
+  .edge-handoff {{ stroke: #64748b; stroke-width: 2; fill: none; }}
+  .edge-feed {{ stroke: #0d9488; stroke-width: 1.5; stroke-dasharray: 5 4; fill: none; }}
+  .radial-legend .edge {{ stroke-width: 2; }}
 
   /* ===== 3D cube beeBox（CSS 3D 盒） =====
      尺寸收小：280×190×130 → 176×118×80。
@@ -1299,18 +1335,12 @@ function initAccGate(container) {{
   }};
 }}
 
-function renderCube(box) {{
-  // CSS 3D 玻璃履约盒（仅用于多盒总览的小盒；单盒聚焦视图是 2D 流水线）
+function cubeHtml(box) {{
+  // 立方体 + 铭牌（不含外层 .box-card 外壳）
   const {{ core, edge }} = vsPalette(box);
-  // 默认角度比以前大（-14 / -24）。立体感靠角度露侧面，
-  // 角度给小了立方体就是一张正方形的纸。
   const tilt = _boxState.tilt || {{ rx: -14, ry: -24 }};
   const isSkeleton = box.maturity === 'skeleton';
-  // data-box-domain 供域切换用；值取自各盒自己的 placement.domain。
-  const domain = (box.meta || {{}}).domain || '';
-
-  return `<div class="box-card" data-box-domain="${{esc(domain)}}">
-    <div class="cube-scene ${{isSkeleton ? 'is-skeleton' : ''}}" style="--cw:176px;--ch:118px;--cd:80px;">
+  return `<div class="cube-scene ${{isSkeleton ? 'is-skeleton' : ''}}" style="--cw:176px;--ch:118px;--cd:80px;">
       <div class="cube-float">
         <div class="cube" style="--core-rgb:${{core}};--edge-rgb:${{edge}};transform:rotateX(${{tilt.rx}}deg) rotateY(${{tilt.ry}}deg)">
           <div class="cube-face cube-back"></div>
@@ -1323,8 +1353,159 @@ function renderCube(box) {{
       </div>
       <div class="cube-shadow"></div>
     </div>
-    <div class="cube-caption">${{captionHtml(box)}}</div>
+    <div class="cube-caption">${{captionHtml(box)}}</div>`;
+}}
+
+function renderCube(box) {{
+  // CSS 3D 玻璃履约盒（仅用于多盒总览的小盒；单盒聚焦视图是 2D 流水线）
+  // 默认角度比以前大（-14 / -24）。立体感靠角度露侧面，
+  // 角度给小了立方体就是一张正方形的纸。
+  // data-box-domain 供域切换用；值取自各盒自己的 placement.domain。
+  const domain = (box.meta || {{}}).domain || '';
+  return `<div class="box-card" data-box-domain="${{esc(domain)}}">
+    ${{cubeHtml(box)}}
   </div>`;
+}}
+
+// ===== 环形视图：中心 = 域内唯一汇点 =====
+//
+// **中心、环序、两类边全部来自服务端 layout**（`domain_layout` 从各盒
+// placement.feeds_into 推导）。前端一个 box_id 都不认，也不判断
+// 「哪只盒子该在中心」——那是业务事实，住在盒子里。
+//
+// 两类边分开画，因为是两件事：
+//   环上实线 = 交接（交出去让下一只验）
+//   向心虚线 = 累积（这次产出进档案）
+// 混成一条就只剩「谁连谁」，流水线就看不出来了。
+//
+// 方向感：交接边顺时针，累积边全部**向心**入。中心位本身很容易被读成
+// 「中心驱动其它盒子」，而实际方向是其它盒子喂给中心——所以累积边的
+// 箭头必须一律指着圆心。
+
+const RADIAL_CARD_W = 252;
+// 卡片高度是**按内容算的余量**，不是拍脑袋：立方体 118 + 铭牌标题（可能折
+// 两行 ≈ 40）+ 5 行规格 ≈ 150 + 阴影。给少了铭牌就会溢到卡片外面，
+// 于是「汇点」两个字正好落在后面那只盒子的规格表上。
+const RADIAL_CARD_H = 330;
+const RADIAL_GAP = 44;
+const RADIAL_BOW = 46;
+
+// 从卡片中心朝 p 方向走，到卡片**边框**为止的那个点。
+// 不裁的话连线会从卡片底下穿过去，正好压在铭牌文字上——
+// 线是连上了，可读起来像「这条边穿过了这只盒子」。
+function trimToCard(from, p) {{
+  const dx = p.x - from.x, dy = p.y - from.y;
+  const hw = RADIAL_CARD_W / 2 + RADIAL_GAP / 2;
+  const hh = RADIAL_CARD_H / 2 + RADIAL_GAP / 2;
+  const tx = Math.abs(dx) < 0.001 ? Infinity : hw / Math.abs(dx);
+  const ty = Math.abs(dy) < 0.001 ? Infinity : hh / Math.abs(dy);
+  const t = Math.min(tx, ty);
+  if (!isFinite(t) || t >= 1) return p;
+  return {{ x: from.x + dx * t, y: from.y + dy * t }};
+}}
+
+function polar(cx, cy, r, a) {{
+  return {{ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) }};
+}}
+
+function renderRadial(layout, stats) {{
+  const n = layout.ring.length;
+  const byId = {{}};
+  for (const s of stats) byId[s.box_id] = s;
+
+  // 半径由卡片尺寸和数量**算**出来，两个方向都得容得下：
+  //   横向：相邻两张的弦长 2R·sin(π/n) ≥ 卡宽 + 间隙
+  //   纵向：中心卡和环上卡不能叠，R ≥ 卡高 + 间隙
+  // 只按横向算的话，卡片会竖着叠在一起——横向够宽不代表纵向够高。
+  const R = Math.max(
+    330,
+    (RADIAL_CARD_W + RADIAL_GAP) / 2 / Math.sin(Math.PI / n) + 26,
+    RADIAL_CARD_H + RADIAL_GAP,
+  );
+  const M = RADIAL_CARD_W / 2 + RADIAL_BOW + 24;
+  const W = Math.round(R * 2 + M * 2);
+  const H = Math.round(R * 2 + M * 2);
+  const cx = W / 2;
+  const cy = H / 2;
+
+  const pos = {{}};
+  layout.ring.forEach((id, i) => {{
+    pos[id] = polar(cx, cy, R, -Math.PI / 2 + (i * 2 * Math.PI / n));
+  }});
+  const center = layout.center;
+  const cpos = {{ x: cx, y: cy }};
+
+  const edges = [];
+  // 交接边：相邻两张卡之间的一段短弧，顺时针，两端裁到卡片边框。
+  // 曾经画成绕整圈的大圆弧——那让画布宽出快一倍，下半屏全是空白，
+  // 而弧线本身没有任何新信息：交接就发生在两只盒子中间。
+  for (const [s, d] of layout.handoffs) {{
+    const a = pos[s], b = pos[d];
+    if (!a || !b) continue;
+    const ea = trimToCard(a, b);
+    const eb = trimToCard(b, a);
+    const mx = (ea.x + eb.x) / 2, my = (ea.y + eb.y) / 2;
+    const vx = mx - cx, vy = my - cy;
+    const len = Math.hypot(vx, vy) || 1;
+    const qx = mx + (vx / len) * RADIAL_BOW;
+    const qy = my + (vy / len) * RADIAL_BOW;
+    edges.push(
+      '<path d="M ' + ea.x.toFixed(1) + ' ' + ea.y.toFixed(1) +
+      ' Q ' + qx.toFixed(1) + ' ' + qy.toFixed(1) +
+      ' ' + eb.x.toFixed(1) + ' ' + eb.y.toFixed(1) + '"' +
+      ' class="edge edge-handoff" marker-end="url(#arrow-handoff)"/>');
+  }}
+  // 累积边：一律向心，裁到卡片边框
+  for (const s of layout.feeds_center) {{
+    if (!pos[s]) continue;
+    const tip = trimToCard(cpos, pos[s]);
+    edges.push(
+      '<line x1="' + tip.x.toFixed(1) + '" y1="' + tip.y.toFixed(1) + '"' +
+      ' x2="' + cpos.x + '" y2="' + cpos.y + '"' +
+      ' class="edge edge-feed" marker-end="url(#arrow-feed)"/>');
+  }}
+
+  const card = (id, isCenter) => {{
+    const s = byId[id];
+    if (!s) return '';
+    const p = isCenter ? cpos : pos[id];
+    const cls = isCenter
+      ? 'box-card radial-center' + (s.maturity === 'skeleton' ? ' is-skeleton' : '')
+      : 'box-card';
+    // 纯字符串拼接，不用模板字符串：`${...}` 只有在反引号里才是插值，
+    // 裸露出来就是 SyntaxError——而且页面会停在 Loading，看起来像数据没到。
+    return '<div class="' + cls + '"'
+      + ' style="left:' + (p.x - RADIAL_CARD_W / 2).toFixed(1) + 'px;'
+      + 'top:' + (p.y - RADIAL_CARD_H / 2).toFixed(1) + 'px">'
+      + (isCenter ? '<div class="center-tag">汇点 · 本域所有产出落进这里</div>' : '')
+      + cubeHtml(s)
+      + '</div>';
+  }};
+
+  let cards = layout.ring.map(id => card(id, false)).join('');
+  if (center) cards += card(center, true);
+
+  return `<div class="radial-legend">
+      <span><svg width="26" height="10"><line x1="1" y1="5" x2="25" y2="5" class="edge edge-handoff"/></svg>交接：交出去让下一只验</span>
+      <span><svg width="26" height="10"><line x1="1" y1="5" x2="25" y2="5" class="edge edge-feed"/></svg>累积：产出并进系统档案</span>
+      <span class="muted">环序 = 生命周期顺序，弧线顺时针</span>
+    </div>
+    <div class="radial" style="width:${{W}}px;height:${{H}}px">
+      <svg class="radial-edges" width="${{W}}" height="${{H}}" viewBox="0 0 ${{W}} ${{H}}">
+        <defs>
+          <marker id="arrow-handoff" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
+          </marker>
+          <marker id="arrow-feed" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#0d9488"/>
+          </marker>
+        </defs>
+        ${{edges.join('')}}
+      </svg>
+      ${{cards}}
+    </div>`;
 }}
 
 function bindTilt() {{
@@ -1758,7 +1939,9 @@ function buildShell(boxId, box, entries) {{
   // 接力目标：盒子之间的关系声明在各盒 definition.placement.feeds_into
   // （业务信息跟着盒子走，不在前端硬编码）。
   // 显示名取 box_context 随 id 一起给的那份——单盒过滤时前端手里只有
-  // 当前这一只盒的名字表，自己补会直接露出 wms_design_box 这种原始 id。
+  // 当前这一只盒的名字表，自己补就会露出 box_id 原文。
+  // （所以这里也不写任何具体 box_id：前端一旦认得某个名字，
+  //   就有能力决定「谁在中心」，而那件事属于接线。）
   window._feedsInto = ((box && box.box_context && box.box_context.feeds_into) || [])
     .map((h) => ({{ box_id: h.id, display_name: h.name || h.id }}));
   let options = '';
@@ -2448,15 +2631,30 @@ function render(data) {{
       ${{skipped.map(esc).join(' · ')}}</div>`;
   }}
   if (data.box_stats && data.box_stats.length > 0) {{
-    html += `<div class="section"><div class="section-title">beeBoxes in Flight
-      (<span id="box-count">${{data.box_stats.length}}</span>)</div>`;
-    html += `<div class="boxes-scene">`;
-    for (const b of data.box_stats) {{
-      html += renderCube(b);
+    // 选中了某个域、且服务端能推导出中心 → 环形；否则平铺。
+    // 环形布局是服务端算的：它凭什么当中心是**接线**决定的，不是看板决定的。
+    const lay = (data.domain_layouts || {{}})[_domainFilter] || null;
+    if (lay && lay.layout === 'radial') {{
+      html += `<div class="section"><div class="section-title">${{esc(domainLabel(lay.domain))}} 域
+        （环上 ${{lay.ring.length}} 只 · 汇点由接线推导）</div>`;
+      html += renderRadial(lay, data.box_stats);
+      html += `</div>`;
+    }} else {{
+      if (lay && lay.reason) {{
+        html += `<div class="skeleton-note">该域退回平铺：${{esc(lay.reason)}}。<br>
+          退回来的时候要说清楚原因——不然看着像「就是平铺的」，
+          读的人会以为这个域没有结构。</div>`;
+      }}
+      html += `<div class="section"><div class="section-title">beeBoxes in Flight
+        (<span id="box-count">${{data.box_stats.length}}</span>)</div>`;
+      html += `<div class="boxes-scene">`;
+      for (const b of data.box_stats) {{
+        html += renderCube(b);
+      }}
+      html += `</div>`;
+      html += `<div class="empty" id="domain-empty" style="display:none">(该域下没有盒子)</div>`;
+      html += `</div>`;
     }}
-    html += `</div>`;
-    html += `<div class="empty" id="domain-empty" style="display:none">(该域下没有盒子)</div>`;
-    html += `</div>`;
   }} else {{
     html += `<div class="empty">(no beeBoxes registered)</div>`;
   }}
@@ -2464,7 +2662,10 @@ function render(data) {{
   // **必须在 innerHTML 之后**。放前面的话它过滤的是上一轮的旧 DOM，
   // 新插进来的卡片一个都没过滤——于是每 2 秒刷新一次，域选择就被悄悄清掉，
   // 而看板上菜单还亮着「WMS」，看着像选了没反应。
-  applyDomainFilter();
+  if (!((data.domain_layouts || {{}})[_domainFilter] || {{}}).layout
+      || (data.domain_layouts || {{}})[_domainFilter].layout !== 'radial') {{
+    applyDomainFilter();
+  }}
   bindTilt();
 }}
 

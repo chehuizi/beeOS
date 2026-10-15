@@ -188,6 +188,76 @@ def box_domains(box_ids: Iterable[str]) -> dict[str, list[str]]:
     return {k: groups[k] for k in sorted(groups)}
 
 
+def domain_layout(domain: str) -> dict[str, Any]:
+    """一个域的布局：谁在圆心、环上什么顺序、有哪两类边
+
+    **全部从各盒 placement.feeds_into 推导，没有域表、没有写死的中心。**
+
+    平铺的看板把接线扔了：读者看不出哪只是终点、哪两只之间有交接。
+    这些信息服务端早就算出来了，画出来等于把已有的东西用上。
+
+    规则（都跟「WMS」「system box」这些具体名字无关）：
+
+    - **中心 = 唯一汇点**：域内出度 0 且入度 > 0。恰好一个才成立；
+      零个或多个都**不猜**，`center=None` 且 `reason` 说清楚，退回平铺。
+      今天 WMS 域推导出来恰好是 system box，但推导规则跟它无关——
+      写死 `center = "wms_system_box"` 就等于在看板层声明了业务事实，
+      跟 BOX_META 一模一样的病，只是换了张脸。
+    - **两类边**：指向中心的边是**累积**（这次产出进档案），
+      其余域内边是**交接**（交出去让下一只验）。混成一条就看不出
+      「流水线」和「记账」是两件事。
+    - **环序**：交接边的拓扑序，同层按 box_id 字母序（稳定）。
+    """
+    ids = [b for b in order_boxes_by_flow(registered_box_ids())
+           if (BOX_REGISTRY[b][0]().placement.domain == domain)]
+    idset = set(ids)
+
+    edges = [
+        (b, t)
+        for b in ids
+        for t in BOX_REGISTRY[b][0]().placement.feeds_into
+        if t in idset
+    ]
+    indeg: Counter = Counter()
+    outdeg: Counter = Counter()
+    for src, dst in edges:
+        outdeg[src] += 1
+        indeg[dst] += 1
+
+    sinks = [b for b in ids if outdeg[b] == 0 and indeg[b] > 0]
+    center = sinks[0] if len(sinks) == 1 else None
+
+    ring = [b for b in ids if b != center] if center else list(ids)
+    handoffs = [[s, d] for s, d in edges if d != center]
+    feeds_center = [s for s, d in edges if d == center]
+
+    # 环序 = 交接边的拓扑序。用 order_boxes_by_flow 排，但把中心摘掉：
+    # 中心是汇点，让它参与排序会把整环的深度都压平。
+    ring = [b for b in order_boxes_by_flow(ring) if b != center]
+
+    layout = "radial"
+    reason = ""
+    if center is None:
+        layout = "flat"
+        if len(ids) < 3:
+            reason = f"域内只有 {len(ids)} 只盒子，撑不起环"
+        elif not sinks:
+            reason = "域内没有汇点（每只盒子都还有下游）"
+        else:
+            reason = f"域内有 {len(sinks)} 个汇点，中心不唯一：" + "、".join(sinks)
+
+    return {
+        "domain": domain,
+        "layout": layout,
+        "reason": reason,
+        "center": center,
+        "ring": ring,
+        "handoffs": handoffs,
+        "feeds_center": feeds_center,
+        "boxes": ids,
+    }
+
+
 def order_boxes_by_flow(box_ids: Iterable[str]) -> list[str]:
     """按业务流向排盒子：产出方在前，消费方在后（需求捕获 → 业务建模）
 

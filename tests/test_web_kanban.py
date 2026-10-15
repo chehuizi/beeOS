@@ -107,6 +107,7 @@ class TestDashboardData:
             "boxes",
             "box_stats",
             "domains",
+            "domain_layouts",
             "status_counts",
             "acceptance_counts",
             "metrics",

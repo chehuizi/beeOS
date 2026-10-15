@@ -676,3 +676,36 @@ class TestRadialLayoutIsDerived:
             f"看板前端里出现了写死的 box_id：{offenders}——"
             f"如果是为了指定中心，那是 BOX_META 的老毛病换了个位置"
         )
+
+    def test_every_card_and_edge_carries_the_marks_snapping_needs(self):
+        """每张卡、每条边都必须带身份标记，否则吸附会**静默**失效
+
+        连线端点是渲染后按真实 DOM 量出来的（立方体多大、在卡里偏多少，
+        JS 猜不出来也不该猜）。量的时候靠 `data-box` 认盒子、
+        靠 `data-from`/`data-to` 认边的两头。
+
+        标记一丢，`snapRadialEdges` 找不到对应元素就直接跳过——
+        不报错、不变红，线退回按那张看不见的透明卡片边框算，
+        于是又「两端各悬空半个盒子」。这是本项目的老病：算了却看不见。
+
+        所以这里守的是**两半**：渲染端必须发出这些标记，吸附端必须真的
+        按这些标记去找盒子。只查一半的话，另一半被拆掉照样全绿。
+        """
+        emitted = [
+            ('\'" data-box="\' + esc(id) + \'"', "环形视图的卡片没发 data-box"),
+            ('data-from="\' + esc(c.from)', "交接边没发 data-from"),
+            ('data-to="\' + esc(c.to)', "交接边没发 data-to"),
+            ('data-from="\' + esc(l.from)', "累积边没发 data-from"),
+            ('data-to="\' + esc(l.to)', "累积边没发 data-to"),
+        ]
+        used = [
+            ("snapRadialEdges();", "吸附函数定义了却没被调用——线永远停在估算位置上"),
+            ("getAttribute('data-box')", "吸附端不按 data-box 找盒子"),
+            ("getAttribute('data-from')", "吸附端不按 data-from 找边的起点"),
+            ("getAttribute('data-to')", "吸附端不按 data-to 找边的终点"),
+        ]
+        for frag, why in emitted + used:
+            assert frag in HTML_PAGE, (
+                f"{why}（缺：{frag}）——连线端点就不会吸附到看得见的盒子上，"
+                f"表现为线两头各悬空半个盒子，而且不会报任何错"
+            )

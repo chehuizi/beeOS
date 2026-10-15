@@ -277,23 +277,25 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .radial {{ position: relative; margin: 0 auto 30px; }}
   .radial-edges {{ position: absolute; inset: 0; pointer-events: none; }}
   .radial .box-card {{
-    position: absolute; width: 252px; height: 330px; overflow: visible;
+    position: absolute; width: 236px; height: 196px; overflow: visible;
   }}
-  /* 环形视图里卡片是定高的，规格行压紧一点，
-     免得铭牌撑出卡片、压到相邻那张上 */
-  .radial .spec-row {{ line-height: 1.6; }}
-  .radial .cube-caption {{ margin-top: 18px; }}
+  .radial .cube-caption {{ margin-top: 12px; }}
+  .radial .cube-caption .name {{ font-size: 13px; line-height: 1.35; }}
+  .compact-stats {{ font-size: 10px; color: #64748b; margin-top: 3px; }}
   /* 圆心那只：比环上的大一圈，免得读成「环上的一只」 */
   .radial .radial-center {{ z-index: 2; }}
-  .radial .radial-center .cube-scene {{ transform: scale(1.12); }}
-  .radial .radial-center .cube-caption .name {{ font-size: 16px; }}
-  /* 标签走文档流，不绝对定位：绝对定位 + top:-26px 会压在后面那张卡上，
-     「汇点」两个字正好落在别人的铭牌里 */
+  .radial .radial-center .cube-scene {{ transform: scale(1.14); }}
+  .radial .radial-center .cube-caption .name {{ font-size: 14px; }}
+  /* 汇点标签走文档流，不绝对定位：绝对定位 + top:-26px 会压在后面那张卡上，
+     「汇点」两个字正好落在别人的铭牌里。挂在卡下方、做成实底小胶囊，
+     才不会跟卡片边框和那条向心虚线叠在一起糊成一团。 */
   .center-tag {{
     text-align: center; font-size: 10px; color: #0f766e;
-    letter-spacing: 0.05em; margin-bottom: 4px;
+    letter-spacing: 0.05em; margin: 8px auto 0;
+    background: #ccfbf1; border-radius: 999px; padding: 3px 10px;
+    display: table;
   }}
-  .radial .radial-center .cube-caption {{ margin-top: 6px; }}
+  .radial .radial-center .cube-caption {{ margin-top: 2px; }}
   .radial-legend {{
     display: flex; gap: 20px; justify-content: center; align-items: center;
     font-size: 11px; color: #475569; margin: 4px 0 10px;
@@ -1356,6 +1358,38 @@ function cubeHtml(box) {{
     <div class="cube-caption">${{captionHtml(box)}}</div>`;
 }}
 
+// 环形视图里的紧凑铭牌：只留「谁 + 是不是未实现 + 跑了多少次」。
+// 六行规格（域 / 价值流 / 角色 / 次数 / 验收率）在这个视图里全是噪声——
+// 这一屏要回答的是「结构长什么样」，细节点进单盒视图再看。
+// 少了它们卡片矮一半，环半径和辐条空档才有地方。
+function compactCaptionHtml(box) {{
+  const meta = box.meta || {{}};
+  const m = MATURITY_DISPLAY[box.maturity] || MATURITY_DISPLAY.live;
+  const rate = m.acceptance ?? box.acceptance_rate;
+  return '<div class="name">' + (meta.display_name || box.box_id) + m.badge + '</div>'
+    + '<div class="compact-stats">RUNS ' + box.total + ' · ACCEPTANCE ' + rate + '</div>';
+}}
+
+function compactCubeHtml(box) {{
+  const {{ core, edge }} = vsPalette(box);
+  const tilt = _boxState.tilt || {{ rx: -14, ry: -24 }};
+  const isSkeleton = box.maturity === 'skeleton';
+  return `<div class="cube-scene ${{isSkeleton ? 'is-skeleton' : ''}}" style="--cw:132px;--ch:88px;--cd:60px;">
+      <div class="cube-float">
+        <div class="cube" style="--core-rgb:${{core}};--edge-rgb:${{edge}};transform:rotateX(${{tilt.rx}}deg) rotateY(${{tilt.ry}}deg)">
+          <div class="cube-face cube-back"></div>
+          <div class="cube-face cube-left"></div>
+          <div class="cube-face cube-right"></div>
+          <div class="cube-face cube-top"></div>
+          <div class="cube-face cube-bottom"></div>
+          <div class="cube-face cube-front"></div>
+        </div>
+      </div>
+      <div class="cube-shadow"></div>
+    </div>
+    <div class="cube-caption compact">${{compactCaptionHtml(box)}}</div>`;
+}}
+
 function renderCube(box) {{
   // CSS 3D 玻璃履约盒（仅用于多盒总览的小盒；单盒聚焦视图是 2D 流水线）
   // 默认角度比以前大（-14 / -24）。立体感靠角度露侧面，
@@ -1382,26 +1416,27 @@ function renderCube(box) {{
 // 「中心驱动其它盒子」，而实际方向是其它盒子喂给中心——所以累积边的
 // 箭头必须一律指着圆心。
 
-const RADIAL_CARD_W = 252;
-// 卡片高度是**按内容算的余量**，不是拍脑袋：立方体 118 + 铭牌标题（可能折
-// 两行 ≈ 40）+ 5 行规格 ≈ 150 + 阴影。给少了铭牌就会溢到卡片外面，
-// 于是「汇点」两个字正好落在后面那只盒子的规格表上。
-const RADIAL_CARD_H = 330;
-const RADIAL_GAP = 44;
-const RADIAL_BOW = 46;
+const RADIAL_CARD_W = 236;
+// 环形视图是讲**结构**的，不该带六行铭牌。卡片一大，环半径就得大到
+// 弧线绕得开、而中心卡到环卡的空档又被卡片吃掉——结果弧长得离谱，
+// 虚线缩成短桩，两头都接不上。
+// 紧凑卡（名字 + 未实现徽章 + 一行实测）把这个空档还回来。
+const RADIAL_CARD_H = 196;
+const RADIAL_GAP = 50;
+// 环半径要比卡高大一倍多，虚线才有地方站：中心卡边框到环卡边框的距离
+// 就是 R − 卡高。贴着卡走等于没有连线。
+const RADIAL_R_FACTOR = 1.9;
+// 交接弧往外鼓多少（相对两卡间距）。太小贴着环走像缺一段线，
+// 太大又甩出环外读成两条不相干的抛物线。
+const HANDOFF_BULGE = 0.2;
+const RADIAL_PAD = 30;
 
-// 从卡片中心朝 p 方向走，到卡片**边框**为止的那个点。
-// 不裁的话连线会从卡片底下穿过去，正好压在铭牌文字上——
-// 线是连上了，可读起来像「这条边穿过了这只盒子」。
-function trimToCard(from, p) {{
-  const dx = p.x - from.x, dy = p.y - from.y;
-  const hw = RADIAL_CARD_W / 2 + RADIAL_GAP / 2;
-  const hh = RADIAL_CARD_H / 2 + RADIAL_GAP / 2;
-  const tx = Math.abs(dx) < 0.001 ? Infinity : hw / Math.abs(dx);
-  const ty = Math.abs(dy) < 0.001 ? Infinity : hh / Math.abs(dy);
+// 从盒子中心沿单位方向 (ux,uy) 走到盒子外框的那个点
+function rectExit(cx, cy, ux, uy, hw, hh) {{
+  const tx = Math.abs(ux) < 1e-6 ? Infinity : hw / Math.abs(ux);
+  const ty = Math.abs(uy) < 1e-6 ? Infinity : hh / Math.abs(uy);
   const t = Math.min(tx, ty);
-  if (!isFinite(t) || t >= 1) return p;
-  return {{ x: from.x + dx * t, y: from.y + dy * t }};
+  return {{ x: cx + ux * t, y: cy + uy * t }};
 }}
 
 function polar(cx, cy, r, a) {{
@@ -1413,55 +1448,106 @@ function renderRadial(layout, stats) {{
   const byId = {{}};
   for (const s of stats) byId[s.box_id] = s;
 
-  // 半径由卡片尺寸和数量**算**出来，两个方向都得容得下：
+  // 半径由卡片尺寸和数量**算**出来：
   //   横向：相邻两张的弦长 2R·sin(π/n) ≥ 卡宽 + 间隙
-  //   纵向：中心卡和环上卡不能叠，R ≥ 卡高 + 间隙
-  // 只按横向算的话，卡片会竖着叠在一起——横向够宽不代表纵向够高。
+  //   纵向：R ≥ 卡高 × RADIAL_R_FACTOR，让虚线辐条站得住
   const R = Math.max(
-    330,
     (RADIAL_CARD_W + RADIAL_GAP) / 2 / Math.sin(Math.PI / n) + 26,
-    RADIAL_CARD_H + RADIAL_GAP,
+    RADIAL_CARD_H * RADIAL_R_FACTOR,
   );
-  const M = RADIAL_CARD_W / 2 + RADIAL_BOW + 24;
-  const W = Math.round(R * 2 + M * 2);
-  const H = Math.round(R * 2 + M * 2);
-  const cx = W / 2;
-  const cy = H / 2;
-
+  const step = 2 * Math.PI / n;
+  // 一律先在**以圆心为原点**的坐标系里算，最后再平移到画布中心。
+  // 直接在画布里猜 W/H，就得靠常数去凑「最远那个点在哪」。
   const pos = {{}};
   layout.ring.forEach((id, i) => {{
-    pos[id] = polar(cx, cy, R, -Math.PI / 2 + (i * 2 * Math.PI / n));
+    pos[id] = polar(0, 0, R, -Math.PI / 2 + i * step);
   }});
   const center = layout.center;
-  const cpos = {{ x: cx, y: cy }};
+  const cpos = {{ x: 0, y: 0 }};
 
-  const edges = [];
-  // 交接边：相邻两张卡之间的一段短弧，顺时针，两端裁到卡片边框。
-  // 曾经画成绕整圈的大圆弧——那让画布宽出快一倍，下半屏全是空白，
-  // 而弧线本身没有任何新信息：交接就发生在两只盒子中间。
+  // ---- 先算点，再画线，最后从实际画出来的坐标倒推画布尺寸 ----
+  //
+  // 以前交接弧挂在一条估出来的同心圆 ROUT 上，而卡片是**矩形**：
+  // 弧的终点落点跟角度走，角度一变就飘到矩形角外的空处去了，
+  // 角度再极端一点整段弧还跑出画布被裁掉——「线没接上」其实是
+  // 「线被切了」，靠调常数永远追不上。
+  // 现在两端都裁到卡片边框上，画布按真实极值包住，一劳永逸。
+  const handoffCurves = [];
   for (const [s, d] of layout.handoffs) {{
+    if (!pos[s] || !pos[d]) continue;
     const a = pos[s], b = pos[d];
-    if (!a || !b) continue;
-    const ea = trimToCard(a, b);
-    const eb = trimToCard(b, a);
-    const mx = (ea.x + eb.x) / 2, my = (ea.y + eb.y) / 2;
-    const vx = mx - cx, vy = my - cy;
-    const len = Math.hypot(vx, vy) || 1;
-    const qx = mx + (vx / len) * RADIAL_BOW;
-    const qy = my + (vy / len) * RADIAL_BOW;
-    edges.push(
-      '<path d="M ' + ea.x.toFixed(1) + ' ' + ea.y.toFixed(1) +
-      ' Q ' + qx.toFixed(1) + ' ' + qy.toFixed(1) +
-      ' ' + eb.x.toFixed(1) + ' ' + eb.y.toFixed(1) + '"' +
-      ' class="edge edge-handoff" marker-end="url(#arrow-handoff)"/>');
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len = Math.hypot(dx, dy) || 1;
+    // 从这张卡的边框出发，落在那张卡的边框上：不管两张在环上差多少角度，
+    // 读出来都是「这张交出去、那张接进来」，不会悬在半空
+    const p0 = rectExit(a.x, a.y, dx / len, dy / len, RADIAL_CARD_W / 2, RADIAL_CARD_H / 2);
+    const p1 = rectExit(b.x, b.y, -dx / len, -dy / len, RADIAL_CARD_W / 2, RADIAL_CARD_H / 2);
+    // 控制点沿径向外推 → 弧顺着环走，而不是横穿圆心或者挂成孤立括号
+    const mx = (p0.x + p1.x) / 2, my = (p0.y + p1.y) / 2;
+    const mlen = Math.hypot(mx, my) || 1;
+    const push = len * HANDOFF_BULGE;
+    handoffCurves.push({{
+      from: s, to: d,
+      p0: p0,
+      q: {{ x: mx + mx / mlen * push, y: my + my / mlen * push }},
+      p1: p1,
+    }});
   }}
-  // 累积边：一律向心，裁到卡片边框
+  // ---- 累积边：沿射线，两端各裁一次 ----
+  //
+  // 以前所有虚线的**终点都是圆心那一点**，五个箭头在同一个像素上叠成一团，
+  // 正好糊在汇点盒子的名字上。每条虚线改成沿自己的射线，
+  // 分别落在**中心卡边框的不同位置**——既读得出「都流进档案」，
+  // 又不会在圆心打架。
+  const feedLines = [];
   for (const s of layout.feeds_center) {{
     if (!pos[s]) continue;
-    const tip = trimToCard(cpos, pos[s]);
+    const dx = pos[s].x - cpos.x, dy = pos[s].y - cpos.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len;
+    feedLines.push({{
+      from: s, to: center || s,
+      a: rectExit(pos[s].x, pos[s].y, -ux, -uy, RADIAL_CARD_W / 2, RADIAL_CARD_H / 2),
+      b: rectExit(cpos.x, cpos.y, ux, uy, RADIAL_CARD_W / 2, RADIAL_CARD_H / 2),
+    }});
+  }}
+
+  // 画布要装得下所有东西：卡片是矩形，只量中心点会裁掉四个角。
+  // 横竖分开量——画布强行取方的，底部就会留一条谁也用不上的空白带。
+  let spanX = 0, spanY = 0;
+  const fitCard = (p) => {{
+    spanX = Math.max(spanX, Math.abs(p.x) + RADIAL_CARD_W / 2);
+    spanY = Math.max(spanY, Math.abs(p.y) + RADIAL_CARD_H / 2);
+  }};
+  for (const id in pos) fitCard(pos[id]);
+  const fitEdge = (p) => {{
+    spanX = Math.max(spanX, Math.abs(p.x) + 20);
+    spanY = Math.max(spanY, Math.abs(p.y) + 20);
+  }};
+  for (const c of handoffCurves) {{ fitEdge(c.p0); fitEdge(c.q); fitEdge(c.p1); }}
+  if (center) {{
+    spanX = Math.max(spanX, RADIAL_CARD_W / 2);
+    // 中心卡底下还挂一行汇点标签，竖向要多给它留出这一行的位置
+    spanY = Math.max(spanY, RADIAL_CARD_H / 2 + 24);
+  }}
+  const W = Math.round((spanX + RADIAL_PAD) * 2);
+  const H = Math.round((spanY + RADIAL_PAD) * 2);
+  const cx = W / 2;
+
+  const edges = [];
+  for (const c of handoffCurves) {{
     edges.push(
-      '<line x1="' + tip.x.toFixed(1) + '" y1="' + tip.y.toFixed(1) + '"' +
-      ' x2="' + cpos.x + '" y2="' + cpos.y + '"' +
+      '<path data-from="' + esc(c.from) + '" data-to="' + esc(c.to) + '"' +
+      ' d="M ' + (cx + c.p0.x).toFixed(1) + ' ' + (cx + c.p0.y).toFixed(1) +
+      ' Q ' + (cx + c.q.x).toFixed(1) + ' ' + (cx + c.q.y).toFixed(1) +
+      ' ' + (cx + c.p1.x).toFixed(1) + ' ' + (cx + c.p1.y).toFixed(1) + '"' +
+      ' class="edge edge-handoff" marker-end="url(#arrow-handoff)"/>');
+  }}
+  for (const l of feedLines) {{
+    edges.push(
+      '<line data-from="' + esc(l.from) + '" data-to="' + esc(l.to) + '"' +
+      ' x1="' + (cx + l.a.x).toFixed(1) + '" y1="' + (cx + l.a.y).toFixed(1) + '"' +
+      ' x2="' + (cx + l.b.x).toFixed(1) + '" y2="' + (cx + l.b.y).toFixed(1) + '"' +
       ' class="edge edge-feed" marker-end="url(#arrow-feed)"/>');
   }}
 
@@ -1474,11 +1560,14 @@ function renderRadial(layout, stats) {{
       : 'box-card';
     // 纯字符串拼接，不用模板字符串：`${...}` 只有在反引号里才是插值，
     // 裸露出来就是 SyntaxError——而且页面会停在 Loading，看起来像数据没到。
-    return '<div class="' + cls + '"'
-      + ' style="left:' + (p.x - RADIAL_CARD_W / 2).toFixed(1) + 'px;'
-      + 'top:' + (p.y - RADIAL_CARD_H / 2).toFixed(1) + 'px">'
+    return '<div class="' + cls + '" data-box="' + esc(id) + '"'
+      + ' style="left:' + (cx + p.x - RADIAL_CARD_W / 2).toFixed(1) + 'px;'
+      + 'top:' + (cx + p.y - RADIAL_CARD_H / 2).toFixed(1) + 'px">'
+      + compactCubeHtml(s)
+      // 汇点标签挂在卡**下面**当铭牌，不当浮在卡上的贴纸：
+      // 放卡顶时它正好压在卡片边框上，而那条向心虚线又从同一个方向过来，
+      // 三个东西叠在同一行——「汇点」两个字最后谁都看不清。
       + (isCenter ? '<div class="center-tag">汇点 · 本域所有产出落进这里</div>' : '')
-      + cubeHtml(s)
       + '</div>';
   }};
 
@@ -1506,6 +1595,80 @@ function renderRadial(layout, stats) {{
       </svg>
       ${{cards}}
     </div>`;
+}}
+
+// 连线必须接在**看得见**的东西上。
+//
+// 卡片盒子是 236×196 的透明框，立方体只有 132 宽；按卡片边框算端点，
+// 线就悬在盒子外面半个身位——几何全对，视觉上照样是「没接上」。
+// 立方体在卡里偏上多少、缩放后多大，JS 猜不出来，也不该猜：
+// 所以渲染完直接量真实 DOM，再把每条边的端点吸附到立方体的可见外框上。
+//
+// 锚点往外扩到**铭牌底边**：铭牌在立方体下方，而环顶那只盒子的正下方
+// 正好就是圆心——只按立方体吸附，那条汇入的虚线会从自己的名字上穿过去。
+// 左右两边不扩：铭牌比立方体宽，扩了线又会离盒子悬空。
+function snapRadialEdges() {{
+  const wrap = document.querySelector('.radial');
+  const svg = wrap && wrap.querySelector('.radial-edges');
+  if (!svg) return;
+  const base = wrap.getBoundingClientRect();
+  const box = {{}};
+  for (const card of wrap.querySelectorAll('.box-card')) {{
+    const id = card.getAttribute('data-box');
+    const scene = card.querySelector('.cube-scene');
+    if (!id || !scene) continue;
+    const r = scene.getBoundingClientRect();
+    if (!r.width || !r.height) continue;
+    const cx = r.left + r.width / 2 - base.left;
+    const cy = r.top + r.height / 2 - base.top;
+    // 中心那只不做这个扩展：它的铭牌下面还挂着汇点标签，
+    // 线要是拉到那一行，就变成「指着标签的空白处」，比穿过名字还糟
+    const cap = card.classList.contains('radial-center')
+      ? null : card.querySelector('.cube-caption');
+    const capBottom = cap
+      ? cap.getBoundingClientRect().bottom - base.top - cy
+      : r.height / 2;
+    box[id] = {{
+      cx: cx, cy: cy,
+      hw: r.width / 2,
+      up: r.height / 2,
+      down: Math.max(r.height / 2, capBottom),
+    }};
+  }}
+  if (!Object.keys(box).length) return;
+  for (const el of svg.querySelectorAll('[data-from]')) {{
+    const a = box[el.getAttribute('data-from')];
+    const b = box[el.getAttribute('data-to')];
+    if (!a || !b) continue;
+    const dx = b.cx - a.cx, dy = b.cy - a.cy;
+    const len = Math.hypot(dx, dy) || 1;
+    const p0 = edgeExit(a, dx / len, dy / len);
+    const p1 = edgeExit(b, -dx / len, -dy / len);
+    if (el.tagName === 'line') {{
+      el.setAttribute('x1', p0.x.toFixed(1));
+      el.setAttribute('y1', p0.y.toFixed(1));
+      el.setAttribute('x2', p1.x.toFixed(1));
+      el.setAttribute('y2', p1.y.toFixed(1));
+    }} else {{
+      // 控制点跟着端点一起挪：还是沿径向外推，弧继续顺着环走
+      const mx = (p0.x + p1.x) / 2, my = (p0.y + p1.y) / 2;
+      const m = Math.hypot(mx, my) || 1;
+      const push = len * HANDOFF_BULGE;
+      el.setAttribute('d',
+        'M ' + p0.x.toFixed(1) + ' ' + p0.y.toFixed(1) +
+        ' Q ' + (mx + mx / m * push).toFixed(1) + ' ' + (my + my / m * push).toFixed(1) +
+        ' ' + p1.x.toFixed(1) + ' ' + p1.y.toFixed(1));
+    }}
+  }}
+}}
+
+// 四边可以不一样长的出框点：从 (cx,cy) 沿单位方向 (ux,uy) 走到外框。
+// 上/下分开，是因为铭牌只把「下」这一边撑长了。
+function edgeExit(b, ux, uy) {{
+  const tx = Math.abs(ux) < 1e-6 ? Infinity : b.hw / Math.abs(ux);
+  const ty = Math.abs(uy) < 1e-6 ? Infinity : (uy > 0 ? b.down : b.up) / Math.abs(uy);
+  const t = Math.min(tx, ty);
+  return {{ x: b.cx + ux * t, y: b.cy + uy * t }};
 }}
 
 function bindTilt() {{
@@ -2667,6 +2830,7 @@ function render(data) {{
     applyDomainFilter();
   }}
   bindTilt();
+  snapRadialEdges();
 }}
 
 async function tick() {{

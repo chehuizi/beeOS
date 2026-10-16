@@ -270,8 +270,21 @@ HTML_PAGE = f"""<!DOCTYPE html>
   /* 每张盒子卡片定宽：flex 换行靠的是**子项宽度**，不定宽的话
      flex item 会撑到 max-content，7 只盒子就竖成一条七屏长的页。
      一屏能扫完「有哪些盒子」才是看板的用处。 */
-  .box-card {{ flex: 0 0 240px; max-width: 240px; }}
+  /* 卡片是链接（<a>），不是 div + click：cmd/中键打开、复制链接、
+     键盘 Tab 过去全都自动可用。用 click 模拟出来的「可点」卡片，
+     一旦被人用键盘试一次就露馅——它压根不是链接。 */
+  .box-card {{
+    flex: 0 0 240px; max-width: 240px;
+    text-decoration: none; color: inherit; cursor: pointer;
+    border-radius: 10px;
+  }}
   .box-card .spec-row .v {{ overflow-wrap: anywhere; }}
+  /* hover 只改底色，**不碰 transform**：环形视图里卡片的连线端点是
+     渲染时量一次 rect 写死的，卡一平移，线就跟盒子脱开了。 */
+  .box-card:hover {{ background: rgba(148, 163, 184, 0.10); }}
+  .box-card:focus-visible {{
+    outline: 2px solid #0f766e; outline-offset: 3px;
+  }}
 
   /* ===== 环形视图 ===== */
   .radial {{ position: relative; margin: 0 auto 30px; }}
@@ -1018,10 +1031,14 @@ async function fetchData() {{
 }}
 
 function renderFilters(boxes, current) {{
-  let html = `<a href="/" class="${{current ? '' : 'active'}}">All beeBoxes</a>`;
+  // 「全部域」这一项要回到**域视图**，不是回平铺：域视图以前只活在
+  // 内存里，导航链接理直气壮地把它丢了。盒子可点之后这条路走得很频繁。
+  const back = (_domainFilter && _domainFilter !== ALL_DOMAINS)
+    ? '/?domain=' + encodeURIComponent(_domainFilter) : '/';
+  let html = `<a href="${{back}}" class="${{current ? '' : 'active'}}">All beeBoxes</a>`;
   for (const b of boxes) {{
     const active = current === b ? 'active' : '';
-    html += `<a href="/?box=${{encodeURIComponent(b)}}" class="${{active}}">${{b}}</a>`;
+    html += `<a href="${{boxHref(b)}}" class="${{active}}">${{b}}</a>`;
   }}
   return html;
 }}
@@ -1042,7 +1059,19 @@ function domainLabel(d) {{
   return d === '' ? UNASSIGNED_DOMAIN : d;
 }}
 
-let _domainFilter = ALL_DOMAINS;
+// 当前域从 URL 读。域视图以前只活在内存里，刷新一下就没了——
+// 一旦盒子变得可点（点进去就是详情页），这就从「小别扭」变成
+// 「路找不回来了」：进详情、退回来，域没了。
+const _params = new URLSearchParams(location.search);
+let _domainFilter = _params.get('domain') || ALL_DOMAINS;
+
+// 盒子的详情页链接。**带上当前域**：点进去、再退回总览时，
+// 域视图还在。
+function boxHref(boxId, domain) {{
+  const d = (domain && domain !== ALL_DOMAINS)
+    ? '&domain=' + encodeURIComponent(domain) : '';
+  return '/?box=' + encodeURIComponent(boxId) + d;
+}}
 
 function renderDomainBar(domains) {{
   const keys = Object.keys(domains || {{}});
@@ -1401,10 +1430,15 @@ function renderCube(box) {{
   // 默认角度比以前大（-14 / -24）。立体感靠角度露侧面，
   // 角度给小了立方体就是一张正方形的纸。
   // data-box-domain 供域切换用；值取自各盒自己的 placement.domain。
+  //
+  // 卡片是**真链接**而不是 div + click：这样 cmd/中键打开、复制链接、
+  // 键盘 Tab 过去全都自动可用。用 click 模拟出来的「可点」卡片
+  // 一旦被人用键盘试一次就露馅——它压根不是链接。
   const domain = (box.meta || {{}}).domain || '';
-  return `<div class="box-card" data-box-domain="${{esc(domain)}}">
+  return `<a class="box-card" href="${{boxHref(box.box_id, _domainFilter)}}"
+     data-box-domain="${{esc(domain)}}">
     ${{cubeHtml(box)}}
-  </div>`;
+  </a>`;
 }}
 
 // ===== 环形视图：中心 = 域内唯一汇点 =====
@@ -1589,7 +1623,10 @@ function renderRadial(layout, stats) {{
       : 'box-card';
     // 纯字符串拼接，不用模板字符串：`${...}` 只有在反引号里才是插值，
     // 裸露出来就是 SyntaxError——而且页面会停在 Loading，看起来像数据没到。
-    return '<div class="' + cls + '" data-box="' + esc(id) + '"'
+    // 环上和圆心那张都是真链接：环形视图要回答「谁接谁」，
+    // 想点开某一只看细节时不该先得切回平铺。
+    return '<a class="' + cls + '" data-box="' + esc(id) + '"'
+      + ' href="' + esc(boxHref(id, _domainFilter)) + '"'
       + ' style="left:' + (cx + p.x - RADIAL_CARD_W / 2).toFixed(1) + 'px;'
       + 'top:' + (cx + p.y - RADIAL_CARD_H / 2).toFixed(1) + 'px">'
       + compactCubeHtml(s)
@@ -1597,7 +1634,7 @@ function renderRadial(layout, stats) {{
       // 放卡顶时它正好压在卡片边框上，而那条向心虚线又从同一个方向过来，
       // 三个东西叠在同一行——「汇点」两个字最后谁都看不清。
       + (isCenter ? '<div class="center-tag">汇点 · 本域所有产出落进这里</div>' : '')
-      + '</div>';
+      + '</a>';
   }};
 
   let cards = layout.ring.map(id => card(id, false)).join('');

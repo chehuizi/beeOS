@@ -566,6 +566,13 @@ class TestRegistryCoverage:
         )
 
 
+def _placement(box_id):
+    """盒子的接线声明（不缓存：守卫要读到当下的值，不是导入那一刻的）"""
+    from kanban.trigger import BOX_REGISTRY
+
+    return BOX_REGISTRY[box_id][0]().placement
+
+
 class TestRadialLayoutIsDerived:
     """环形视图：中心、环序、两类边都从接线推导，前端不许自己决定
 
@@ -726,6 +733,154 @@ class TestRadialLayoutIsDerived:
                 f"要么把环撑大（RADIAL_R_FACTOR / RADIAL_GAP），"
                 f"要么把中心卡缩小（radial-center 的 scale）"
             )
+
+    def test_the_main_chain_is_never_cyclic(self):
+        """feeds_into 组成的**主干必须无环**——有环就是有人把闭环声明错了
+
+        这是给「静默降级」上的一道闸。闭环那条边如果被写进
+        `feeds_into`，拓扑排序就遇到环，于是 `order_boxes_by_flow`
+        按原顺序收尾：**不报错、不变红**，环上顺序变成任意的，
+        看板照常渲染，只是结构是错的。
+
+        所以：主干无环是**可证的**，就证它。反馈边不进 `feeds_into`，
+        这条才成立。
+        """
+        from kanban.trigger import domain_layout
+
+        for domain in self._domains():
+            lay = domain_layout(domain)
+            if lay["layout"] == "radial":
+                continue
+            # 退回平铺只允许两种原因：盒子太少 / 中心不唯一
+            assert "成环" not in lay["reason"], (
+                f"{domain!r} 的交接边成环了（{lay['reason']}）——"
+                f"闭环那条边应该声明成 feedback_into，"
+                f"不是 feeds_into"
+            )
+
+    def test_a_declared_cycle_falls_back_to_flat_and_says_why(self):
+        """真的把闭环边写错时，必须退回平铺**并说清是哪几只**
+
+        守住「不猜」：成环时不能硬排一个顺序——硬排出来的东西看着
+        像个正常的环，看不出哪里声明错了。而 reason 里必须点名，
+        否则「这个域退化成平的」和「这个域本来没有中心」长得一样。
+        """
+        from kanban.trigger import BOX_REGISTRY, domain_layout, registered_box_ids
+
+        target = next(
+            (b for b in BOX_REGISTRY
+             if BOX_REGISTRY[b][0]().placement.feedback_into
+             and BOX_REGISTRY[b][0]().placement.domain),
+            None,
+        )
+        assert target, "没有声明过反馈边的盒子，这条守卫无从验证"
+        definition = BOX_REGISTRY[target][0]()
+        placement = definition.placement
+        saved_f, saved_b = list(placement.feeds_into), list(placement.feedback_into)
+        try:
+            # 模拟「有人把反馈边顺手写进了 feeds_into」
+            placement.feeds_into = saved_f + saved_b
+            placement.feedback_into = []
+            lay = domain_layout(placement.domain)
+            assert lay["layout"] == "flat", (
+                f"{placement.domain!r}: 交接边成环却还画环——"
+                f"环序是排不出来的，硬排等于编一个"
+            )
+            assert "成环" in lay["reason"]
+            for bid in saved_b:
+                assert bid in lay["reason"], (
+                    f"成环的 reason 里没点名 {bid}——"
+                    f"看板上就只是一个顺序不对的环，看不出哪里声明错了"
+                )
+        finally:
+            placement.feeds_into, placement.feedback_into = saved_f, saved_b
+        # 还原之后必须恢复正常，证明这条守卫没改坏接线
+        assert domain_layout(placement.domain)["layout"] == "radial"
+
+    def test_feedback_closes_the_ring_and_lands_on_the_head(self):
+        """反馈边必须首尾相接：环上的末位回到首位
+
+        反馈边画成直线，所以两端在环上必须**相邻**——否则那条线会
+        横穿整个圆心，看着像一根从中间戳过去的刺，而不是一个闭环。
+
+        另外它只能回到主干的入口：反馈是「这一轮结束、下一轮开始」，
+        回到中段某一只的话，那只盒子的下游就同时属于两轮，读不出
+        「下一轮从哪儿起」。
+        """
+        from kanban.trigger import domain_layout
+
+        for domain in self._domains():
+            lay = domain_layout(domain)
+            if lay["layout"] != "radial":
+                continue
+            ring = lay["ring"]
+            on_ring = set(ring)
+            for src, dst in lay["feedback"]:
+                assert src in ring and dst in ring, (
+                    f"{domain!r}: 反馈边 {src}→{dst} 有一端不在环上"
+                )
+                # 反馈源在主线上必须有上游：没有东西喂给它，
+                # 它凭什么反馈？把它接在环上但无来路，
+                # 画出来就是一只凭空产生的盒子。
+                # 注意方向：上游是「投给它的那只」，不是它投给谁。
+                upstream = {
+                    b for b in lay["boxes"]
+                    if src in _placement(b).feeds_into and b in on_ring
+                }
+                assert upstream, (
+                    f"{domain!r}: 反馈边 {src}→{dst} 的源 {src} "
+                    f"在主线上没有上游——没有东西喂给它，它凭什么反馈？"
+                )
+                i, j = ring.index(src), ring.index(dst)
+                adjacent = (i + 1) % len(ring) == j or (j + 1) % len(ring) == i
+                assert adjacent, (
+                    f"{domain!r}: 反馈边 {src}→{dst} 连的是环上第 {i} 位"
+                    f"和第 {j} 位，不相邻——直线会横穿圆心"
+                )
+                # 首尾相接，且指向入口：末位 → 首位
+                assert j == 0, (
+                    f"{domain!r}: 反馈边 {src}→{dst} 回到环上第 {j} 位，"
+                    f"不是入口（第 0 位）——反馈只能开启下一轮，"
+                    f"回到中段就分不出「下一轮从哪儿起」"
+                )
+                assert (i + 1) % len(ring) == 0, (
+                    f"{domain!r}: 反馈边的源 {src} 在环上第 {i} 位，"
+                    f"不是末位——末位是流水线的最后一环，闭环只能从那里起"
+                )
+
+    def test_every_declared_feedback_edge_is_drawn_exactly_once(self):
+        """声明了的反馈边必须真的画出来，而且只画一次
+
+        `domain_layout` 输出的反馈边要跟各盒 `placement.feedback_into`
+        逐条对得上：少画一条，图上就少一圈闭环，而看板上没有任何东西
+        提示「本来还有一条」；重复画则同一对盒子之间多出一条线。
+
+        这里**不**检查「同一对盒子既是交接边又是反馈边」——那种声明
+        必然让主干成环（交接指下游、反馈指入口，两头都是同一只的话
+        就首尾相接了），而成环已经被 `test_the_main_chain_is_never_cyclic`
+        挡住。重复检查一个不可能发生的分支，只会让这条守卫看起来
+        守得比实际更多。
+        """
+        from kanban.trigger import domain_layout
+
+        for domain in self._domains():
+            lay = domain_layout(domain)
+            if lay["layout"] != "radial":
+                continue
+            on_ring = set(lay["ring"]) | ({lay["center"]} if lay["center"] else set())
+
+            declared = {
+                (b, t)
+                for b in lay["boxes"]
+                for t in _placement(b).feedback_into
+                if t in on_ring
+            }
+            drawn = [tuple(e) for e in lay["feedback"]]
+            assert sorted(drawn) == sorted(declared), (
+                f"{domain!r}: 声明的反馈边 {sorted(declared)} "
+                f"和画出来的 {sorted(drawn)} 对不上"
+            )
+            assert len(drawn) == len(set(drawn)), f"{domain!r}: 反馈边画了重复"
 
     def test_the_frontend_names_no_box(self):
         """前端一个 box_id 字面量都不许有——中心尤其不许

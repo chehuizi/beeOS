@@ -278,6 +278,15 @@ class PlacementDef(BaseModel):
     另一边从注册表反推。两侧各写一遍的话，A 改了 B 忘了，
     B 的页面上游就悄悄空了，而没有任何东西会报错。
     反过来算则结构上不可能不一致。
+
+    **feedback_into 跟 feeds_into 分开声明，不合并成一个列表**：
+    「交出去让下游接着验」和「上一轮的结论回到起点变成新一轮输入」
+    是两件事——需求盒不会去验分析结论，它拿分析结论开新一轮需求。
+
+    混在一个列表里的后果不只是画线画错：`feeds_into` 是拓扑排序的输入，
+    一旦把闭环那条边当成交接声明，排序就遇到环，于是**静默**按原顺序
+    收尾——环上顺序变成任意的，看板照常渲染，只是结构是错的。
+    分开声明，闭环那条边不进拓扑排序，主干就永远无环。
     """
 
     display_name: str = Field(default="", description="给人看的名字")
@@ -294,7 +303,19 @@ class PlacementDef(BaseModel):
         ),
     )
     feeds_into: list[str] = Field(
-        default_factory=list, description="本盒产出投给哪些 box_id（接线唯一声明）"
+        default_factory=list,
+        description=(
+            "本盒产出**交出去**给哪些 box_id，让对方接着验"
+            "（接线唯一声明，流水线方向）"
+        ),
+    )
+    feedback_into: list[str] = Field(
+        default_factory=list,
+        description=(
+            "本盒产出**反馈**给哪些 box_id——驱动对方开新一轮，"
+            "不是交出去让对方验。闭环边（末位回到入口）走这里，"
+            "不进 feeds_into 的拓扑排序"
+        ),
     )
 
 

@@ -48,7 +48,7 @@ WMS_OPS_BOX = BeeBoxDefinition(
         value_stream="Software Delivery",
         role="WMS Operations Fulfillment",
         domain="WMS",
-        feeds_into=['wms_system_box'],
+        feeds_into=['wms_analysis_box', 'wms_system_box'],
     ),
 
     task=[

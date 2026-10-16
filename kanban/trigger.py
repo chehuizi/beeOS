@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from beelines import (
     get_modeling_beeline,
+    get_wms_analysis_beeline,
     get_wms_development_beeline,
     get_wms_ops_beeline,
     get_wms_system_beeline,
@@ -27,6 +28,8 @@ from beelines import (
     get_requirement_capture_beeline,
 )
 from boxes.inventory_shortage.runner import RUNNER as INVENTORY_RUNNER
+from boxes.wms_analysis.measure import COMPUTERS as WMS_ANALYSIS_COMPUTERS
+from boxes.wms_analysis.runner import RUNNER as WMS_ANALYSIS_RUNNER
 from boxes.wms_development.measure import COMPUTERS as WMS_DEV_COMPUTERS
 from boxes.wms_development.runner import RUNNER as WMS_DEV_RUNNER
 from boxes.wms_ops.measure import COMPUTERS as WMS_OPS_COMPUTERS
@@ -38,6 +41,7 @@ from boxes.wms_testing.runner import RUNNER as WMS_TEST_RUNNER
 from boxes.modeling import get_definition as get_mod_definition
 from boxes.modeling.measure import COMPUTERS as MODELING_COMPUTERS
 from boxes.modeling.runner import RUNNER as MODELING_RUNNER
+from boxes.wms_analysis import get_definition as get_wms_analysis_definition
 from boxes.wms_development import get_definition as get_wms_development_definition
 from boxes.wms_ops import get_definition as get_wms_ops_definition
 from boxes.wms_system import get_definition as get_wms_system_definition
@@ -89,6 +93,10 @@ BOX_REGISTRY: dict[
         get_wms_ops_definition,
         {"beeline_wms_ops_v1": get_wms_ops_beeline},
     ),
+    "wms_analysis_box": (
+        get_wms_analysis_definition,
+        {"beeline_wms_analysis_v1": get_wms_analysis_beeline},
+    ),
     "receipt_capture_box": (
         get_receipt_definition,
         {"beeline_receipt_capture_v1": get_receipt_capture_beeline},
@@ -106,6 +114,7 @@ METRIC_COMPUTERS: dict[str, dict[str, core_metrics.Computer]] = {
     "wms_development_box": WMS_DEV_COMPUTERS,
     "wms_testing_box": WMS_TEST_COMPUTERS,
     "wms_ops_box": WMS_OPS_COMPUTERS,
+    "wms_analysis_box": WMS_ANALYSIS_COMPUTERS,
 }
 
 # box_id → 该盒自带的 op 实现。
@@ -123,6 +132,7 @@ RUNNER_REGISTRY: dict[str, HandlerRunner] = {
     "wms_development_box": WMS_DEV_RUNNER,
     "wms_testing_box": WMS_TEST_RUNNER,
     "wms_ops_box": WMS_OPS_RUNNER,
+    "wms_analysis_box": WMS_ANALYSIS_RUNNER,
 }
 
 # ~~Box 元信息（归属 / 接线）~~
@@ -218,9 +228,21 @@ def domain_layout(domain: str) -> dict[str, Any]:
         for t in BOX_REGISTRY[b][0]().placement.feeds_into
         if t in idset
     ]
+    # 反馈边**不进**拓扑排序：闭环那条边一旦混进 feeds_into，
+    # 排序就遇到环，于是按原顺序静默收尾——环序变任意，
+    # 看板照常渲染，只是结构是错的。摘出来，主干就永远无环。
+    feedback = [
+        [b, t]
+        for b in ids
+        for t in BOX_REGISTRY[b][0]().placement.feedback_into
+        if t in idset
+    ]
     indeg: Counter = Counter()
     outdeg: Counter = Counter()
     for src, dst in edges:
+        outdeg[src] += 1
+        indeg[dst] += 1
+    for src, dst in feedback:
         outdeg[src] += 1
         indeg[dst] += 1
 
@@ -231,9 +253,10 @@ def domain_layout(domain: str) -> dict[str, Any]:
     handoffs = [[s, d] for s, d in edges if d != center]
     feeds_center = [s for s, d in edges if d == center]
 
-    # 环序 = 交接边的拓扑序。用 order_boxes_by_flow 排，但把中心摘掉：
-    # 中心是汇点，让它参与排序会把整环的深度都压平。
-    ring = [b for b in order_boxes_by_flow(ring) if b != center]
+    # 环序 = 交接边的拓扑序，自己排而不是借道 order_boxes_by_flow：
+    # 那个函数遇到环会静默按原顺序收尾，而这里必须知道「排不出来」。
+    # 中心摘掉——它是汇点，让它参与排序会把整环的深度都压平。
+    ordered, cyclic = _topo_within(ring, edges)
 
     layout = "radial"
     reason = ""
@@ -245,17 +268,53 @@ def domain_layout(domain: str) -> dict[str, Any]:
             reason = "域内没有汇点（每只盒子都还有下游）"
         else:
             reason = f"域内有 {len(sinks)} 个汇点，中心不唯一：" + "、".join(sinks)
+    elif cyclic:
+        layout = "flat"
+        # 闭环的边声明成 feeds_into 了。主干因此成环，环序排不出来。
+        # 不猜：退回平铺，并把是哪几只说清楚——不然图上就只是一个
+        # 顺序不对的环，看不出哪里声明错了。
+        reason = (
+            "域内交接边成环（" + "、".join(cyclic) + "）——"
+            "闭环那条边应该声明成 feedback_into，不是 feeds_into"
+        )
 
     return {
         "domain": domain,
         "layout": layout,
         "reason": reason,
         "center": center,
-        "ring": ring,
+        "ring": ordered,
         "handoffs": handoffs,
         "feeds_center": feeds_center,
+        "feedback": feedback,
         "boxes": ids,
     }
+
+
+def _topo_within(ids: list[str], edges: list[tuple[str, str]]) -> tuple[list[str], list[str]]:
+    """ids 内部的拓扑排序；返回 (有序结果, 卡在环上的节点)
+
+    跟 `order_boxes_by_flow` 的区别只有一个，但很要紧：那个函数遇到环
+    就按原顺序收尾——看板不能白屏，所以它**选择**不报错。
+    这里正相反：成环必须被**看见**，因为成环只有一个原因，
+    就是有人把闭环的边声明成了 feeds_into，而那会让环序变成任意的。
+    """
+    inside = set(ids)
+    preds: dict[str, set[str]] = {b: set() for b in ids}
+    for src, dst in edges:
+        if src in inside and dst in inside:
+            preds[dst].add(src)
+    ordered: list[str] = []
+    placed: set[str] = set()
+    remaining = list(ids)
+    while remaining:
+        ready = [b for b in remaining if preds[b] <= placed]
+        if not ready:
+            return ordered, remaining
+        ordered.extend(ready)
+        placed.update(ready)
+        remaining = [b for b in remaining if b not in placed]
+    return ordered, []
 
 
 def order_boxes_by_flow(box_ids: Iterable[str]) -> list[str]:
@@ -267,6 +326,11 @@ def order_boxes_by_flow(box_ids: Iterable[str]) -> list[str]:
     而实际流程正好相反；注册顺序则只是开发历史的偶然（谁先加谁在前）。
 
     稳定：同一层内保持传入顺序（Kahn 分层取出，不做字典序重排）。
+
+    **只排 feeds_into，不排 feedback_into**：闭环的边塞进线性列表就成环，
+    而成环时本函数会**静默**收尾成任意顺序。这个列表答的是
+    「按流水线顺序排一遍」，而流水线是线性的——闭环不在这个问题里。
+    闭环由 `domain_layout` 单独处理：反馈边画成环上闭环，不参与排序。
     兜底：feeds_into 声明成环时不抛错，剩下的按传入顺序收尾——看板不能白屏。
 
     **入参先 sorted**：本函数的结果不该依赖调用方传进来的迭代顺序。
@@ -666,6 +730,13 @@ def box_context(
             if box_id in BOX_REGISTRY[src][0]().placement.feeds_into
         ],
         "feeds_into": [_hop(dst) for dst in placement.feeds_into],
+        # 反馈单列：并进 fed_by 会让「上游接着做」和「上一轮结论回到起点」
+        # 在单盒页上长得一样，而它们要求做的事完全不同
+        "feedback_from": [
+            _hop(src) for src in BOX_REGISTRY
+            if box_id in BOX_REGISTRY[src][0]().placement.feedback_into
+        ],
+        "feedback_into": [_hop(dst) for dst in placement.feedback_into],
         "consumes": consumes,
         "produces": {
             "type": result.type,

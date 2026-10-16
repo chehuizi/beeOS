@@ -39,6 +39,7 @@ FLOW_ORDER = [
     "wms_development_box",
     "wms_testing_box",
     "wms_ops_box",
+    "wms_analysis_box",       # 线上效果分析：接运维的实测，回头验需求
     "wms_system_box",        # WMS 生命周期链的终点
 ]
 
@@ -797,8 +798,12 @@ class TestTheRosterComesFromTheRegistry:
         """钉住具体顺序：同层按 box_id 字母序，有上游的垫后
 
         只测「set == list」不够——那两条完全乱序也会一起变。
-        业务流向（WMS 生命周期：需求 → 设计 → 开发 → 测试 → 运维 → 系统档案）
-        必须真的体现在顺序里。
+        业务流向（WMS 生命周期：需求 → 设计 → 开发 → 测试 → 运维 → 分析
+        → 系统档案）必须真的体现在顺序里。
+
+        分析盒在这条链上，但它**反馈**给需求盒那条边不进排序：
+        闭环塞进线性列表就成环，而成环时 `order_boxes_by_flow` 会
+        静默按原顺序收尾。反馈由 domain_layout 单独处理。
         """
         from kanban.trigger import order_boxes_by_flow, registered_box_ids
 
@@ -811,5 +816,6 @@ class TestTheRosterComesFromTheRegistry:
             "wms_development_box",
             "wms_testing_box",
             "wms_ops_box",
+            "wms_analysis_box",
             "wms_system_box",          # 全链的终点
         ]

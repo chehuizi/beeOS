@@ -302,9 +302,15 @@ HTML_PAGE = f"""<!DOCTYPE html>
   }}
   .radial-legend span {{ display: inline-flex; align-items: center; gap: 6px; }}
   .radial-legend .muted {{ color: #94a3b8; }}
-  /* 两类边必须一眼分得开：实线粗一点走环，虚线细一点走向心 */
+  /* 两类边必须一眼分得开：实线粗一点走环，虚线细一点走向心。
+     反馈边是第三类：琥珀色点线，跟累积的青色虚线也不同——
+     三条线里有两条是虚线，只靠颜色相近就分不出来。 */
   .edge-handoff {{ stroke: #64748b; stroke-width: 2; fill: none; }}
   .edge-feed {{ stroke: #0d9488; stroke-width: 1.5; stroke-dasharray: 5 4; fill: none; }}
+  .edge-feedback {{
+    stroke: #b45309; stroke-width: 2; stroke-dasharray: 2 5;
+    stroke-linecap: round; fill: none;
+  }}
   .radial-legend .edge {{ stroke-width: 2; }}
 
   /* ===== 3D cube beeBox（CSS 3D 盒） =====
@@ -1510,6 +1516,23 @@ function renderRadial(layout, stats) {{
       b: rectExit(cpos.x, cpos.y, ux, uy, RADIAL_CARD_W / 2, RADIAL_CARD_H / 2),
     }});
   }}
+  // ---- 反馈边：末位回到入口，闭环 ----
+  //
+  // 第三类边，单独一类样式。跟交接边长得像就废了：
+  // 交接是「产出交出去让下一只验」，反馈是「上一轮结论变成新一轮输入」，
+  // 下游根本不会去验它——合成一类，看板上就只剩「谁连谁」。
+  const feedbackLines = [];
+  for (const [s, d] of (layout.feedback || [])) {{
+    if (!pos[s] || !pos[d]) continue;
+    const a = pos[s], b = pos[d];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len = Math.hypot(dx, dy) || 1;
+    feedbackLines.push({{
+      from: s, to: d,
+      a: rectExit(a.x, a.y, dx / len, dy / len, RADIAL_CARD_W / 2, RADIAL_CARD_H / 2),
+      b: rectExit(b.x, b.y, -dx / len, -dy / len, RADIAL_CARD_W / 2, RADIAL_CARD_H / 2),
+    }});
+  }}
 
   // 画布要装得下所有东西：卡片是矩形，只量中心点会裁掉四个角。
   // 横竖分开量——画布强行取方的，底部就会留一条谁也用不上的空白带。
@@ -1524,6 +1547,7 @@ function renderRadial(layout, stats) {{
     spanY = Math.max(spanY, Math.abs(p.y) + 20);
   }};
   for (const l of handoffLines) {{ fitEdge(l.a); fitEdge(l.b); }}
+  for (const l of feedbackLines) {{ fitEdge(l.a); fitEdge(l.b); }}
   if (center) {{
     spanX = Math.max(spanX, RADIAL_CARD_W / 2);
     // 中心卡底下还挂一行汇点标签，竖向要多给它留出这一行的位置
@@ -1547,6 +1571,13 @@ function renderRadial(layout, stats) {{
       ' x1="' + (cx + l.a.x).toFixed(1) + '" y1="' + (cx + l.a.y).toFixed(1) + '"' +
       ' x2="' + (cx + l.b.x).toFixed(1) + '" y2="' + (cx + l.b.y).toFixed(1) + '"' +
       ' class="edge edge-feed" marker-end="url(#arrow-feed)"/>');
+  }}
+  for (const l of feedbackLines) {{
+    edges.push(
+      '<line data-from="' + esc(l.from) + '" data-to="' + esc(l.to) + '"' +
+      ' x1="' + (cx + l.a.x).toFixed(1) + '" y1="' + (cx + l.a.y).toFixed(1) + '"' +
+      ' x2="' + (cx + l.b.x).toFixed(1) + '" y2="' + (cx + l.b.y).toFixed(1) + '"' +
+      ' class="edge edge-feedback" marker-end="url(#arrow-feedback)"/>');
   }}
 
   const card = (id, isCenter) => {{
@@ -1575,6 +1606,7 @@ function renderRadial(layout, stats) {{
   return `<div class="radial-legend">
       <span><svg width="26" height="10"><line x1="1" y1="5" x2="25" y2="5" class="edge edge-handoff"/></svg>交接：交出去让下一只验</span>
       <span><svg width="26" height="10"><line x1="1" y1="5" x2="25" y2="5" class="edge edge-feed"/></svg>累积：产出并进系统档案</span>
+      <span><svg width="26" height="10"><line x1="1" y1="5" x2="25" y2="5" class="edge edge-feedback"/></svg>反馈：上一轮结论变成新一轮输入</span>
       <span class="muted">环序 = 生命周期顺序，箭头顺着环走</span>
     </div>
     <div class="radial" style="width:${{W}}px;height:${{H}}px">
@@ -1587,6 +1619,10 @@ function renderRadial(layout, stats) {{
           <marker id="arrow-feed" viewBox="0 0 10 10" refX="9" refY="5"
                   markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M 0 0 L 10 5 L 0 10 z" fill="#0d9488"/>
+          </marker>
+          <marker id="arrow-feedback" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#b45309"/>
           </marker>
         </defs>
         ${{edges.join('')}}

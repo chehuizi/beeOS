@@ -183,8 +183,8 @@ class TestFeedInto:
 
         为什么要钉全链而不是一条条钉：接线是「盒子是什么」的一部分，
         改一只盒子顺手改了下游，这组测试会一片绿地带过去。
-        需求 → 设计 → 开发 → 测试 → 运维 → 系统档案，是一条**生命周期链**，
-        每一环还额外直投系统档案盒（各自领域的事实先落档案）。
+        需求 → 设计 → 开发 → 测试 → 运维 → 分析 → 系统档案，是一条
+        **生命周期链**，每一环还额外直投系统档案盒（各自领域的事实先落档案）。
         """
         from kanban.trigger import BOX_REGISTRY
 
@@ -193,7 +193,10 @@ class TestFeedInto:
             "wms_design_box": ["wms_development_box", "wms_system_box"],
             "wms_development_box": ["wms_testing_box", "wms_system_box"],
             "wms_testing_box": ["wms_ops_box", "wms_system_box"],
-            "wms_ops_box": ["wms_system_box"],
+            # 运维之后不再直接结束：它把线上真实状态投给分析盒，
+            # 由分析盒去回答「这条需求线上到底满没满足」
+            "wms_ops_box": ["wms_analysis_box", "wms_system_box"],
+            "wms_analysis_box": ["wms_system_box"],
             "wms_system_box": [],
             # 费用报销线不属于 WMS 域，自成一条独立的线
             "receipt_capture_box": [],
@@ -202,6 +205,39 @@ class TestFeedInto:
             assert BOX_REGISTRY[bid][0]().placement.feeds_into == expected, (
                 f"{bid} 的下游变了"
             )
+
+    def test_the_closed_loop_edge_is_declared_as_feedback_not_feeds(self):
+        """闭环那条边必须走 feedback_into——混进 feeds_into 会让主干成环
+
+        分析盒的结论回到需求盒，是**反馈**不是交接：需求盒不会去验分析
+        结论，它是拿这个结论**开新一轮需求**。两件事，声明也得分开。
+
+        分开还有个纯技术上的理由：feeds_into 是拓扑排序的输入，
+        把闭环那条边塞进去，排序就遇到环，于是**静默**按原顺序收尾——
+        环上顺序变成任意的，看板照常渲染，只是结构是错的，
+        没有任何东西会报错。
+        """
+        from kanban.trigger import BOX_REGISTRY
+
+        expected = {"wms_analysis_box": ["wms_requirement_box"]}
+        for bid, targets in expected.items():
+            placement = BOX_REGISTRY[bid][0]().placement
+            assert placement.feedback_into == targets, (
+                f"{bid} 的反馈对象变了"
+            )
+            # 同一只盒子不能把同一条边在两个列表里各写一遍：
+            # 那样改了 feedback 忘了 feeds，两侧就漂了
+            assert not set(placement.feeds_into) & set(placement.feedback_into), (
+                f"{bid} 把同一条边在 feeds_into 和 feedback_into 里各写了一遍"
+            )
+
+    def test_feedback_into_targets_are_registered(self):
+        """反馈的对象也必须是真盒子，否则闭环那条线指向空气"""
+        from kanban.trigger import BOX_REGISTRY, registered_box_ids
+
+        for bid, (_get, _beelines) in BOX_REGISTRY.items():
+            for t in _get().placement.feedback_into:
+                assert t in registered_box_ids(), f"{bid} 反馈给了未注册盒子 {t}"
 
     def test_feeds_into_targets_are_registered(self):
         """声明的下游必须是真盒子，否则接力按钮点了没地方去"""

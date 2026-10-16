@@ -279,9 +279,16 @@ HTML_PAGE = f"""<!DOCTYPE html>
     border-radius: 10px;
   }}
   .box-card .spec-row .v {{ overflow-wrap: anywhere; }}
-  /* hover 只改底色，**不碰 transform**：环形视图里卡片的连线端点是
-     渲染时量一次 rect 写死的，卡一平移，线就跟盒子脱开了。 */
-  .box-card:hover {{ background: rgba(148, 163, 184, 0.10); }}
+  /* hover **不铺底色**。早先给整张 204×170 的卡铺 10% 的灰，在浅底上
+     就是一块阴影板：盖住立方体和铭牌之间的空白，还把「悬停」读成
+     「这张卡有毛病」。只留一圈贴着卡片边缘的 1px 描边，hover 才是
+     「这张能点」而不是「这底下垫着东西」。
+     不碰 transform：环形视图里卡片的连线端点是渲染时量一次 rect
+     写死的，卡一平移，线就跟盒子脱开了。 */
+  .box-card:hover {{
+    outline: 1px solid rgba(15, 23, 42, 0.18);
+    outline-offset: -1px;
+  }}
   .box-card:focus-visible {{
     outline: 2px solid #0f766e; outline-offset: 3px;
   }}

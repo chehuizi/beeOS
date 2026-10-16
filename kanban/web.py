@@ -1426,9 +1426,8 @@ const RADIAL_GAP = 50;
 // 环半径要比卡高大一倍多，虚线才有地方站：中心卡边框到环卡边框的距离
 // 就是 R − 卡高。贴着卡走等于没有连线。
 const RADIAL_R_FACTOR = 1.9;
-// 交接弧往外鼓多少（相对两卡间距）。太小贴着环走像缺一段线，
-// 太大又甩出环外读成两条不相干的抛物线。
-const HANDOFF_BULGE = 0.2;
+// 弦长算够之后再加这么一点富余，免得两张卡刚好贴上
+const RADIAL_CHORD_SLACK = 26;
 const RADIAL_PAD = 30;
 
 // 从盒子中心沿单位方向 (ux,uy) 走到盒子外框的那个点
@@ -1452,7 +1451,7 @@ function renderRadial(layout, stats) {{
   //   横向：相邻两张的弦长 2R·sin(π/n) ≥ 卡宽 + 间隙
   //   纵向：R ≥ 卡高 × RADIAL_R_FACTOR，让虚线辐条站得住
   const R = Math.max(
-    (RADIAL_CARD_W + RADIAL_GAP) / 2 / Math.sin(Math.PI / n) + 26,
+    (RADIAL_CARD_W + RADIAL_GAP) / 2 / Math.sin(Math.PI / n) + RADIAL_CHORD_SLACK,
     RADIAL_CARD_H * RADIAL_R_FACTOR,
   );
   const step = 2 * Math.PI / n;
@@ -1467,12 +1466,19 @@ function renderRadial(layout, stats) {{
 
   // ---- 先算点，再画线，最后从实际画出来的坐标倒推画布尺寸 ----
   //
-  // 以前交接弧挂在一条估出来的同心圆 ROUT 上，而卡片是**矩形**：
-  // 弧的终点落点跟角度走，角度一变就飘到矩形角外的空处去了，
-  // 角度再极端一点整段弧还跑出画布被裁掉——「线没接上」其实是
-  // 「线被切了」，靠调常数永远追不上。
-  // 现在两端都裁到卡片边框上，画布按真实极值包住，一劳永逸。
-  const handoffCurves = [];
+  // 交接边画**直线**，不画弧。
+  //
+  // 走过弯路：弧挂在一条估出来的同心圆 ROUT 上，而卡片是**矩形**，
+  // 终点落点跟角度走，角度一变就飘到矩形角外的空处，角度再极端一点
+  // 整段弧还跑出画布被裁掉。改成绕着 ROUT 走之后几何对了，但读起来
+  // 更别扭：一只盒子交出去的东西，凭空在环外兜一大圈才到下一只，
+  // 那段弧会被读成「走了远路」——而交接本来就发生在两只盒子之间，
+  // 这里根本没有远路可走。
+  //
+  // 直线还有个好处是**可证**：弦的中点离圆心正好 R·cos(π/n)，
+  // 所以「会不会斜穿过中心那张卡」是个能算的问题，不用靠眼睛盯。
+  // （tests 里有对应守卫：弦到中心的净空必须大于中心卡的半对角线。）
+  const handoffLines = [];
   for (const [s, d] of layout.handoffs) {{
     if (!pos[s] || !pos[d]) continue;
     const a = pos[s], b = pos[d];
@@ -1480,17 +1486,10 @@ function renderRadial(layout, stats) {{
     const len = Math.hypot(dx, dy) || 1;
     // 从这张卡的边框出发，落在那张卡的边框上：不管两张在环上差多少角度，
     // 读出来都是「这张交出去、那张接进来」，不会悬在半空
-    const p0 = rectExit(a.x, a.y, dx / len, dy / len, RADIAL_CARD_W / 2, RADIAL_CARD_H / 2);
-    const p1 = rectExit(b.x, b.y, -dx / len, -dy / len, RADIAL_CARD_W / 2, RADIAL_CARD_H / 2);
-    // 控制点沿径向外推 → 弧顺着环走，而不是横穿圆心或者挂成孤立括号
-    const mx = (p0.x + p1.x) / 2, my = (p0.y + p1.y) / 2;
-    const mlen = Math.hypot(mx, my) || 1;
-    const push = len * HANDOFF_BULGE;
-    handoffCurves.push({{
+    handoffLines.push({{
       from: s, to: d,
-      p0: p0,
-      q: {{ x: mx + mx / mlen * push, y: my + my / mlen * push }},
-      p1: p1,
+      a: rectExit(a.x, a.y, dx / len, dy / len, RADIAL_CARD_W / 2, RADIAL_CARD_H / 2),
+      b: rectExit(b.x, b.y, -dx / len, -dy / len, RADIAL_CARD_W / 2, RADIAL_CARD_H / 2),
     }});
   }}
   // ---- 累积边：沿射线，两端各裁一次 ----
@@ -1524,7 +1523,7 @@ function renderRadial(layout, stats) {{
     spanX = Math.max(spanX, Math.abs(p.x) + 20);
     spanY = Math.max(spanY, Math.abs(p.y) + 20);
   }};
-  for (const c of handoffCurves) {{ fitEdge(c.p0); fitEdge(c.q); fitEdge(c.p1); }}
+  for (const l of handoffLines) {{ fitEdge(l.a); fitEdge(l.b); }}
   if (center) {{
     spanX = Math.max(spanX, RADIAL_CARD_W / 2);
     // 中心卡底下还挂一行汇点标签，竖向要多给它留出这一行的位置
@@ -1535,12 +1534,11 @@ function renderRadial(layout, stats) {{
   const cx = W / 2;
 
   const edges = [];
-  for (const c of handoffCurves) {{
+  for (const l of handoffLines) {{
     edges.push(
-      '<path data-from="' + esc(c.from) + '" data-to="' + esc(c.to) + '"' +
-      ' d="M ' + (cx + c.p0.x).toFixed(1) + ' ' + (cx + c.p0.y).toFixed(1) +
-      ' Q ' + (cx + c.q.x).toFixed(1) + ' ' + (cx + c.q.y).toFixed(1) +
-      ' ' + (cx + c.p1.x).toFixed(1) + ' ' + (cx + c.p1.y).toFixed(1) + '"' +
+      '<line data-from="' + esc(l.from) + '" data-to="' + esc(l.to) + '"' +
+      ' x1="' + (cx + l.a.x).toFixed(1) + '" y1="' + (cx + l.a.y).toFixed(1) + '"' +
+      ' x2="' + (cx + l.b.x).toFixed(1) + '" y2="' + (cx + l.b.y).toFixed(1) + '"' +
       ' class="edge edge-handoff" marker-end="url(#arrow-handoff)"/>');
   }}
   for (const l of feedLines) {{
@@ -1577,7 +1575,7 @@ function renderRadial(layout, stats) {{
   return `<div class="radial-legend">
       <span><svg width="26" height="10"><line x1="1" y1="5" x2="25" y2="5" class="edge edge-handoff"/></svg>交接：交出去让下一只验</span>
       <span><svg width="26" height="10"><line x1="1" y1="5" x2="25" y2="5" class="edge edge-feed"/></svg>累积：产出并进系统档案</span>
-      <span class="muted">环序 = 生命周期顺序，弧线顺时针</span>
+      <span class="muted">环序 = 生命周期顺序，箭头顺着环走</span>
     </div>
     <div class="radial" style="width:${{W}}px;height:${{H}}px">
       <svg class="radial-edges" width="${{W}}" height="${{H}}" viewBox="0 0 ${{W}} ${{H}}">
@@ -1644,21 +1642,10 @@ function snapRadialEdges() {{
     const len = Math.hypot(dx, dy) || 1;
     const p0 = edgeExit(a, dx / len, dy / len);
     const p1 = edgeExit(b, -dx / len, -dy / len);
-    if (el.tagName === 'line') {{
-      el.setAttribute('x1', p0.x.toFixed(1));
-      el.setAttribute('y1', p0.y.toFixed(1));
-      el.setAttribute('x2', p1.x.toFixed(1));
-      el.setAttribute('y2', p1.y.toFixed(1));
-    }} else {{
-      // 控制点跟着端点一起挪：还是沿径向外推，弧继续顺着环走
-      const mx = (p0.x + p1.x) / 2, my = (p0.y + p1.y) / 2;
-      const m = Math.hypot(mx, my) || 1;
-      const push = len * HANDOFF_BULGE;
-      el.setAttribute('d',
-        'M ' + p0.x.toFixed(1) + ' ' + p0.y.toFixed(1) +
-        ' Q ' + (mx + mx / m * push).toFixed(1) + ' ' + (my + my / m * push).toFixed(1) +
-        ' ' + p1.x.toFixed(1) + ' ' + p1.y.toFixed(1));
-    }}
+    el.setAttribute('x1', p0.x.toFixed(1));
+    el.setAttribute('y1', p0.y.toFixed(1));
+    el.setAttribute('x2', p1.x.toFixed(1));
+    el.setAttribute('y2', p1.y.toFixed(1));
   }}
 }}
 

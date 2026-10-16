@@ -13,7 +13,9 @@
 from __future__ import annotations
 
 import ast
+import math
 import pathlib
+import re
 
 import pytest
 
@@ -665,6 +667,66 @@ class TestRadialLayoutIsDerived:
                 f"{domain!r}: 有交接边没画在环上相邻位置"
             )
 
+    @staticmethod
+    def _page_const(name):
+        m = re.search(rf"const {name} = ([0-9.]+);", HTML_PAGE)
+        assert m, f"看板前端里找不到常量 {name}——净空守卫跟着它一起瞎了"
+        return float(m.group(1))
+
+    def test_a_handoff_chord_always_clears_the_centre_card(self):
+        """交接边画直线之后，得证明它不会斜穿过中心那张卡
+
+        鼓出去的弧碰不到中心是显然的，直线不是：弦的中点离圆心只有
+        R·cos(π/n)，而 R 由卡宽和数量顶住、cos(π/n) 随盒子变多往 1 靠。
+        哪天真出现一个盒子更多的域，弦就可能从中心卡的角上斜穿过去——
+        看板上只是一条线压住了汇点的名字，不会有任何东西报错。
+
+        这是可证的，所以不靠盯：净空 = R·cos(π/n)，
+        必须大于中心卡的半对角线，还得多留一点余量。
+
+        依赖另一条守卫：交接边只画在环上**相邻**两只之间（弦正好跨 2π/n）。
+        要是哪天允许跨位连线，这个算式就得跟着改。
+        """
+        from kanban.trigger import domain_layout
+
+        card_w = self._page_const("RADIAL_CARD_W")
+        card_h = self._page_const("RADIAL_CARD_H")
+        gap = self._page_const("RADIAL_GAP")
+        slack = self._page_const("RADIAL_CHORD_SLACK")
+        r_factor = self._page_const("RADIAL_R_FACTOR")
+
+        # 立方体尺寸必须从 compactCubeHtml 里取，不能在整页里正则第一个 --cw：
+        # 单盒视图用的是另一只更大的立方体，抓错了就变成拿错尺寸在算净空，
+        # 而算错的那只恰好更大——错得还挺安全，纯属运气。
+        m = re.search(r"function compactCubeHtml\(box\) \{(.*?)\n\}", HTML_PAGE, re.S)
+        assert m, "看板前端里找不到 compactCubeHtml——净空守卫没尺寸可算"
+        assert "compactCubeHtml(s)" in HTML_PAGE, (
+            "环形视图不再用紧凑立方体渲染卡片——净空守卫量的还是那只紧凑的，"
+            "于是量到的尺寸跟实际画出来的不一样"
+        )
+        cube_w = float(re.search(r"--cw:([0-9.]+)px", m.group(1)).group(1))
+        cube_h = float(re.search(r"--ch:([0-9.]+)px", m.group(1)).group(1))
+        center_scale = float(
+            re.search(r"radial-center \.cube-scene \{ transform: scale\(([0-9.]+)\)",
+                      HTML_PAGE).group(1)
+        )
+        half_diag = math.hypot(cube_w * center_scale / 2, cube_h * center_scale / 2)
+
+        for domain in self._domains():
+            lay = domain_layout(domain)
+            if lay["layout"] != "radial":
+                continue
+            n = len(lay["ring"])
+            R = max((card_w + gap) / 2 / math.sin(math.pi / n) + slack,
+                    card_h * r_factor)
+            clear = R * math.cos(math.pi / n)
+            assert clear > half_diag + 24, (
+                f"{domain!r}: 环上 {n} 只，交接弦离圆心只剩 {clear:.0f}px，"
+                f"中心卡半对角线 {half_diag:.0f}px——直线会斜穿过汇点那张卡。"
+                f"要么把环撑大（RADIAL_R_FACTOR / RADIAL_GAP），"
+                f"要么把中心卡缩小（radial-center 的 scale）"
+            )
+
     def test_the_frontend_names_no_box(self):
         """前端一个 box_id 字面量都不许有——中心尤其不许
 
@@ -690,21 +752,30 @@ class TestRadialLayoutIsDerived:
 
         所以这里守的是**两半**：渲染端必须发出这些标记，吸附端必须真的
         按这些标记去找盒子。只查一半的话，另一半被拆掉照样全绿。
+
+        两类边都要查：只看「有没有 data-from」会漏掉只给其中一类挂标记
+        的写法，于是那类边静默退回估算位置，另一类照常吸附——
+        看板上就是「一半线接着，一半线悬着」，没有报错。
         """
-        emitted = [
-            ('\'" data-box="\' + esc(id) + \'"', "环形视图的卡片没发 data-box"),
-            ('data-from="\' + esc(c.from)', "交接边没发 data-from"),
-            ('data-to="\' + esc(c.to)', "交接边没发 data-to"),
-            ('data-from="\' + esc(l.from)', "累积边没发 data-from"),
-            ('data-to="\' + esc(l.to)', "累积边没发 data-to"),
-        ]
-        used = [
+        assert '\'" data-box="\' + esc(id) + \'"' in HTML_PAGE, (
+            "环形视图的卡片没发 data-box——连线吸附会静默失效，"
+            "线会退回挂在透明卡片边框上，看起来就是没接上"
+        )
+        for cls in ("edge-handoff", "edge-feed"):
+            i = HTML_PAGE.index('class="edge ' + cls + '"')
+            # 切出这条边所属的那一句 edges.push(...)，不靠「往前看多少个字符」
+            stmt = HTML_PAGE[HTML_PAGE.rfind("edges.push(", 0, i):i]
+            for attr in ("data-from=", "data-to="):
+                assert attr in stmt, (
+                    f"{cls} 这条边没带 {attr}——snapRadialEdges 会跳过它，"
+                    f"它的端点就不会吸附到看得见的盒子上，而且不会报任何错"
+                )
+        for frag, why in [
             ("snapRadialEdges();", "吸附函数定义了却没被调用——线永远停在估算位置上"),
             ("getAttribute('data-box')", "吸附端不按 data-box 找盒子"),
             ("getAttribute('data-from')", "吸附端不按 data-from 找边的起点"),
             ("getAttribute('data-to')", "吸附端不按 data-to 找边的终点"),
-        ]
-        for frag, why in emitted + used:
+        ]:
             assert frag in HTML_PAGE, (
                 f"{why}（缺：{frag}）——连线端点就不会吸附到看得见的盒子上，"
                 f"表现为线两头各悬空半个盒子，而且不会报任何错"

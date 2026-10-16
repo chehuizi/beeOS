@@ -270,16 +270,16 @@ HTML_PAGE = f"""<!DOCTYPE html>
   /* 每张盒子卡片定宽：flex 换行靠的是**子项宽度**，不定宽的话
      flex item 会撑到 max-content，7 只盒子就竖成一条七屏长的页。
      一屏能扫完「有哪些盒子」才是看板的用处。 */
-  .box-card {{ flex: 0 0 262px; max-width: 262px; }}
+  .box-card {{ flex: 0 0 240px; max-width: 240px; }}
   .box-card .spec-row .v {{ overflow-wrap: anywhere; }}
 
   /* ===== 环形视图 ===== */
   .radial {{ position: relative; margin: 0 auto 30px; }}
   .radial-edges {{ position: absolute; inset: 0; pointer-events: none; }}
   .radial .box-card {{
-    position: absolute; width: 236px; height: 196px; overflow: visible;
+    position: absolute; width: 204px; height: 170px; overflow: visible;
   }}
-  .radial .cube-caption {{ margin-top: 12px; }}
+  .radial .cube-caption {{ margin-top: 10px; }}
   .radial .cube-caption .name {{ font-size: 13px; line-height: 1.35; }}
   .compact-stats {{ font-size: 10px; color: #64748b; margin-top: 3px; }}
   /* 圆心那只：比环上的大一圈，免得读成「环上的一只」 */
@@ -326,8 +326,8 @@ HTML_PAGE = f"""<!DOCTYPE html>
        3. **构造线**（前脸两道缝 + 顶面蜂窝纹）。没有缝的立方体是
           几何体，有缝的才是「盒子」。蜂窝顺带带一个 bee 的意思。 */
   .boxes-scene {{
-    display: flex; flex-wrap: wrap; gap: 56px;
-    margin-bottom: 28px; padding: 44px 16px 28px;
+    display: flex; flex-wrap: wrap; gap: 40px;
+    margin-bottom: 24px; padding: 32px 16px 20px;
     justify-content: center;
   }}
   .cube-scene {{
@@ -442,7 +442,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
     display: flex; align-items: center; justify-content: center;
   }}
   #box2d-stage svg {{ display: block; max-width: 100%; height: auto; }}
-  .cube-caption {{ text-align: center; margin-top: 34px; }}
+  .cube-caption {{ text-align: center; margin-top: 26px; }}
   .cube-caption .name, .beebox-nameplate .name {{ font-size: 15px; font-weight: 700; color: #0f172a; }}
   .cube-caption .name .bid, .beebox-nameplate .name .bid {{
     color: #94a3b8; font-weight: 400; font-size: 11px; margin-left: 6px;
@@ -450,7 +450,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .cube-caption .spec {{ display: inline-block; text-align: left; margin-top: 8px; }}
   .spec-row {{ display: flex; font-size: 10px; line-height: 1.8; }}
   .spec-row .k {{
-    width: 118px; text-align: right; color: #94a3b8;
+    width: 104px; text-align: right; color: #94a3b8;
     letter-spacing: 0.8px; padding-right: 10px;
   }}
   .spec-row .v {{ color: #334155; font-weight: 600; }}
@@ -1348,7 +1348,7 @@ function cubeHtml(box) {{
   const {{ core, edge }} = vsPalette(box);
   const tilt = _boxState.tilt || {{ rx: -14, ry: -24 }};
   const isSkeleton = box.maturity === 'skeleton';
-  return `<div class="cube-scene ${{isSkeleton ? 'is-skeleton' : ''}}" style="--cw:176px;--ch:118px;--cd:80px;">
+  return `<div class="cube-scene ${{isSkeleton ? 'is-skeleton' : ''}}" style="--cw:144px;--ch:96px;--cd:62px;">
       <div class="cube-float">
         <div class="cube" style="--core-rgb:${{core}};--edge-rgb:${{edge}};transform:rotateX(${{tilt.rx}}deg) rotateY(${{tilt.ry}}deg)">
           <div class="cube-face cube-back"></div>
@@ -1380,7 +1380,7 @@ function compactCubeHtml(box) {{
   const {{ core, edge }} = vsPalette(box);
   const tilt = _boxState.tilt || {{ rx: -14, ry: -24 }};
   const isSkeleton = box.maturity === 'skeleton';
-  return `<div class="cube-scene ${{isSkeleton ? 'is-skeleton' : ''}}" style="--cw:132px;--ch:88px;--cd:60px;">
+  return `<div class="cube-scene ${{isSkeleton ? 'is-skeleton' : ''}}" style="--cw:108px;--ch:72px;--cd:48px;">
       <div class="cube-float">
         <div class="cube" style="--core-rgb:${{core}};--edge-rgb:${{edge}};transform:rotateX(${{tilt.rx}}deg) rotateY(${{tilt.ry}}deg)">
           <div class="cube-face cube-back"></div>
@@ -1422,12 +1422,12 @@ function renderCube(box) {{
 // 「中心驱动其它盒子」，而实际方向是其它盒子喂给中心——所以累积边的
 // 箭头必须一律指着圆心。
 
-const RADIAL_CARD_W = 236;
+const RADIAL_CARD_W = 204;
 // 环形视图是讲**结构**的，不该带六行铭牌。卡片一大，环半径就得大到
 // 弧线绕得开、而中心卡到环卡的空档又被卡片吃掉——结果弧长得离谱，
 // 虚线缩成短桩，两头都接不上。
 // 紧凑卡（名字 + 未实现徽章 + 一行实测）把这个空档还回来。
-const RADIAL_CARD_H = 196;
+const RADIAL_CARD_H = 170;
 const RADIAL_GAP = 50;
 // 环半径要比卡高大一倍多，虚线才有地方站：中心卡边框到环卡边框的距离
 // 就是 R − 卡高。贴着卡走等于没有连线。
@@ -1551,7 +1551,7 @@ function renderRadial(layout, stats) {{
   if (center) {{
     spanX = Math.max(spanX, RADIAL_CARD_W / 2);
     // 中心卡底下还挂一行汇点标签，竖向要多给它留出这一行的位置
-    spanY = Math.max(spanY, RADIAL_CARD_H / 2 + 24);
+    spanY = Math.max(spanY, RADIAL_CARD_H / 2 + 22);
   }}
   const W = Math.round((spanX + RADIAL_PAD) * 2);
   const H = Math.round((spanY + RADIAL_PAD) * 2);

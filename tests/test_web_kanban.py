@@ -819,3 +819,68 @@ class TestTheRosterComesFromTheRegistry:
             "wms_analysis_box",
             "wms_system_box",          # 全链的终点
         ]
+
+
+class TestTheFlatGridStaysScannable:
+    """平铺视图：8 张卡片的规格区必须能按列扫
+
+    这条守卫守的是一次真实的排版修复。原来 `.cube-caption .spec` 是
+    `display: inline-block`：宽度由**该卡片自己最长的一行**决定，8 张卡片
+    就有 8 个不同宽度，再被 `text-align: center` 各自居中——
+    DOMAIN / VALUE STREAM / ROLE 三行的左边缘全部错开，整片网格读起来像散沙。
+
+    危险的是它不报错、不空白、不缺内容，只是「不好读」。所以必须钉住。
+
+    同理 `box_id` 早先是行内跟着名字走的，名字一长就折行、被挤到第二行
+    还贴着名字，卡片之间规格区的起始高度也跟着参差。
+    """
+
+    @staticmethod
+    def _rule(selector: str) -> str:
+        """取一条 CSS 规则的完整声明体（支持 {} 嵌套，够用了）。"""
+        start = HTML_PAGE.find(selector)
+        assert start != -1, f"HTML_PAGE 里找不到 {selector}"
+        brace = HTML_PAGE.find("{", start)
+        depth = 0
+        for i in range(brace, len(HTML_PAGE)):
+            if HTML_PAGE[i] == "{":
+                depth += 1
+            elif HTML_PAGE[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    return HTML_PAGE[brace : i + 1]
+        raise AssertionError(f"{selector} 的规则体没闭合")
+
+    def test_the_spec_block_spans_the_whole_card(self):
+        """规格区必须占满整卡宽——inline-block 会让每张卡各自居中、左边缘全错开"""
+        body = self._rule(".cube-caption .spec")
+        assert "display: block" in body, (
+            "`.cube-caption .spec` 必须 display: block。"
+            "改回 inline-block 的话，每张卡的宽度由它自己最长的一行决定，"
+            "8 张卡得到 8 个不同宽度，各自居中后规格区左边缘全部错开"
+        )
+        assert "inline-block" not in body, (
+            "`.cube-caption .spec` 里又出现 inline-block——"
+            "inline-block 宽度随内容变，正是左边缘错开的根源"
+        )
+        assert "width: 100%" in body, (
+            "规格区没占满整卡宽，.k 的定宽右对齐就失去意义，"
+            "分界线不会落在同一个 x 上"
+        )
+
+    def test_the_box_id_gets_a_line_of_its_own(self):
+        """box_id 独占一行，否则名字一长就折行把规格区整体顶下去"""
+        body = self._rule(".cube-caption .name .bid")
+        assert "display: block" in body, (
+            "box_id 必须是块级独占一行。行内的话，名字一长它就被挤到第二行"
+            "还贴着名字，卡片之间规格区的起始高度跟着参差"
+        )
+
+    def test_a_ragged_last_row_starts_from_the_same_line(self):
+        """除不尽列数时，最后一排要左对齐——居中会像漏排了几只"""
+        body = self._rule(".boxes-scene")
+        assert "justify-content: flex-start" in body, (
+            "`.boxes-scene` 要 justify-content: flex-start。"
+            "居中时 8 只盒子排 6 列，最后一排两只孤零零浮在正中间，"
+            "看着像漏排——而且每排起点都不同，没法按列扫"
+        )

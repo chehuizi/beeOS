@@ -345,10 +345,13 @@ HTML_PAGE = f"""<!DOCTYPE html>
        2. **实边**。1.4px 饱和边线 + 内阴影，边和面分开才立得住。
        3. **构造线**（前脸两道缝 + 顶面蜂窝纹）。没有缝的立方体是
           几何体，有缝的才是「盒子」。蜂窝顺带带一个 bee 的意思。 */
+  /* 左对齐而不是居中：卡片数除不尽列数时（8 只盒子排 6 列），
+     居中会让最后一排孤零零两只浮在正中间，看着像漏排了。
+     左对齐下每一排都从同一条竖线起，网格能按列扫。 */
   .boxes-scene {{
     display: flex; flex-wrap: wrap; gap: 40px;
     margin-bottom: 24px; padding: 32px 16px 20px;
-    justify-content: center;
+    justify-content: flex-start;
   }}
   .cube-scene {{
     perspective: 1000px;
@@ -464,10 +467,19 @@ HTML_PAGE = f"""<!DOCTYPE html>
   #box2d-stage svg {{ display: block; max-width: 100%; height: auto; }}
   .cube-caption {{ text-align: center; margin-top: 26px; }}
   .cube-caption .name, .beebox-nameplate .name {{ font-size: 15px; font-weight: 700; color: #0f172a; }}
+  /* box_id 独占一行。早先它是**行内**跟着名字走的，于是名字一长就折行，
+     box_id 被挤到第二行、还贴着名字，8 张卡片的规格区起始位置参差不齐。
+     名字长短不一本来就免不了，但 box_id 的位置可以钉死。 */
   .cube-caption .name .bid, .beebox-nameplate .name .bid {{
-    color: #94a3b8; font-weight: 400; font-size: 11px; margin-left: 6px;
+    color: #94a3b8; font-weight: 400; font-size: 11px;
+    display: block; margin-left: 0; margin-top: 2px;
   }}
-  .cube-caption .spec {{ display: inline-block; text-align: left; margin-top: 8px; }}
+  /* 规格区**占满整卡宽**，不能是 inline-block。
+     inline-block 的宽度由该卡片最长的一行决定，8 张卡片就得到 8 个不同宽度，
+     再被 text-align:center 各自居中——DOMAIN / VALUE STREAM / ROLE 三行的
+     左边缘全部错开，整片网格读起来像散沙。占满整卡宽之后，.k 的定宽右对齐
+     让每一行的分界线落在同一个 x 上，纵向能当表扫。 */
+  .cube-caption .spec {{ display: block; width: 100%; margin-top: 8px; }}
   .spec-row {{ display: flex; font-size: 10px; line-height: 1.8; }}
   .spec-row .k {{
     width: 104px; text-align: right; color: #94a3b8;

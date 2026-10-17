@@ -239,7 +239,22 @@ HTML_PAGE = f"""<!DOCTYPE html>
     display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
     padding-top: 6px;
   }}
+  .head-left {{ display: flex; flex-direction: column; gap: 6px; }}
   .refresh-tag {{ color: #94a3b8; font-size: 11px; }}
+
+  /* ===== 返回总览 =====
+     标签写的是**要回去的那一屏**，不是笼统的「返回首页」：
+     URL 里已经记着 domain 和 view，从 WMS 的拓扑点进一只盒，回去就该
+     落在 WMS 的拓扑上。写「返回首页」会许诺一个回去之后并不存在的落点。 */
+  .back-link {{
+    display: inline-flex; align-items: center; gap: 6px;
+    align-self: flex-start;
+    padding: 4px 11px; border-radius: 999px;
+    background: #eef2f7; color: #475569;
+    font-size: 12px; text-decoration: none; border: 1px solid #e2e8f0;
+  }}
+  .back-link:hover {{ background: #e2e8f0; color: #0f172a; }}
+  .back-link:focus-visible {{ outline: 2px solid #0f766e; outline-offset: 2px; }}
 
   /* ===== 侧边栏 =====
      「视图」和「范围」是两个独立的轴：视图决定盒子怎么摆（网格/拓扑），
@@ -1145,7 +1160,11 @@ HTML_PAGE = f"""<!DOCTYPE html>
 </head>
 <body>
   <div class="page-head">
-    <div>
+    <div class="head-left">
+      <!-- 返回总览：**只有单盒详情页才出现**（render() 按 isSingle 显隐）。
+           浏览器的前进/后退能回，但那条路看不见——从网格点进一只盒，
+           页面整个换掉，读者不知道「刚才那张网格」还在。 -->
+      <a id="back-link" class="back-link" href="/" hidden></a>
       <h1>BeeBox Fulfillment Center</h1>
     </div>
     <div class="head-right">
@@ -3094,6 +3113,36 @@ async function triggerTask(boxId) {{
   tick();
 }}
 
+// ===== 返回总览 =====
+//
+// 浏览器的前进/后退当然能回，但那条路**看不见**：从网格点进一只盒，整页
+// 换掉，读者不知道刚才那张网格还在原地等他。所以详情页必须有一条看得见
+// 的退路。
+//
+// 退路落点不是笼统的「首页」，而是**当前那两个轴推出来的那一屏**：URL 里
+// 已经记着 domain 和 view，从 WMS 的拓扑点进来，就该落回 WMS 的拓扑。
+// 写「返回首页」会许诺一个回去之后并不存在的落点——读者点下去发现范围和
+// 视图都被重置了，那不是退路，是换了个地方迷路。
+function updateBackLink(scopeLayouts, isSingle) {{
+  const el = document.getElementById('back-link');
+  if (!el) return;
+  if (!isSingle) {{
+    el.hidden = true;
+    return;
+  }}
+  // 选了拓扑、但当前范围推不出环时，回去看到的其实是网格。
+  // 这种情况下标签绝不能写「拓扑」——它会许诺一屏根本画不出来的画面。
+  const {{ canRadial }} = currentScopeLayout(scopeLayouts);
+  const effView = (_view === VIEW_TOPOLOGY && canRadial)
+    ? VIEW_TOPOLOGY : VIEW_GRID;
+  const scope = _domainFilter === ALL_DOMAINS
+    ? '全部域' : domainLabel(_domainFilter);
+  el.href = overviewHref(effView, _domainFilter);
+  el.textContent = '← 返回 ' + scope + ' 的'
+    + (effView === VIEW_TOPOLOGY ? '拓扑' : '网格');
+  el.hidden = false;
+}}
+
 function render(data) {{
   _lastData = data;
   const box = data.box_filter;
@@ -3107,6 +3156,10 @@ function render(data) {{
   if (side) ensureSidebar(side, data, box);
   document.getElementById('last-refresh').textContent =
     'refreshed ' + new Date().toLocaleTimeString();
+  updateBackLink(
+    data.scope_layouts,
+    isSingle && !!(data.box_stats && data.box_stats.length > 0)
+  );
 
   // 单盒视图：静态 shell + 动态小更新（WebGL 场景常驻）
   if (isSingle && data.box_stats && data.box_stats.length > 0) {{

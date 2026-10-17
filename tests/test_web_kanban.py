@@ -1437,3 +1437,103 @@ class TestTheThreeRegionsAreVisuallySeparate:
         assert "body.single-box .page-head {" in HTML_PAGE, (
             "单盒页的头部卡片要单独收薄（padding 8px），把高度让给四栏"
         )
+
+
+def _run_back_link(scope_layouts: dict, view: str, domain: str, is_single: bool) -> dict:
+    """在 node 里真跑 updateBackLink，返回退路链接的最终状态。"""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("没有 node，跳过返回链接守卫")
+
+    src = "\n".join(
+        [
+            _js_const("ALL_DOMAINS"),
+            _js_const("VIEW_GRID"),
+            _js_const("VIEW_TOPOLOGY"),
+            _js_const("UNASSIGNED_DOMAIN"),
+            _extract_js_function("domainLabel"),
+            _extract_js_function("scopeQuery"),
+            _extract_js_function("overviewHref"),
+            _extract_js_function("currentScopeLayout"),
+            _extract_js_function("updateBackLink"),
+            "const el = { hidden: false, href: '', textContent: '' };",
+            "const document = { getElementById: (id) =>"
+            " (id === 'back-link' ? el : null) };",
+            "let _view = " + json.dumps(view) + ";",
+            "let _domainFilter = " + json.dumps(domain) + ";",
+            "updateBackLink(" + json.dumps(scope_layouts) + ", "
+            + json.dumps(is_single) + ");",
+            "console.log(JSON.stringify("
+            "{hidden: el.hidden, href: el.href, text: el.textContent}));",
+        ]
+    )
+    proc = subprocess.run(
+        [node, "-e", src], capture_output=True, text=True, timeout=30
+    )
+    assert proc.returncode == 0, f"node 跑 updateBackLink 失败：\n{proc.stderr}"
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+class TestTheDetailPageHasAVisibleWayBack:
+    """详情页必须有一条看得见的退路，而且要落回刚才那一屏"""
+
+    def test_the_overview_page_shows_no_back_link(self):
+        """总览页没有「返回」可退——那个链接不该在那里"""
+        got = _run_back_link(SCOPE_LAYOUTS, "grid", "__all__", False)
+        assert got["hidden"] is True, f"总览页不该显示返回链接：{got}"
+
+    def test_the_detail_page_points_back_at_the_same_scope_and_view(self):
+        """退路落点是**原来的两个轴**，不是笼统的首页"""
+        got = _run_back_link(SCOPE_LAYOUTS, "topology", "WMS", True)
+        assert got["hidden"] is False, f"详情页该有返回链接：{got}"
+        assert got["href"] == "/?domain=WMS&view=topology", (
+            f"该落回 WMS 的拓扑：{got}"
+        )
+        assert "WMS" in got["text"] and "拓扑" in got["text"], (
+            f"标签要写清回到哪一屏：{got}"
+        )
+
+    def test_the_grid_detail_page_returns_to_the_grid(self):
+        got = _run_back_link(SCOPE_LAYOUTS, "grid", "WMS", True)
+        assert got["href"] == "/?domain=WMS", f"该落回 WMS 的网格：{got}"
+        assert "网格" in got["text"], f"标签要写「网格」：{got}"
+
+    def test_the_unassigned_scope_round_trips_as_an_empty_domain(self):
+        """未归域是空串：退路必须写回 domain=，不能退回全部域"""
+        got = _run_back_link(SCOPE_LAYOUTS, "grid", "", True)
+        assert got["href"] == "/?domain=", f"未归域退路丢了 domain=：{got}"
+
+    def test_the_label_never_promises_a_view_that_cannot_be_drawn(self):
+        """选了拓扑但推不出环时，标签不许写「拓扑」
+
+        那会许诺一屏根本画不出来的画面——点下去看到的是网格，
+        于是这条退路自己变成了一次骗人的导航。
+        """
+        got = _run_back_link(SCOPE_LAYOUTS, "topology", "__all__", True)
+        assert "拓扑" not in got["text"], (
+            f"这一屏画不出拓扑，标签却许诺了拓扑：{got}"
+        )
+        assert "网格" in got["text"], f"应当说明实际会看到网格：{got}"
+        assert got["href"] == "/", f"落点应当是网格的首页：{got}"
+
+    def test_the_back_link_is_a_real_anchor_in_the_head(self):
+        """必须是真 <a href>，不是 div+click——cmd/中键/复制链接才可用"""
+        assert '<a id="back-link" class="back-link" href="/" hidden>' in HTML_PAGE
+        assert "updateBackLink" in HTML_PAGE, "退路链接没人更新，落点会是写死的 /"
+        calls = [
+            ln.strip()
+            for ln in _extract_js_function("render").splitlines()
+            if "updateBackLink(" in ln
+        ]
+        assert calls, "render() 根本没调用它——页面每 2s 重绘一次，不同步的话" \
+            "从详情退回总览，那条链接会留在页面上"
+        # 查「字符串在不在」抓不住死调用：写成 `if (x) updateBackLink(...)`
+        # 源码里照样搜得到，回退验证时实测过——守卫照样绿。所以要求它
+        # 出现在**语句首位**，前面不能挂着 if。
+        assert all(c.startswith("updateBackLink(") for c in calls), (
+            f"render() 里的 updateBackLink 必须在语句首位，实际：{calls}——"
+            "挂在 if 后面就是个死调用，退回总览时退路不会被同步"
+        )

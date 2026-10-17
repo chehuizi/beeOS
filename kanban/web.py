@@ -205,7 +205,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>BeeBox Fulfillment Overview — beeOS Kanban</title>
+<title>BeeBox Fulfillment Center — beeOS Kanban</title>
 <style>
   /* hidden 属性必须真的藏起来。UA 的 `[hidden] {{display:none}}` 来自
      用户代理样式表，任何作者样式都能压过它——.media-preview 的
@@ -219,7 +219,6 @@ HTML_PAGE = f"""<!DOCTYPE html>
     color: #0f172a; min-height: 100vh;
   }}
   h1 {{ margin: 0 0 8px 0; font-size: 26px; font-weight: 700; }}
-  .subtitle {{ color: #64748b; font-size: 13px; }}
   .page-head {{
     display: flex; justify-content: space-between; align-items: flex-start;
     gap: 24px; margin-bottom: 24px;
@@ -263,11 +262,6 @@ HTML_PAGE = f"""<!DOCTYPE html>
     color: #94a3b8; cursor: not-allowed; opacity: 0.72;
   }}
   .side-item.disabled:hover {{ background: rgba(148, 163, 184, 0.08); }}
-  .side-note {{
-    font-size: 11px; line-height: 1.55; color: #64748b;
-    margin-top: 7px; padding: 7px 9px;
-    background: rgba(148, 163, 184, 0.13); border-radius: 7px;
-  }}
   .side-box-dot {{
     width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
   }}
@@ -507,7 +501,13 @@ HTML_PAGE = f"""<!DOCTYPE html>
     display: flex; align-items: center; justify-content: center;
   }}
   #box2d-stage svg {{ display: block; max-width: 100%; height: auto; }}
-  .cube-caption {{ text-align: center; margin-top: 26px; }}
+  /* 立方体**居中**，铭牌文字**左对齐**——这是两件独立的事。
+     以前是整张卡 text-align:center：立方体居中是对的，文字跟着一起居中
+     就错了。名字长短不一于是每张卡的首行都从不同 x 起步，ROLE 那行折行后
+     第二行还是居中的，卡片底部参差不齐（这是长期挂着的已知问题）。
+     拆开：.cube-scene 自己居中，.cube-caption 管自己的文字。 */
+  .cube-scene {{ margin-left: auto; margin-right: auto; }}
+  .cube-caption {{ text-align: left; margin-top: 26px; }}
   .cube-caption .name, .beebox-nameplate .name {{ font-size: 15px; font-weight: 700; color: #0f172a; }}
   /* box_id 独占一行。早先它是**行内**跟着名字走的，于是名字一长就折行，
      box_id 被挤到第二行、还贴着名字，8 张卡片的规格区起始位置参差不齐。
@@ -523,8 +523,13 @@ HTML_PAGE = f"""<!DOCTYPE html>
      让每一行的分界线落在同一个 x 上，纵向能当表扫。 */
   .cube-caption .spec {{ display: block; width: 100%; margin-top: 8px; }}
   .spec-row {{ display: flex; font-size: 10px; line-height: 1.8; }}
+  /* 键列定宽 104px，标签**左对齐**。
+     早先这里是右对齐（33a29c4 为了让两列的分界线落在同一个 x 上）。
+     改成左对齐后，两列各自有一条齐整的左边缘：8 张卡片的 DOMAIN / VALUE
+     STREAM / ROLE / RUNS / ACCEPTANCE 全部从同一个 x 起步，横着扫过去也
+     对得上——纵向当表扫的能力没有丢，反而多了一条对齐线。 */
   .spec-row .k {{
-    width: 104px; text-align: right; color: #94a3b8;
+    width: 104px; text-align: left; color: #94a3b8;
     letter-spacing: 0.8px; padding-right: 10px;
   }}
   .spec-row .v {{ color: #334155; font-weight: 600; }}
@@ -538,6 +543,37 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .section-title {{
     font-size: 12px; font-weight: 600; color: #64748b;
     text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;
+  }}
+
+  /* ===== 视图 Tab =====
+     贴在它所控制的那块画面正上方，取代原先在侧边栏里的「视图」段。
+     Tab 是**内容区的属性**：读者决定「怎么看」，紧接着就该看到画面变了，
+     不该先把视线拉到页面最左边的窄栏里选完再拉回来。 */
+  .view-tabs {{
+    display: inline-flex; gap: 4px; padding: 4px;
+    background: rgba(148, 163, 184, 0.16); border-radius: 10px;
+    margin-bottom: 18px;
+  }}
+  .view-tab {{
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 7px 18px; border-radius: 7px;
+    font-size: 13px; color: #475569; text-decoration: none;
+    border: none; background: transparent; cursor: pointer;
+    font-family: inherit;
+  }}
+  .view-tab:hover {{ background: rgba(255, 255, 255, 0.6); }}
+  .view-tab.active {{
+    background: #0f766e; color: white; font-weight: 600;
+  }}
+  .view-tab.disabled {{
+    color: #94a3b8; cursor: not-allowed;
+  }}
+  .view-tab.disabled:hover {{ background: transparent; }}
+  .tab-flag {{ font-size: 10px; opacity: 0.7; }}
+  .tab-note {{
+    font-size: 11px; line-height: 1.55; color: #64748b;
+    margin: -8px 0 18px 0; padding: 7px 9px; max-width: 640px;
+    background: rgba(148, 163, 184, 0.13); border-radius: 7px;
   }}
 
   /* ===== Tables ===== */
@@ -1069,8 +1105,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
 <body>
   <div class="page-head">
     <div>
-      <h1>BeeBox Fulfillment Overview</h1>
-      <div class="subtitle">beeOS Kanban · live view · auto-refresh every 2s</div>
+      <h1>BeeBox Fulfillment Center</h1>
     </div>
     <div class="head-right">
       <span class="refresh-tag" id="last-refresh">never</span>
@@ -1178,17 +1213,57 @@ function boxHref(boxId, domain, view) {{
   return '/?box=' + encodeURIComponent(boxId) + (q ? '&' + q : '');
 }}
 
+// ===== 视图 Tab =====
+//
+// 「视图」以前也住在侧边栏里，和「范围」「盒子」并列。但它管的是**右边
+// 这块内容怎么摆**，摆在那条窄栏里等于让读者把视线拉到页面最左边、看完
+// 再拉回来才知道右边长什么样。视图是内容的属性，不是导航的属性——所以
+// 搬成内容区顶部的 Tab，紧贴着它所控制的那块画面。
+//
+// 侧边栏现在只剩两段：**范围**（摆哪些）/ **盒子**（直达详情），两段都是
+// 导航，留在导航栏里说得通。
+//
+// Tab 仍然是真 <a href>：两个轴都进 URL，切视图一样能分享、能刷新、
+// 能用前进后退。推不出环时「拓扑」渲染成真 <button disabled> 并写明原因
+// （不是一个没有 href 的 <a>：后者在无障碍树里退化成 role=generic，
+// 还会把 title 当成可访问名，读屏念出来的是那句原因而不是「拓扑」）。
+function renderViewTabs(scopeLayouts) {{
+  const {{ lay, canRadial }} = currentScopeLayout(scopeLayouts);
+  const views = [
+    [VIEW_GRID, '网格', '把范围内的盒子平铺，不画接线'],
+    [VIEW_TOPOLOGY, '拓扑', '按接线画成环：谁交给谁、谁汇进中心'],
+  ];
+
+  let html = '<div class="view-tabs" role="tablist">';
+  for (const [v, label, hint] of views) {{
+    const blocked = (v === VIEW_TOPOLOGY) && !canRadial;
+    const active = (_view === v) && !blocked;
+    if (blocked) {{
+      const why = (lay && lay.reason) || '这个范围推不出环';
+      html += '<button type="button" class="view-tab disabled" disabled'
+        + ' title="' + esc(why) + '">' + esc(label)
+        + '<span class="tab-flag">不可用</span></button>';
+      continue;
+    }}
+    html += '<a class="view-tab' + (active ? ' active' : '') + '"'
+      + ' role="tab" aria-selected="' + (active ? 'true' : 'false') + '"'
+      + ' href="' + esc(overviewHref(v, _domainFilter)) + '"'
+      + ' title="' + esc(hint) + '">' + esc(label) + '</a>';
+  }}
+  html += '</div>';
+
+  // 选了拓扑但当前范围推不出环时，把原因摆在明面上，不静默退回网格。
+  if (_view === VIEW_TOPOLOGY && !canRadial) {{
+    html += '<div class="tab-note">这个范围画不出拓扑：'
+      + esc((lay && lay.reason) || '服务端没给出该范围的布局') + '</div>';
+  }}
+  return html;
+}}
+
 // ===== 侧边栏 =====
 //
-// 三段：**视图**（怎么摆）/ **范围**（摆哪些）/ **盒子**（直达详情）。
-//
-// 以前顶部是 11 个 chip 挤成两行、随时换行，是整页最扎眼的东西，
-// 而它纯粹是导航。现在收进左侧一栏，顶栏空了。
-//
-// 视图和范围是**两个独立的轴**。以前它们焊在一起：点域 chip 顺手把整页
-// 换成环形，读者以为在筛选，实际在换页面。现在选网格就是网格，
-// 选拓扑就是拓扑——能不能出环由服务端推导说了算，推不出来就把
-// 「拓扑」这一项禁用**并写明为什么**，而不是悄悄退回网格。
+// 两段：**范围**（摆哪些）/ **盒子**（直达详情）。都是导航。
+// 「视图」在内容区顶部的 Tab 里，见上面的 renderViewTabs。
 
 // 当前范围的服务端布局。推不出环时返回 null + 原因。
 function currentScopeLayout(scopeLayouts) {{
@@ -1200,41 +1275,8 @@ function currentScopeLayout(scopeLayouts) {{
 function renderSidebar(data, current) {{
   const domains = data.domains || {{}};
   const keys = Object.keys(domains);
-  const {{ lay, canRadial }} = currentScopeLayout(data.scope_layouts);
 
   let html = '';
-
-  // —— 视图 ——
-  html += '<div class="side-group">';
-  html += '<div class="side-group-label">视图</div><div class="side-list">';
-  const views = [
-    [VIEW_GRID, '网格', '把范围内的盒子平铺，不画接线'],
-    [VIEW_TOPOLOGY, '拓扑', '按接线画成环：谁交给谁、谁汇进中心'],
-  ];
-  for (const [v, label, hint] of views) {{
-    const blocked = (v === VIEW_TOPOLOGY) && !canRadial;
-    const active = (_view === v) && !blocked;
-    if (blocked) {{
-      // 用真的 <button disabled>，不是一个没有 href 的 <a>：
-      // 后者在无障碍树里退化成 role=generic，还会把 title 当成可访问名，
-      // 读屏念出来的是那句原因而不是「拓扑」。禁用就该长成禁用的样子。
-      const why = (lay && lay.reason) || '这个范围推不出环';
-      html += '<button type="button" class="side-item disabled" disabled'
-        + ' title="' + esc(why) + '">' + esc(label)
-        + '<span class="count">不可用</span></button>';
-      continue;
-    }}
-    html += '<a class="side-item' + (active ? ' active' : '') + '"'
-      + ' href="' + esc(overviewHref(v, _domainFilter)) + '"'
-      + ' title="' + esc(hint) + '">' + esc(label) + '</a>';
-  }}
-  html += '</div>';
-  // 选了拓扑但当前范围推不出环时，把原因摆在明面上
-  if (_view === VIEW_TOPOLOGY && !canRadial) {{
-    html += '<div class="side-note">这个范围画不出拓扑：'
-      + esc((lay && lay.reason) || '服务端没给出该范围的布局') + '</div>';
-  }}
-  html += '</div>';
 
   // —— 范围 ——
   html += '<div class="side-group">';
@@ -1325,8 +1367,9 @@ function applyDomainFilter() {{
   }}
   const note = document.getElementById('domain-empty');
   if (note) note.style.display = shown === 0 ? '' : 'none';
-  const cnt = document.getElementById('box-count');
-  if (cnt) cnt.textContent = shown;
+  // 这里原来还同步一个 `#box-count`（就是被删掉的「beeBoxes in Flight (N)」
+  // 标题里的那个数）。元素没了，代码也跟着走——留着它就是一条查不到
+  // 元素的死分支，读代码的人会以为那个计数还在页面上。
 }}
 
 // 价值流 → 配色（归属数据来自服务端 box.meta，声明式，不再按 box_id 关键词猜测）
@@ -3053,6 +3096,9 @@ function render(data) {{
   // 作用域提到 if 外面：下面渲染网格之后还要用它决定要不要做 DOM 过滤。
   const {{ lay, canRadial }} = currentScopeLayout(data.scope_layouts);
   if (data.box_stats && data.box_stats.length > 0) {{
+    // 视图 Tab 贴在内容正上方——它控制的就是下面这块画面。
+    // 单盒详情页不画：那里没有「摆哪些盒子」的选择，Tab 是纯噪音。
+    html += renderViewTabs(data.scope_layouts);
     // **视图由读者选，范围由接线决定能不能画**——两个轴独立。
     // 以前这里是 `lay.layout === 'radial' ? 环形 : 平铺`：点域 chip 顺手
     // 换掉整页布局，读者以为在筛选、实际在换页面，URL 里也看不出视图变了。
@@ -3069,8 +3115,18 @@ function render(data) {{
           ${{esc((lay && lay.reason) || '服务端没给出该范围的布局')}}。<br>
           不静默退回网格——看着像「就是平铺的」，读的人会以为这个范围没有结构。</div>`;
       }}
-      html += `<div class="section"><div class="section-title">beeBoxes in Flight
-        (<span id="box-count">${{data.box_stats.length}}</span>)</div>`;
+      // 这里原来有一行 section-title：「beeBoxes in Flight (N)」。删掉的理由：
+      // 1. 那个 N 是 `data.box_stats.length`，**整页渲染出来**——侧边栏「盒子」
+      //    一栏列出同样的清单、逐只带名字，数量一眼就有，这个标题是第三遍重复；
+      // 2. 它还多带一句「beeBoxes in Flight」——把每张卡上已经写着的
+      //    DOMAIN / VALUE STREAM / ROLE 重新概括一遍，等于替读者先总结一遍
+      //    自己马上要读的东西；
+      // 3. 全大写 + 字距拉开的标题样式，视觉权重比下面任何一个真实信号
+      //    （未实现徽章、验收率）都重。
+      // 范围切换后网格变几只，Tab 的位置不变，少这一行页面反而更安静。
+      // （`id="box-count"` 随之消失，applyDomainFilter 里同步它的三行死代码
+      //  一起删掉了——域筛选本来就不依赖那个计数。）
+      html += `<div class="section">`;
       html += `<div class="boxes-scene">`;
       for (const b of data.box_stats) {{
         html += renderCube(b);

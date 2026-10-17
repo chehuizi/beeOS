@@ -9,7 +9,9 @@
 
 from __future__ import annotations
 
+import html as html_mod
 import json
+import re
 import socket
 import threading
 import time
@@ -978,8 +980,17 @@ class TestViewAndScopeAreTwoSeparateAxes:
         )
 
     def test_a_scope_that_cannot_ring_disables_topology_instead_of_falling_back(self):
-        """推不出环时必须禁用 + 写明原因，不许静默退回网格"""
-        assert "'<button type=\"button\" class=\"side-item disabled\" disabled'" in HTML_PAGE, (
+        """推不出环时必须禁用 + 写明原因，不许静默退回网格
+
+        行为那条由 TestViewTabsRenderAsTabs 里真跑 renderViewTabs 的守卫
+        守；这里只钉住「它必须是个真 disabled button，而不是没有 href 的
+        <a>」这个形状——它在无障碍树里会退化成 role=generic，
+        还会把 title 当成可访问名，读屏念出来的是那句原因而不是「拓扑」。
+        """
+        assert (
+            "'<button type=\"button\" class=\"view-tab disabled\" disabled'"
+            in HTML_PAGE
+        ), (
             "拓扑不可用时要渲染成真的 disabled button——"
             "没有 href 的 <a> 在无障碍树里退化成 role=generic"
         )
@@ -1012,6 +1023,18 @@ def _extract_js_function(name: str) -> str:
             if depth == 0:
                 return HTML_PAGE[start : j + 1]
     raise AssertionError(f"{name} 的花括号没配平")
+
+
+def _strip_js_comments(text: str) -> str:
+    """剥掉 // 整行注释和 /* */ 块注释。
+
+    存在性守卫必须查这个结果，不查原文：页面里解释「这次删掉了什么」的
+    注释里，往往就写着被删掉的那句话原文。查全文等于守注释。
+    """
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    return "\n".join(
+        line for line in text.splitlines() if not line.strip().startswith("//")
+    )
 
 
 def _js_const(name: str) -> str:
@@ -1200,3 +1223,163 @@ class TestScopeAndViewLinksAreRealQueryUrls:
                 "用真值判断（||）会把未归域的空串当成「没给这个参数」，"
                 "静默退回全部域——看起来像筛选没生效。"
             )
+
+
+def _run_view_tabs(scope_layouts: dict, view: str, domain: str) -> str:
+    """在 node 里真跑 renderViewTabs，返回它吐出的 HTML。
+
+    用 HTML_PAGE 里的真源码，不抄一份到 Python——抄的那份和页面上的那份
+    是两份代码，改了页面上的那份测试照样绿。
+    """
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("没有 node，跳过视图 Tab 守卫")
+
+    src = "\n".join(
+        [
+            _js_const("ALL_DOMAINS"),
+            _js_const("VIEW_GRID"),
+            _js_const("VIEW_TOPOLOGY"),
+            _extract_js_function("esc"),
+            _extract_js_function("scopeQuery"),
+            _extract_js_function("overviewHref"),
+            _extract_js_function("currentScopeLayout"),
+            _extract_js_function("renderViewTabs"),
+            "let _view = " + json.dumps(view) + ";",
+            "let _domainFilter = " + json.dumps(domain) + ";",
+            "console.log(JSON.stringify(renderViewTabs("
+            + json.dumps(scope_layouts) + ")));",
+        ]
+    )
+    proc = subprocess.run(
+        [node, "-e", src], capture_output=True, text=True, timeout=30
+    )
+    assert proc.returncode == 0, f"node 跑 renderViewTabs 失败：\n{proc.stderr}"
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+# 跨域范围（__all__）推不出唯一汇点；WMS 单域算得出。
+# 「为什么 __all__ 推不出环」是服务端 _layout_for 的推导结果，不是前端决定的，
+# 所以这里照抄那份口径，别在前端另造一套判断。
+SCOPE_LAYOUTS = {
+    "__all__": {"layout": "flat", "reason": "跨域范围推不出唯一汇点"},
+    "WMS": {"layout": "radial", "domain": "WMS", "ring": [], "reason": ""},
+}
+
+
+class TestHomepageIsQuieterAndTheViewIsATabBar:
+    """首页减字 + 卡片左对齐 + 「视图」搬成内容区顶部的 Tab"""
+
+    def test_the_tab_bar_offers_both_axes_when_the_scope_can_ring(self):
+        """能画环的范围：两个 Tab 都是可点的链接，且带着当前范围"""
+        # 比对前先 unescape：渲染出来的 HTML 里 & 会被 esc() 转成 &amp;
+        # （这是**正确**的 HTML），浏览器读到的才是下面这个裸 URL。
+        # 拿转义后的串去断言 URL，等于在断言「转义规则对不对」，
+        # 查不出「Tab 指向了哪个视图」——那才是这里要守的东西。
+        html = html_mod.unescape(_run_view_tabs(SCOPE_LAYOUTS, "grid", "WMS"))
+
+        assert 'href="/?domain=WMS"' in html, (
+            f"网格 Tab 应当指向 WMS 的网格：{html}"
+        )
+        assert 'href="/?domain=WMS&view=topology"' in html, (
+            f"拓扑 Tab 应当指向 WMS 的拓扑：{html}"
+        )
+        assert "disabled" not in html, "WMS 推得出环，拓扑不该是禁用的"
+
+    def test_the_tab_bar_disables_topology_when_the_scope_cannot_ring(self):
+        """推不出环：拓扑渲染成真 <button disabled>，而且没有 href
+
+        不能是一个没有 href 的 <a>——它在无障碍树里退化成 role=generic，
+        还会把 title 当成可访问名。
+        """
+        html = _run_view_tabs(SCOPE_LAYOUTS, "grid", "__all__")
+
+        assert '<button type="button" class="view-tab disabled" disabled' in html, (
+            f"跨域范围下拓扑该是禁用 button：{html}"
+        )
+        assert "view=topology" not in html, (
+            f"禁用的拓扑不该留下可点的 href：{html}"
+        )
+        assert "跨域范围推不出唯一汇点" in html, (
+            f"禁用时要写明原因：{html}"
+        )
+
+    def test_the_active_tab_is_the_one_the_reader_picked(self):
+        """选中的那个 Tab 才带 active，且 aria-selected 同步"""
+        for view, scope in (("grid", "WMS"), ("topology", "WMS")):
+            html = _run_view_tabs(SCOPE_LAYOUTS, view, scope)
+            active = html.count('class="view-tab active"')
+            assert active == 1, f"view={view} 时 active 的 Tab 应恰好一个：{html}"
+            assert 'aria-selected="true"' in html, f"aria-selected 没跟上：{html}"
+            assert 'aria-selected="false"' in html, f"非选中项也该标 false：{html}"
+
+    def test_the_sidebar_no_longer_owns_the_view_axis(self):
+        """「视图」搬走了：侧边栏不再碰视图，也不再算能不能画环"""
+        sidebar = _extract_js_function("renderSidebar")
+        assert "VIEW_TOPOLOGY" not in sidebar, (
+            "侧边栏不该再渲染视图选项——它已经搬成内容区顶部的 Tab"
+        )
+        assert "currentScopeLayout" not in sidebar, (
+            "侧边栏不该再算「这个范围能不能画环」——那是 Tab 的事"
+        )
+        assert "renderViewTabs" in HTML_PAGE, "视图 Tab 的渲染函数不见了"
+
+    def test_the_page_header_is_just_the_title(self):
+        """副标题和 in-flight 计数都删了，标题改名
+
+        先剥注释再查：解释「这次为什么删掉它们」的注释里**正好写着**
+        这些文案（「beeBoxes in Flight (N)」）。不剥的话守卫命中的是
+        注释，删没删都绿——守的是散文，不是页面。
+        """
+        code = _strip_js_comments(HTML_PAGE)
+
+        assert "<h1>BeeBox Fulfillment Center</h1>" in HTML_PAGE
+        assert "BeeBox Fulfillment Overview" not in code, (
+            "旧标题还在（<title> 或 h1）"
+        )
+        assert "auto-refresh every 2s" not in code, (
+            "「beeOS Kanban · live view · auto-refresh every 2s」删了"
+        )
+        assert "beeBoxes in Flight" not in code, (
+            "「beeBoxes in Flight (N)」删了——数字和侧边栏清单重复"
+        )
+        assert "box-count" not in code, (
+            "box-count 元素和同步它的死代码都要一起删干净"
+        )
+
+    def test_deleting_markup_also_deletes_its_css(self):
+        """删掉的元素不许留下孤儿 CSS
+
+        .subtitle 和 .side-note 各只有一个产家，两个产家都随这次改动搬走了。
+        留着样式就是「以后有人照着这个 class 写 markup，写出来是隐形的」。
+        """
+        code = _strip_js_comments(HTML_PAGE)
+        for css in (".subtitle {", ".side-note {"):
+            assert css not in code, f"{css} 已经没人用了，删掉"
+
+    def test_the_caption_is_left_aligned_and_the_cube_stays_centred(self):
+        """立方体居中、文字左对齐，是两件独立的事
+
+        以前整张卡 text-align:center，立方体居中对，文字跟着居中就错了：
+        名字长短不一于是每张卡首行起点都不同，ROLE 折行后第二行还是居中，
+        卡片底部参差。所以立方体自己居中（auto margin），铭牌管自己的文字。
+        """
+        assert ".cube-caption { text-align: left;" in HTML_PAGE, (
+            "铭牌文字应当左对齐"
+        )
+        assert ".cube-scene { margin-left: auto; margin-right: auto; }" in (
+            HTML_PAGE
+        ), "立方体要自己居中，不能靠整张卡 text-align 带着走"
+        assert "text-align: center" not in HTML_PAGE.split(".cube-caption")[1][:80], (
+            ".cube-caption 上不该再有 text-align: center"
+        )
+
+    def test_the_spec_label_column_still_has_a_fixed_width(self):
+        """标签列定宽不能丢——那是纵向当表扫的基础"""
+        assert ".spec-row .k {" in HTML_PAGE
+        assert "width: 104px" in HTML_PAGE, (
+            "标签列的定宽被改掉了，8 张卡片的规格行就散开了"
+        )

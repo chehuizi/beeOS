@@ -2998,14 +2998,24 @@ function render(data) {{
   _scene2d = null;
   _accGate = null;
   let html = '';
-  // 骨架盒的运行记录不计入顶部分母，但**必须说出来**——
-  // 悄悄排除等于给出一个说不清来源的数字。
-  const skipped = data.excluded_skeleton_boxes || [];
-  if (skipped.length) {{
-    html += `<div class="skeleton-note">${{skipped.length}} 只骨架盒的运行记录未计入上方指标
-      （判据已声明、腿还没实现，跑出来必然全红，计进去会拿「没写」冒充「没做好」）：
-      ${{skipped.map(esc).join(' · ')}}</div>`;
-  }}
+  // 这里原来有一条黄色横幅：「N 只骨架盒的运行记录未计入上方指标：<逐个 id>」。
+  // 已删除，三条理由都是核对过代码的，不是看着碍眼就删：
+  //
+  // 1. **「上方指标」是悬空引用**。多盒总览渲染出来的 DOM 只有 section /
+  //    boxes-scene / empty 三样；`data.metrics`、`data.status_counts`、
+  //    `data.acceptance_counts` 三个字段的**前端引用次数是 0**——服务端算了、
+  //    发过来了、前端从没渲染过。这条横幅在给一个读者看不见的数做解释。
+  //    （注意：不能拿 `&& data.metrics` 当开关——那个字段一直在 payload 里，
+  //    恒为真，这样的门是假的。）
+  // 2. **5 个 box_id 逐个列出是第三遍重复**。每张卡片上有「未实现」徽章，
+  //    `ACCEPTANCE` 那行又写着「未实现」，真实信号就在横幅下面 20px。
+  // 3. **视觉权重反了**。它是全页最扎眼的元素（黄底 / 满宽 / 描边 / 独占
+  //    一行），承载的却是最低优先级的元信息。
+  //
+  // 「不能悄悄排除盒子」这条原则本身没变——只是它现在**只属于 API**：
+  // `excluded_skeleton_boxes` 仍在 payload 里，谁读数据谁看得见这份口径。
+  // **什么时候页面上真的画出了聚合指标，这条说明就要跟着回来**，否则那个
+  // 数字又会变成说不清来源的数。
   // 作用域提到 if 外面：下面渲染网格之后还要用它决定要不要做 DOM 过滤。
   const {{ lay, canRadial }} = currentScopeLayout(data.scope_layouts);
   if (data.box_stats && data.box_stats.length > 0) {{

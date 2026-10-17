@@ -24,10 +24,14 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-# 一张真的、能被 sips 读的 JPEG（4.5KB 合成小票）。
-# 手搓的假 JPEG（ffd8ff + 一串 0）sips 会拒——转换测试必须走真文件，
+# 一张真的、能被解码的 JPEG（4.5KB 合成小票）。
+# 手搓的假 JPEG（ffd8ff + 一串 0）解码器会拒——转换测试必须走真文件，
 # 否则测的是「我塞了个对的魔数」，不是「真的转出来了」。
 RECEIPT_JPEG = Path(__file__).parent / "fixtures" / "receipt_sample.jpg"
+# 同一张小票的 HEIC 版本。iPhone 拍的小票默认就是这个格式，
+# 所以样本得是**仓库里的一张真 HEIC**，而不是拿 sips 现转一张——
+# 现转的样本在没有 sips 的机器上根本造不出来，测试会整条 skip。
+RECEIPT_HEIC = Path(__file__).parent / "fixtures" / "receipt_sample.heic"
 from pathlib import Path
 
 import pytest
@@ -454,26 +458,52 @@ class TestHeicAccepted:
     def test_heic_becomes_a_real_jpeg(self):
         """真的出 JPEG（看 SOI 魔数），不是把 MIME 标签改了就当转过了
 
-        走真文件：仓库里这张 fixture JPEG → sips 转成真 HEIC → 盒子转回
-        JPEG。手搓的假 JPEG（ffd8ff + 一串 0）sips 直接拒，本轮就踩过。
+        样本是仓库里那张**真 HEIC** fixture，不用现转：早先用 sips 现造样本，
+        于是「唯一验证过转换的那条测试」在没有 sips 的机器上整条 skip——
+        Linux 服务端就这么把一条从没跑过的路放上了线。
         """
         from boxes.receipt.runner import _as_viewable_image
 
-        if shutil.which("sips") is None:
-            pytest.skip("没有 sips，跳过真转换验证")
-        tmp = Path(tempfile.mkdtemp())
-        heic = tmp / "probe.heic"
-        subprocess.run(
-            ["sips", "-s", "format", "heic", str(RECEIPT_JPEG), "--out", str(heic)],
-            capture_output=True, check=True,
-        )
-        url = "data:image/heic;base64," + base64.b64encode(heic.read_bytes()).decode()
+        if not RECEIPT_HEIC.is_file():
+            pytest.skip(f"缺 HEIC 样本：{RECEIPT_HEIC}")
+        url = "data:image/heic;base64," + base64.b64encode(
+            RECEIPT_HEIC.read_bytes()
+        ).decode()
         out = _as_viewable_image(url)
         assert out.startswith("data:image/jpeg;base64,")
         assert base64.b64decode(out.split(",", 1)[1])[:3] == b"\xff\xd8\xff"
 
-    def test_missing_sips_fails_loudly(self, monkeypatch):
-        """转不了就如实说，不悄悄把 HEIC 原样发出去
+    def test_pillow_heif_route_works_without_sips(self, monkeypatch):
+        """**屏蔽 sips**，pillow_heif 这一路必须自己走通
+
+        实测踩坑（本轮）：pillow_heif 1.8 里 `HeifFile` 不再有 `.primary`，
+        直接 `.primary.to_pillow()` 会 AttributeError。而 macOS 开发机有 sips
+        兜底，回退把这条坏路线盖住了——本地全绿，Linux 服务端整条路失效。
+        所以这里必须掐掉 sips：库路线自己立不住的话，就地转红，
+        而不是换个环境再翻车。
+        """
+        from boxes.receipt import runner as receipt_runner
+
+        monkeypatch.setattr(receipt_runner.shutil, "which", lambda _: None)
+        jpeg = receipt_runner._heic_via_pillow_heif(RECEIPT_HEIC.read_bytes())
+        assert jpeg[:3] == b"\xff\xd8\xff", "pillow_heif 路线没出真 JPEG"
+        assert len(jpeg) > 1000, "JPEG 小得可疑，可能是空壳"
+
+    def test_sips_route_still_works_as_fallback(self, monkeypatch):
+        """macOS 上 sips 是零安装的兜底路，不能因为加了库就把它拆了"""
+        from boxes.receipt import runner as receipt_runner
+
+        monkeypatch.setattr(receipt_runner.shutil, "which", lambda _: "/usr/bin/sips")
+        with monkeypatch.context() as m:
+            m.setattr(
+                receipt_runner, "_heic_via_pillow_heif",
+                lambda raw: (_ for _ in ()).throw(RuntimeError("库没装")),
+            )
+            jpeg = receipt_runner._heic_to_jpeg(RECEIPT_HEIC.read_bytes(), "image/heic")
+        assert jpeg[:3] == b"\xff\xd8\xff"
+
+    def test_all_routes_failing_fails_loudly(self, monkeypatch):
+        """两条路都不成 —— 报出每条路的原话，不悄悄把 HEIC 原样发出去
 
         悄悄退回去 = 把同样的 400 原封不动还给用户，只是晚了一拍。
         """
@@ -482,7 +512,24 @@ class TestHeicAccepted:
         monkeypatch.setattr(receipt_runner.shutil, "which", lambda _: None)
         with pytest.raises(ValueError) as ei:
             receipt_runner._as_viewable_image(self._url("image/heic"))
-        assert "sips" in str(ei.value)
+        msg = str(ei.value)
+        # 两条路的名字都得在，否则报错等于没指向任何可操作的动作
+        assert "pillow_heif" in msg and "sips" in msg, msg
+
+    def test_output_that_is_not_really_jpeg_is_rejected(self, monkeypatch):
+        """某条路声称成功、实际吐出非 JPEG —— 不认，且要说出是哪条路
+
+        「改了 MIME 标签就算转过了」是这类代码最常见的假成功。
+        """
+        from boxes.receipt import runner as receipt_runner
+
+        monkeypatch.setattr(
+            receipt_runner, "_heic_via_pillow_heif", lambda raw: b"not-a-jpeg-at-all"
+        )
+        monkeypatch.setattr(receipt_runner.shutil, "which", lambda _: None)
+        with pytest.raises(ValueError) as ei:
+            receipt_runner._heic_to_jpeg(RECEIPT_HEIC.read_bytes(), "image/heic")
+        assert "pillow_heif" in str(ei.value), "该点名是这条路线吐了假 JPEG"
 
     def test_converter_failure_is_reported(self, monkeypatch):
         """sips 在但转不动（文件不是真 HEIC 等）——报 sips 说的原话"""
@@ -496,6 +543,11 @@ class TestHeicAccepted:
             stderr = b"bad image data"
 
         monkeypatch.setattr(receipt_runner.subprocess, "run", lambda *a, **k: _Proc())
+        # 库这条路也得一起掐掉，否则它成功了就轮不到 sips，断言就成空转
+        monkeypatch.setattr(
+            receipt_runner, "_heic_via_pillow_heif",
+            lambda raw: (_ for _ in ()).throw(RuntimeError("库没装")),
+        )
         with pytest.raises(ValueError) as ei:
             receipt_runner._as_viewable_image(self._url("image/heic"))
         assert "bad image data" in str(ei.value)
@@ -510,9 +562,13 @@ class TestHeicAccepted:
             seen["images"] = kw.get("images")
             return {"merchant_name": "某超市", "items": []}
 
+        # 两条转换路都掐掉：一张图都不该发出去
         monkeypatch.setattr(receipt_runner.shutil, "which", lambda _: None)
+        monkeypatch.setattr(
+            receipt_runner, "_heic_via_pillow_heif",
+            lambda raw: (_ for _ in ()).throw(RuntimeError("库没装")),
+        )
         monkeypatch.setattr(receipt_runner, "complete_json", spy)
-        # 没 sips → 转换失败 → 一张图都不该发出去
         with pytest.raises(ValueError):
             receipt_runner._simulate_read_receipt({"photo": self._url("image/heic")})
         assert not seen, "转换失败后仍然调了模型"

@@ -345,8 +345,14 @@ def _heic_via_pillow_heif(raw: bytes) -> bytes:
     import pillow_heif
     from PIL import Image
 
-    with pillow_heif.open_heif(io.BytesIO(raw)) as heif:
-        pil = heif.primary.to_pillow()
+    # 不用 with：HeifFile 没实现 __exit__，with 会直接 TypeError。
+    # 它也不持有需要显式关闭的文件句柄（字节已在内存里），不解也行。
+    heif = pillow_heif.open_heif(io.BytesIO(raw))
+    # 1.8 起 HeifFile 自己就能 to_pillow()，不再挂在 .primary 上。
+    # getattr 兜住老版本：这条路线在开发机和服务器上是同一个库，
+    # 但两边 pip 装出来的版本不一定同一天。
+    target = getattr(heif, "primary", heif)
+    pil = target.to_pillow()
     # JPEG 没有 alpha 通道也不吃 16bit，HEIC 里两样都可能带；
     # 不显式 convert，save 会抛一个和「HEIC 解不开」无关的错。
     rgb = pil.convert("RGB")

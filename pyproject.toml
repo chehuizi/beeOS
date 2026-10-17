@@ -5,6 +5,10 @@ description = "beeOS - Business Fulfillment Operating System"
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.0",
+    # runtime/llm.py 在模块顶层 import httpx，是硬依赖。
+    # 之前漏声明，本地 .venv 里碰巧装了所以一直没暴露；部署到干净
+    # 环境时直接 ModuleNotFoundError 起不来。
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]

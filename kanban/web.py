@@ -212,16 +212,28 @@ HTML_PAGE = f"""<!DOCTYPE html>
      `display: flex` 就是这么把一个空 <img> 变成常驻破图的。
      放最前面统一兜住，省得每加一个用 hidden 切换的面板再踩一次。 */
   [hidden] {{ display: none !important; }}
+  /* `box-sizing: border-box` 不是顺手加的。body 的 min-height:100vh
+     量的是**内容盒**，而 padding:32px 是加在它**外面**的——于是页面总高
+     恒等于 100vh + 64px，内容再短也多出 64px 可滚，右侧永远挂一条
+     -scrollbar，而读者根本没东西可滚。（早先只有单盒视图设了
+     border-box，总览页一直漏着。） */
   body {{
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    margin: 0; padding: 32px;
-    background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+    margin: 0; padding: 28px;
+    box-sizing: border-box;
+    background: #eef2f7;
     color: #0f172a; min-height: 100vh;
   }}
   h1 {{ margin: 0 0 8px 0; font-size: 26px; font-weight: 700; }}
+  /* ===== 三块分区 =====
+     头部 / 左侧导航 / 右侧内容以前全糊在同一块渐变底上，只靠空白分隔，
+     看着像一整张浮在灰雾里的画布——「哪些是导航、哪些是内容」分不出来。
+     现在三块各有各的表面：白底 + 描边的卡片压在浅灰底上。 */
   .page-head {{
-    display: flex; justify-content: space-between; align-items: flex-start;
-    gap: 24px; margin-bottom: 24px;
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 24px; margin-bottom: 20px;
+    padding: 14px 20px;
+    background: #fff; border: 1px solid #dbe3ec; border-radius: 12px;
   }}
   .head-right {{
     display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
@@ -235,10 +247,20 @@ HTML_PAGE = f"""<!DOCTYPE html>
      点域 chip 顺手把整页换成环形，读者以为在筛选，实际在换页面，
      而 URL 里只有 domain 没有 view，切换这件事根本看不见。
      拆开之后，「WMS 的网格」和「WMS 的拓扑」才都能拿到。 */
-  .page-body {{ display: flex; gap: 28px; align-items: flex-start; }}
+  .page-body {{ display: flex; gap: 20px; align-items: flex-start; }}
   .sidebar {{
-    flex: 0 0 216px; position: sticky; top: 32px;
+    flex: 0 0 232px; position: sticky; top: 28px;
     display: flex; flex-direction: column; gap: 18px;
+    padding: 14px;
+    background: #fff; border: 1px solid #dbe3ec; border-radius: 12px;
+  }}
+  /* 右侧内容区：第三块。**只给总览页加卡片**——单盒详情页是
+     `height:100vh; overflow:hidden` 的整屏 flex 四栏，外面再套一层卡片
+     会凭空多吃掉 32px padding，矮屏上把四栏挤破。 */
+  body:not(.single-box) #content {{
+    flex: 1 1 auto; min-width: 0;
+    padding: 20px 22px 24px;
+    background: #fff; border: 1px solid #dbe3ec; border-radius: 12px;
   }}
   .side-group-label {{
     font-size: 10px; color: #94a3b8; letter-spacing: 0.1em;
@@ -545,35 +567,49 @@ HTML_PAGE = f"""<!DOCTYPE html>
     text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;
   }}
 
-  /* ===== 视图 Tab =====
-     贴在它所控制的那块画面正上方，取代原先在侧边栏里的「视图」段。
-     Tab 是**内容区的属性**：读者决定「怎么看」，紧接着就该看到画面变了，
-     不该先把视线拉到页面最左边的窄栏里选完再拉回来。 */
-  .view-tabs {{
-    display: inline-flex; gap: 4px; padding: 4px;
-    background: rgba(148, 163, 184, 0.16); border-radius: 10px;
-    margin-bottom: 18px;
+  /* ===== 顶部筛选条 =====
+     「视图」和「范围」两块并排，贴在它俩所控制的画面正上方。
+     两个是独立的选择器，不是把范围藏进视图的下拉——「WMS 的网格」和
+     「WMS 的拓扑」得同时一眼可见，才知道它们是能拼在一起的。 */
+  .filter-bar {{
+    display: flex; flex-wrap: wrap; align-items: flex-start;
+    gap: 14px 26px; margin-bottom: 20px;
+    padding-bottom: 16px; border-bottom: 1px solid #e6ecf3;
   }}
-  .view-tab {{
+  .filter-group {{ display: flex; flex-direction: column; gap: 6px; }}
+  .filter-label {{
+    font-size: 10px; color: #94a3b8; letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }}
+  .seg {{
+    display: inline-flex; gap: 4px; padding: 4px;
+    background: #eef2f7; border-radius: 10px;
+  }}
+  .seg-item {{
     display: inline-flex; align-items: center; gap: 8px;
     padding: 7px 18px; border-radius: 7px;
     font-size: 13px; color: #475569; text-decoration: none;
     border: none; background: transparent; cursor: pointer;
     font-family: inherit;
   }}
-  .view-tab:hover {{ background: rgba(255, 255, 255, 0.6); }}
-  .view-tab.active {{
+  .seg-item:hover {{ background: rgba(255, 255, 255, 0.75); }}
+  .seg-item.active {{
     background: #0f766e; color: white; font-weight: 600;
   }}
-  .view-tab.disabled {{
-    color: #94a3b8; cursor: not-allowed;
+  .seg-item.disabled {{ color: #94a3b8; cursor: not-allowed; }}
+  .seg-item.disabled:hover {{ background: transparent; }}
+  .seg-flag {{ font-size: 10px; opacity: 0.7; }}
+  .seg-count {{
+    font-size: 11px; opacity: 0.65; font-variant-numeric: tabular-nums;
+    padding: 1px 6px; border-radius: 999px; background: rgba(148, 163, 184, 0.22);
   }}
-  .view-tab.disabled:hover {{ background: transparent; }}
-  .tab-flag {{ font-size: 10px; opacity: 0.7; }}
-  .tab-note {{
+  .seg-item.active .seg-count {{
+    background: rgba(255, 255, 255, 0.22);
+  }}
+  .filter-note {{
     font-size: 11px; line-height: 1.55; color: #64748b;
-    margin: -8px 0 18px 0; padding: 7px 9px; max-width: 640px;
-    background: rgba(148, 163, 184, 0.13); border-radius: 7px;
+    padding: 7px 9px; max-width: 640px;
+    background: #eef2f7; border-radius: 7px;
   }}
 
   /* ===== Tables ===== */
@@ -624,7 +660,12 @@ HTML_PAGE = f"""<!DOCTYPE html>
       display: flex; flex-direction: column;
       padding: 16px 28px; box-sizing: border-box;
     }}
-    body.single-box .page-head {{ flex: 0 0 auto; margin-bottom: 10px; }}
+    /* 单盒详情页整页吃满视口、外面没有滚动，所以头部卡片必须**比总览页
+       更薄**：padding 从 14px 收到 8px、圆角描边还在，省下的 12px 直接
+       给下面那四栏——那四栏本来就是贴着视口底边算好高度的。 */
+    body.single-box .page-head {{
+      flex: 0 0 auto; margin-bottom: 10px; padding: 8px 14px;
+    }}
     body.single-box h1 {{ font-size: 22px; margin-bottom: 3px; }}
     body.single-box #content {{
       flex: 1 1 auto; min-height: 0;
@@ -1213,57 +1254,88 @@ function boxHref(boxId, domain, view) {{
   return '/?box=' + encodeURIComponent(boxId) + (q ? '&' + q : '');
 }}
 
-// ===== 视图 Tab =====
+// ===== 顶部筛选条 =====
 //
-// 「视图」以前也住在侧边栏里，和「范围」「盒子」并列。但它管的是**右边
-// 这块内容怎么摆**，摆在那条窄栏里等于让读者把视线拉到页面最左边、看完
-// 再拉回来才知道右边长什么样。视图是内容的属性，不是导航的属性——所以
-// 搬成内容区顶部的 Tab，紧贴着它所控制的那块画面。
+// 「视图」和「范围」现在住在同一块：**内容区顶部的筛选条**。
 //
-// 侧边栏现在只剩两段：**范围**（摆哪些）/ **盒子**（直达详情），两段都是
-// 导航，留在导航栏里说得通。
+// 它俩都是**下面这块画面**的属性——视图决定画面怎么摆，范围决定画面里
+// 有哪些盒子。摆在那条左侧窄栏里，读者得先把视线拉到页面最左边选完，
+// 再拉回来才知道右边长什么样。筛选是内容的属性，导航才是栏的属性。
 //
-// Tab 仍然是真 <a href>：两个轴都进 URL，切视图一样能分享、能刷新、
-// 能用前进后退。推不出环时「拓扑」渲染成真 <button disabled> 并写明原因
-// （不是一个没有 href 的 <a>：后者在无障碍树里退化成 role=generic，
-// 还会把 title 当成可访问名，读屏念出来的是那句原因而不是「拓扑」）。
-function renderViewTabs(scopeLayouts) {{
-  const {{ lay, canRadial }} = currentScopeLayout(scopeLayouts);
-  const views = [
-    [VIEW_GRID, '网格', '把范围内的盒子平铺，不画接线'],
-    [VIEW_TOPOLOGY, '拓扑', '按接线画成环：谁交给谁、谁汇进中心'],
-  ];
+// 侧边栏于是只剩一段：**盒子**（直达详情），那才是导航。
+//
+// 两个都进 URL（?view= & ?domain=），所以「WMS 的网格」和「WMS 的拓扑」
+// 都能拿到、都能分享、能用前进后退。两个是**独立**的轴：以前它们焊死
+// 在一起，点域顺手把整页换成环形，读者以为在筛选、实际在换页面。
+//
+// 推不出环时「拓扑」渲染成真 <button disabled> 并写明原因，不静默退回网格
+//（不是一个没有 href 的 <a>：后者在无障碍树里退化成 role=generic，
+//  还会把 title 当成可访问名，读屏念出来的是那句原因而不是「拓扑」）。
+const FILTER_VIEWS = [
+  [VIEW_GRID, '网格', '把范围内的盒子平铺，不画接线'],
+  [VIEW_TOPOLOGY, '拓扑', '按接线画成环：谁交给谁、谁汇进中心'],
+];
 
-  let html = '<div class="view-tabs" role="tablist">';
-  for (const [v, label, hint] of views) {{
+function renderFilters(data) {{
+  const {{ lay, canRadial }} = currentScopeLayout(data.scope_layouts);
+  const domains = data.domains || {{}};
+
+  let html = '<div class="filter-bar">';
+
+  // —— 视图 ——
+  html += '<div class="filter-group"><span class="filter-label">视图</span>'
+    + '<div class="seg" role="tablist">';
+  for (const [v, label, hint] of FILTER_VIEWS) {{
     const blocked = (v === VIEW_TOPOLOGY) && !canRadial;
     const active = (_view === v) && !blocked;
     if (blocked) {{
       const why = (lay && lay.reason) || '这个范围推不出环';
-      html += '<button type="button" class="view-tab disabled" disabled'
+      html += '<button type="button" class="seg-item disabled" disabled'
         + ' title="' + esc(why) + '">' + esc(label)
-        + '<span class="tab-flag">不可用</span></button>';
+        + '<span class="seg-flag">不可用</span></button>';
       continue;
     }}
-    html += '<a class="view-tab' + (active ? ' active' : '') + '"'
+    html += '<a class="seg-item' + (active ? ' active' : '') + '"'
       + ' role="tab" aria-selected="' + (active ? 'true' : 'false') + '"'
       + ' href="' + esc(overviewHref(v, _domainFilter)) + '"'
       + ' title="' + esc(hint) + '">' + esc(label) + '</a>';
   }}
   html += '</div>';
-
   // 选了拓扑但当前范围推不出环时，把原因摆在明面上，不静默退回网格。
   if (_view === VIEW_TOPOLOGY && !canRadial) {{
-    html += '<div class="tab-note">这个范围画不出拓扑：'
+    html += '<div class="filter-note">这个范围画不出拓扑：'
       + esc((lay && lay.reason) || '服务端没给出该范围的布局') + '</div>';
   }}
+  html += '</div>';
+
+  // —— 范围 ——
+  // 用 role="group" 而不是 role="tablist"：视图是「同一份数据的两种看法」
+  // 才是 tab，范围是**筛掉一部分数据**，语义上不是 tab。
+  html += '<div class="filter-group"><span class="filter-label">范围</span>'
+    + '<div class="seg" role="group" aria-label="范围">';
+  const scopes = [[ALL_DOMAINS, '全部域', null]];
+  for (const d of Object.keys(domains)) {{
+    scopes.push([d, domainLabel(d), (domains[d] || []).length]);
+  }}
+  for (const [key, label, count] of scopes) {{
+    const active = _domainFilter === key;
+    html += '<a class="seg-item' + (active ? ' active' : '') + '"'
+      + ' aria-current="' + (active ? 'true' : 'false') + '"'
+      + ' href="' + esc(overviewHref(_view, key)) + '">' + esc(label)
+      + (count == null ? ''
+        : '<span class="seg-count">' + count + '</span>')
+      + '</a>';
+  }}
+  html += '</div></div>';
+
+  html += '</div>';
   return html;
 }}
 
 // ===== 侧边栏 =====
 //
-// 两段：**范围**（摆哪些）/ **盒子**（直达详情）。都是导航。
-// 「视图」在内容区顶部的 Tab 里，见上面的 renderViewTabs。
+// 只剩一段：**盒子**（直达详情）。这是唯一真正的导航——
+// 「视图」和「范围」都搬进内容区顶部的筛选条了，见上面的 renderFilters。
 
 // 当前范围的服务端布局。推不出环时返回 null + 原因。
 function currentScopeLayout(scopeLayouts) {{
@@ -1273,32 +1345,9 @@ function currentScopeLayout(scopeLayouts) {{
 }}
 
 function renderSidebar(data, current) {{
-  const domains = data.domains || {{}};
-  const keys = Object.keys(domains);
-
-  let html = '';
-
-  // —— 范围 ——
-  html += '<div class="side-group">';
-  html += '<div class="side-group-label">范围</div><div class="side-list">';
-  const scopes = [[ALL_DOMAINS, '全部域', null]];
-  for (const d of keys) {{
-    scopes.push([d, domainLabel(d), (domains[d] || []).length]);
-  }}
-  for (const [key, label, count] of scopes) {{
-    const active = _domainFilter === key;
-    html += '<a class="side-item' + (active ? ' active' : '') + '"'
-      + ' href="' + esc(overviewHref(_view, key)) + '">'
-      + esc(label)
-      + (count == null ? ''
-        : '<span class="count">' + count + '</span>')
-      + '</a>';
-  }}
-  html += '</div></div>';
-
-  // —— 盒子 ——
   // 只列**当前范围内**的盒子：侧边栏是导航，但导航到一个网格里看不见的
   // 盒子会更迷惑——点进去、进详情、退回来，格子上还是空的。
+  let html = '';
   html += '<div class="side-group">';
   html += '<div class="side-group-label">盒子</div><div class="side-list">';
   const stats = (data.box_stats || []).filter(
@@ -1313,6 +1362,7 @@ function renderSidebar(data, current) {{
       : ({{ good: '#16a34a', warn: '#f59e0b', bad: '#dc2626' }}[healthOf(s)] || '#cbd5e1');
     const active = current === id;
     html += '<a class="side-item' + (active ? ' active' : '') + '"'
+      + ' data-box-id="' + esc(id) + '"'
       + ' href="' + esc(boxHref(id, _domainFilter, _view)) + '">'
       + '<span class="side-box-dot" style="background:' + color + '"></span>'
       + '<span class="side-box-name">' + esc(name)
@@ -1340,11 +1390,16 @@ function ensureSidebar(el, data, current) {{
     el.innerHTML = renderSidebar(data, current);
     el.dataset.sig = sig;
   }}
-  // active 态每轮**先清后加**：只 add 不 remove 的话，上一轮选中的那一项
+  // active 态每轮**先清后加**：只 add 不 remove 的话，上一轮打开的那只盒子
   // 会一直亮着——侧边栏里两项同时显示为当前选择。
-  const here = overviewHref(_view, _domainFilter);
+  //
+  // 这里比的是 **`data-box-id` 是不是当前打开的那只盒**，不是 href。
+  // 以前这里比 href == overviewHref(...)，那是范围项的判据；范围搬去
+  // 筛选条之后侧边栏只剩盒子链接，而盒子链接的 href 永远不等于总览链接，
+  // 于是这个循环每轮都把盒子的高亮**抹掉**——打开某只盒的详情页，
+  // 侧边栏里它却是不亮的，而 renderSidebar 刚给它加上的 active 被覆盖了。
   for (const a of el.querySelectorAll('.side-item')) {{
-    a.classList.toggle('active', (a.getAttribute('href') || '') === here);
+    a.classList.toggle('active', (a.getAttribute('data-box-id') || '') === current);
   }}
 }}
 
@@ -3096,9 +3151,9 @@ function render(data) {{
   // 作用域提到 if 外面：下面渲染网格之后还要用它决定要不要做 DOM 过滤。
   const {{ lay, canRadial }} = currentScopeLayout(data.scope_layouts);
   if (data.box_stats && data.box_stats.length > 0) {{
-    // 视图 Tab 贴在内容正上方——它控制的就是下面这块画面。
-    // 单盒详情页不画：那里没有「摆哪些盒子」的选择，Tab 是纯噪音。
-    html += renderViewTabs(data.scope_layouts);
+    // 顶部筛选条贴在内容正上方——它俩（视图 / 范围）控制的就是下面这块画面。
+    // 单盒详情页不画：那里没有「摆哪些盒子」「怎么摆」的选择，筛选条是纯噪音。
+    html += renderFilters(data);
     // **视图由读者选，范围由接线决定能不能画**——两个轴独立。
     // 以前这里是 `lay.layout === 'radial' ? 环形 : 平铺`：点域 chip 顺手
     // 换掉整页布局，读者以为在筛选、实际在换页面，URL 里也看不出视图变了。

@@ -982,13 +982,13 @@ class TestViewAndScopeAreTwoSeparateAxes:
     def test_a_scope_that_cannot_ring_disables_topology_instead_of_falling_back(self):
         """推不出环时必须禁用 + 写明原因，不许静默退回网格
 
-        行为那条由 TestViewTabsRenderAsTabs 里真跑 renderViewTabs 的守卫
+        行为那条由 TestHomepageIsQuieterAndTheViewIsATabBar 里真跑 renderFilters 的守卫
         守；这里只钉住「它必须是个真 disabled button，而不是没有 href 的
         <a>」这个形状——它在无障碍树里会退化成 role=generic，
         还会把 title 当成可访问名，读屏念出来的是那句原因而不是「拓扑」。
         """
         assert (
-            "'<button type=\"button\" class=\"view-tab disabled\" disabled'"
+            "'<button type=\"button\" class=\"seg-item disabled\" disabled'"
             in HTML_PAGE
         ), (
             "拓扑不可用时要渲染成真的 disabled button——"
@@ -1164,69 +1164,56 @@ class TestScopeAndViewLinksAreRealQueryUrls:
             if view == "topology":
                 assert q.get("view", [None])[0] == view, f"盒子链接丢了视图：{box!r}"
 
-    def test_the_sidebar_compares_hrefs_that_agree_with_each_other(self):
-        """侧边栏 active 高亮是拿 href 比 href 的——两边必须用同一个函数
+    def test_the_sidebar_highlights_the_open_box_by_id_not_by_href(self):
+        """侧边栏的 active 判据是「哪只盒开着」，不是「href 等于总览链接」
 
-        `ensureSidebar` 里 `a.getAttribute('href') === overviewHref(_view, _domainFilter)`。
-        两边一旦不是同一套拼法，高亮就永远对不上——而且症状是「点了没反应」
-        加「当前项不亮」，看着像筛选坏了，实际只是比较的两端长得不一样。
+        「视图」和「范围」都搬去筛选条之后，侧边栏只剩盒子链接，而盒子链接
+        的 href（`/?box=xxx`）永远不等于总览链接（`/` 或 `/?domain=WMS`）。
+        所以那个「href == overviewHref」的循环每轮都会把盒子的高亮**抹掉**——
+        打开某只盒的详情页，侧边栏里它却是不亮的，而 renderSidebar 刚给它
+        加上的 active 正好被这个循环覆盖。
         """
-        assert "overviewHref(_view, _domainFilter)" in HTML_PAGE, (
-            "侧边栏 active 的比较基准必须用 overviewHref —— "
-            "换成手拼字符串就会和链接对不上，症状是永远不高亮"
+        sidebar = _extract_js_function("renderSidebar")
+        assert "data-box-id" in sidebar, (
+            "盒子项要带上 data-box-id —— 没有它就没法按「哪只开着」判高亮"
         )
-        assert "_domainFilter === key" in HTML_PAGE, (
-            "范围项的 active 判据应当是「就是当前这个范围」——"
-            "拼出来的字符串比较会让空串范围永远不高亮"
+        ensure = _extract_js_function("ensureSidebar")
+        assert "overviewHref(_view, _domainFilter)" not in ensure, (
+            "ensureSidebar 不该再拿总览 href 去比侧边栏项——"
+            "侧边栏现在只有盒子链接，这个比较每轮都会抹掉高亮"
         )
-
-    def test_the_page_reads_the_empty_domain_back_as_empty(self):
-        """URL 读回一侧：domain= 必须读成空串，不能静默变成「全部域」
-
-        这一半和拼链接那一半是同一个 bug 的两头。链接侧已经用 has() 判
-        「参数在不在」；读回侧如果还用 `_params.get('domain') || ALL_DOMAINS`，
-        空串就是 falsy，会被当成没给这个参数——点「未归域」看见的是全部 8 只
-        盒，侧边栏高亮也回不到它身上，同样一条错都不报。
-
-        这里直接把 HTML_PAGE 里那段真源码掏出来，在 node 里喂三种 URL。
-        """
-        import shutil
-        import subprocess
-
-        node = shutil.which("node")
-        if not node:
-            pytest.skip("没有 node，跳过 URL 读回守卫")
-
-        start = HTML_PAGE.index("const _params = new URLSearchParams(")
-        end = HTML_PAGE.index(";", HTML_PAGE.index("_domainFilter", start)) + 1
-        reader = HTML_PAGE[start:end]
-
-        for search, expected in (
-            ("", "__all__"),          # 没给 domain
-            ("?domain=WMS", "WMS"),   # 真域
-            ("?domain=", ""),         # 未归域：空串是合法取值
-            ("?domain=WMS&view=topology", "WMS"),
-        ):
-            src = (
-                "const location = { search: " + json.dumps(search) + " };\n"
-                + _js_const("ALL_DOMAINS") + "\n"
-                + reader
-                + "\nconsole.log(JSON.stringify(_domainFilter));"
-            )
-            proc = subprocess.run(
-                [node, "-e", src], capture_output=True, text=True, timeout=30
-            )
-            assert proc.returncode == 0, f"node 跑 URL 读回失败：\n{proc.stderr}"
-            got = json.loads(proc.stdout.strip().splitlines()[-1])
-            assert got == expected, (
-                f"URL {search!r} 读回来是 {got!r}，应该是 {expected!r}。"
-                "用真值判断（||）会把未归域的空串当成「没给这个参数」，"
-                "静默退回全部域——看起来像筛选没生效。"
-            )
+        assert "data-box-id" in ensure, "高亮同步必须改按 data-box-id 判"
 
 
-def _run_view_tabs(scope_layouts: dict, view: str, domain: str) -> str:
-    """在 node 里真跑 renderViewTabs，返回它吐出的 HTML。
+
+def _js_const_array(name: str) -> str:
+    """抽 `const NAME = [...]` 这种字面量常量（多行也要）。"""
+    start = HTML_PAGE.index(f"const {name} = ")
+    i = HTML_PAGE.index("[", start)
+    depth = 0
+    for j in range(i, len(HTML_PAGE)):
+        if HTML_PAGE[j] == "[":
+            depth += 1
+        elif HTML_PAGE[j] == "]":
+            depth -= 1
+            if depth == 0:
+                return HTML_PAGE[start : j + 1]
+    raise AssertionError(f"{name} 的方括号没配平")
+
+
+# 两个范围的口径：一个真域（算得出环）、一个跨域（算不出）。
+# 「为什么跨域推不出环」是服务端 _layout_for 的推导结果，前端不另造判断。
+SCOPE_DOMAINS = {"": ["receipt_capture_box"], "WMS": ["wms_ops_box"]}
+
+# 同一份口径的两种范围：WMS 单域画得出环，__all__ 跨域画不出。
+SCOPE_LAYOUTS = {
+    "__all__": {"layout": "flat", "reason": "跨域范围推不出唯一汇点"},
+    "WMS": {"layout": "radial", "domain": "WMS", "ring": [], "reason": ""},
+}
+
+
+def _run_filters(scope_layouts: dict, view: str, domain: str) -> str:
+    """在 node 里真跑 renderFilters，返回它吐出的 HTML。
 
     用 HTML_PAGE 里的真源码，不抄一份到 Python——抄的那份和页面上的那份
     是两份代码，改了页面上的那份测试照样绿。
@@ -1236,38 +1223,32 @@ def _run_view_tabs(scope_layouts: dict, view: str, domain: str) -> str:
 
     node = shutil.which("node")
     if not node:
-        pytest.skip("没有 node，跳过视图 Tab 守卫")
+        pytest.skip("没有 node，跳过筛选条守卫")
 
+    data = {"scope_layouts": scope_layouts, "domains": SCOPE_DOMAINS}
     src = "\n".join(
         [
             _js_const("ALL_DOMAINS"),
             _js_const("VIEW_GRID"),
             _js_const("VIEW_TOPOLOGY"),
+            _js_const("UNASSIGNED_DOMAIN"),
+            _js_const_array("FILTER_VIEWS"),
+            _extract_js_function("domainLabel"),
             _extract_js_function("esc"),
             _extract_js_function("scopeQuery"),
             _extract_js_function("overviewHref"),
             _extract_js_function("currentScopeLayout"),
-            _extract_js_function("renderViewTabs"),
+            _extract_js_function("renderFilters"),
             "let _view = " + json.dumps(view) + ";",
             "let _domainFilter = " + json.dumps(domain) + ";",
-            "console.log(JSON.stringify(renderViewTabs("
-            + json.dumps(scope_layouts) + ")));",
+            "console.log(JSON.stringify(renderFilters(" + json.dumps(data) + ")));",
         ]
     )
     proc = subprocess.run(
         [node, "-e", src], capture_output=True, text=True, timeout=30
     )
-    assert proc.returncode == 0, f"node 跑 renderViewTabs 失败：\n{proc.stderr}"
+    assert proc.returncode == 0, f"node 跑 renderFilters 失败：\n{proc.stderr}"
     return json.loads(proc.stdout.strip().splitlines()[-1])
-
-
-# 跨域范围（__all__）推不出唯一汇点；WMS 单域算得出。
-# 「为什么 __all__ 推不出环」是服务端 _layout_for 的推导结果，不是前端决定的，
-# 所以这里照抄那份口径，别在前端另造一套判断。
-SCOPE_LAYOUTS = {
-    "__all__": {"layout": "flat", "reason": "跨域范围推不出唯一汇点"},
-    "WMS": {"layout": "radial", "domain": "WMS", "ring": [], "reason": ""},
-}
 
 
 class TestHomepageIsQuieterAndTheViewIsATabBar:
@@ -1279,7 +1260,7 @@ class TestHomepageIsQuieterAndTheViewIsATabBar:
         # （这是**正确**的 HTML），浏览器读到的才是下面这个裸 URL。
         # 拿转义后的串去断言 URL，等于在断言「转义规则对不对」，
         # 查不出「Tab 指向了哪个视图」——那才是这里要守的东西。
-        html = html_mod.unescape(_run_view_tabs(SCOPE_LAYOUTS, "grid", "WMS"))
+        html = html_mod.unescape(_run_filters(SCOPE_LAYOUTS, "grid", "WMS"))
 
         assert 'href="/?domain=WMS"' in html, (
             f"网格 Tab 应当指向 WMS 的网格：{html}"
@@ -1295,9 +1276,9 @@ class TestHomepageIsQuieterAndTheViewIsATabBar:
         不能是一个没有 href 的 <a>——它在无障碍树里退化成 role=generic，
         还会把 title 当成可访问名。
         """
-        html = _run_view_tabs(SCOPE_LAYOUTS, "grid", "__all__")
+        html = _run_filters(SCOPE_LAYOUTS, "grid", "__all__")
 
-        assert '<button type="button" class="view-tab disabled" disabled' in html, (
+        assert '<button type="button" class="seg-item disabled" disabled' in html, (
             f"跨域范围下拓扑该是禁用 button：{html}"
         )
         assert "view=topology" not in html, (
@@ -1307,25 +1288,53 @@ class TestHomepageIsQuieterAndTheViewIsATabBar:
             f"禁用时要写明原因：{html}"
         )
 
-    def test_the_active_tab_is_the_one_the_reader_picked(self):
-        """选中的那个 Tab 才带 active，且 aria-selected 同步"""
+    def test_each_filter_group_highlights_exactly_one_choice(self):
+        """每一组各有且仅有一个选中项——两组是两个独立的选择，不是同一个
+
+        断言「整页只有一个 active」是错的：视图组选一个、范围组也选一个，
+        那是两个轴各自的状态。判据得按组数。
+        """
         for view, scope in (("grid", "WMS"), ("topology", "WMS")):
-            html = _run_view_tabs(SCOPE_LAYOUTS, view, scope)
-            active = html.count('class="view-tab active"')
-            assert active == 1, f"view={view} 时 active 的 Tab 应恰好一个：{html}"
+            html = _run_filters(SCOPE_LAYOUTS, view, scope)
+            groups = html.split('class="filter-group"')[1:]
+            assert len(groups) == 2, (
+                f"应当有视图 / 范围两组，实际 {len(groups)} 组：{html}"
+            )
+            for g in groups:
+                n = g.count('class="seg-item active"')
+                assert n == 1, (
+                    f"view={view} scope={scope}：每组应恰好一个 active，"
+                    f"实际 {n} 个"
+                )
             assert 'aria-selected="true"' in html, f"aria-selected 没跟上：{html}"
             assert 'aria-selected="false"' in html, f"非选中项也该标 false：{html}"
+            # 范围组用 aria-current（它是筛选，不是 tab 切换）
+            assert 'aria-current="true"' in html, f"范围组的当前项没标：{html}"
 
     def test_the_sidebar_no_longer_owns_the_view_axis(self):
-        """「视图」搬走了：侧边栏不再碰视图，也不再算能不能画环"""
+        """「视图」「范围」都搬走了：侧边栏只剩盒子列表"""
         sidebar = _extract_js_function("renderSidebar")
         assert "VIEW_TOPOLOGY" not in sidebar, (
-            "侧边栏不该再渲染视图选项——它已经搬成内容区顶部的 Tab"
+            "侧边栏不该再渲染视图选项——它搬进内容区顶部的筛选条了"
         )
         assert "currentScopeLayout" not in sidebar, (
-            "侧边栏不该再算「这个范围能不能画环」——那是 Tab 的事"
+            "侧边栏不该再算「这个范围能不能画环」——那是筛选条的事"
         )
-        assert "renderViewTabs" in HTML_PAGE, "视图 Tab 的渲染函数不见了"
+        # 判据用「侧边栏只生成盒子链接」，而不是「侧边栏里没有 ALL_DOMAINS」：
+        # 盒子列表要按当前范围过滤，`_domainFilter === ALL_DOMAINS` 这个判断
+        # 是必需的，拿它当「范围搬走了」的证据会把正确代码判成违规。
+        assert "overviewHref(" not in sidebar, (
+            "侧边栏不该再生成总览链接——它现在只该有盒子详情链接"
+        )
+        assert "boxHref(" in sidebar, "盒子列表的链接得还在"
+        assert 'side-group-label">盒子' in sidebar, "盒子列表得还在"
+        # 只查「没有 overviewHref」有盲区：有人用**硬编码** href 加回一个
+        # 范围段也照样滑过去。结构判据没有盲区——侧边栏只准有一个分组。
+        assert sidebar.count('side-group"') == 1, (
+            "侧边栏只该剩「盒子」一个分组，实际 "
+            f"{sidebar.count('side-group')} 个——范围被搬回来了"
+        )
+        assert "renderFilters" in HTML_PAGE, "顶部筛选条的渲染函数不见了"
 
     def test_the_page_header_is_just_the_title(self):
         """副标题和 in-flight 计数都删了，标题改名
@@ -1382,4 +1391,49 @@ class TestHomepageIsQuieterAndTheViewIsATabBar:
         assert ".spec-row .k {" in HTML_PAGE
         assert "width: 104px" in HTML_PAGE, (
             "标签列的定宽被改掉了，8 张卡片的规格行就散开了"
+        )
+
+
+class TestTheThreeRegionsAreVisuallySeparate:
+    """头部 / 左侧导航 / 右侧内容要分得开，页面也不该有假的滚动条"""
+
+    def test_the_body_measures_its_min_height_including_padding(self):
+        """body 必须 box-sizing:border-box，否则永远多出 64px 可滚
+
+        `min-height:100vh` 量的是**内容盒**，padding:32px 加在它外面——
+        于是页面总高恒等于 100vh + 64px，内容再短也多出 64px 可滚，
+        右侧永远挂一条滚动条，而读者根本没东西可滚。
+
+        这条曾经只在单盒视图里设过（那里本来就要 border-box），总览页一直漏着。
+        """
+        body_rule = HTML_PAGE[
+            HTML_PAGE.index("body {") : HTML_PAGE.index("h1 {")
+        ]
+        assert "box-sizing: border-box" in body_rule, (
+            "body 少了 box-sizing:border-box —— min-height:100vh 量的是内容盒，"
+            "上下 padding 会加在外面，于是内容再短也多出 64px 可滚"
+        )
+
+    def test_the_three_regions_each_have_their_own_surface(self):
+        """三块各有各的表面，压在同一张底色上就分不出来"""
+        code = _strip_js_comments(HTML_PAGE)
+        # 头部 / 侧栏 / 内容区三处都要有白底 + 描边的卡片
+        assert code.count("background: #fff; border: 1px solid #dbe3ec") >= 3, (
+            "头部 / 侧栏 / 内容区应当各是一张白底描边的卡片，"
+            "否则三块全糊在同一张底色上"
+        )
+        for sel in (".page-head {", ".sidebar {", "body:not(.single-box) #content {"):
+            assert sel in code, f"{sel} 这块区域不见了"
+
+    def test_the_content_card_is_withheld_from_the_single_box_page(self):
+        """单盒详情页不能套内容卡片
+
+        它是 `height:100vh; overflow:hidden` 的整屏 flex 四栏，外面再套一层
+        卡片会凭空多吃 padding，矮屏上把四栏挤破。
+        """
+        assert "body:not(.single-box) #content {" in HTML_PAGE, (
+            "内容区卡片必须排除 single-box —— 那是整屏四栏，不该再被卡片包一层"
+        )
+        assert "body.single-box .page-head {" in HTML_PAGE, (
+            "单盒页的头部卡片要单独收薄（padding 8px），把高度让给四栏"
         )

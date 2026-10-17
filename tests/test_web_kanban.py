@@ -993,3 +993,210 @@ class TestViewAndScopeAreTwoSeparateAxes:
         assert "ALL_DOMAINS_SCOPE" in HTML_PAGE or "__all__" in HTML_PAGE, (
             "scope_layouts 没覆盖「全部域」这个范围"
         )
+
+
+def _extract_js_function(name: str) -> str:
+    """从 HTML_PAGE 里抠出某个 JS 函数的完整源码（按花括号配平）。
+
+    用抠出来的**真源码**去 node 里跑，不是抄一份逻辑到 Python 里再测——
+    抄的那份和页面上的那份是两份代码，改了页面上的那份，测试照样绿。
+    """
+    start = HTML_PAGE.index(f"\nfunction {name}(") + 1
+    i = HTML_PAGE.index("{", start)
+    depth = 0
+    for j in range(i, len(HTML_PAGE)):
+        if HTML_PAGE[j] == "{":
+            depth += 1
+        elif HTML_PAGE[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return HTML_PAGE[start : j + 1]
+    raise AssertionError(f"{name} 的花括号没配平")
+
+
+def _js_const(name: str) -> str:
+    for line in HTML_PAGE.splitlines():
+        s = line.strip()
+        if s.startswith(f"const {name} ="):
+            return s
+    raise AssertionError(f"HTML_PAGE 里找不到常量 {name}")
+
+
+def _run_scope_links(cases: list[tuple[str, str]]) -> dict[tuple[str, str], str]:
+    """在 node 里真跑 scopeQuery/overviewHref/boxHref，返回每个组合的 href。"""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("没有 node，跳过链接形状守卫")
+
+    src = "\n".join(
+        [
+            _js_const("ALL_DOMAINS"),
+            _js_const("VIEW_GRID"),
+            _extract_js_function("scopeQuery"),
+            _extract_js_function("overviewHref"),
+            _extract_js_function("boxHref"),
+            "const CASES = " + json.dumps(cases),
+            "const out = {};",
+            "for (const [v, d] of CASES) {",
+            "  out[JSON.stringify([v, d])] = "
+            "[overviewHref(v, d), boxHref('wms_ops_box', d, v)];",
+            "}",
+            "console.log(JSON.stringify(out));",
+        ]
+    )
+    proc = subprocess.run(
+        [node, "-e", src], capture_output=True, text=True, timeout=30
+    )
+    assert proc.returncode == 0, f"node 跑链接拼装失败：\n{proc.stderr}"
+    raw = json.loads(proc.stdout.strip().splitlines()[-1])
+    return {tuple(json.loads(k)): tuple(v) for k, v in raw.items()}
+
+
+class TestScopeAndViewLinksAreRealQueryUrls:
+    """侧边栏每一条 href 都必须是一条**真的**查询 URL
+
+    这里守的是一个已经咬过人的坑：`overviewHref` 曾写成 `'/' + v + d`，
+    两段各自以 `&` 开头、谁也不写 `?`，拼出来是 `/&domain=WMS`——不是
+    查询串，是一条路径。浏览器跳过去，服务端返 404，nginx 兜底再把首页
+    原样吐回来。于是点「WMS」看着毫无反应：页面纹丝不动、高亮还留在
+    「全部域」、盒子一只没少，**而且一条错都不报**。
+
+    之前 7 条轴相关的守卫全绿也照样没抓到：它们查的是源码里有没有
+    `_params.get('view')` 这类字符串，没有一条断言过 href 的形状。
+
+    所以这里不用文本匹配，直接把真源码扔进 node 跑一遍，断言产出**能被
+    解析回原来那两个轴**。
+    """
+
+    CASES = [
+        (view, domain)
+        for view in ("grid", "topology")
+        for domain in ("__all__", "WMS", "")
+    ]
+
+    def test_a_scope_link_is_a_query_url_not_a_path(self):
+        """href 要么正好是 '/'，要么是 '/?...'——绝不能是 '/&...'"""
+        for (view, domain), (overview, _box) in _run_scope_links(self.CASES).items():
+            assert overview == "/" or overview.startswith("/?"), (
+                f"范围/视图链接拼出了路径而不是查询串：view={view!r} "
+                f"domain={domain!r} -> {overview!r}。"
+                "少一个 '?' 的话浏览器会把它当未知路由跳走，"
+                "服务端 404、兜底再把首页吐回来——点上去看着毫无反应。"
+            )
+
+    def test_the_link_round_trips_both_axes_back(self):
+        """拼出来的查询串解析回来，必须还是当初选的那两个轴
+
+        形状对了还不够：查询串里少写一个轴，页面看着也是「能点」，
+        但回到总览时另一个轴已经悄悄丢了。
+        """
+        for (view, domain), (overview, _box) in _run_scope_links(self.CASES).items():
+            from urllib.parse import parse_qs, urlsplit
+
+            parts = urlsplit(overview)
+            # keep_blank_values：domain=（未归域）取到的是空串，
+            # 默认的 parse_qs 会把空值整个丢掉，测试就会自己骗自己。
+            q = parse_qs(parts.query, keep_blank_values=True)
+
+            assert parts.path == "/", f"总览链接的路径不该变：{overview!r}"
+            assert q.get("domain", ["__all__"])[0] == domain, (
+                f"范围没能从链接里读回来：{overview!r}"
+            )
+            if view == "grid":
+                assert "view" not in q, f"网格是默认值，不该写进 URL：{overview!r}"
+            else:
+                assert q.get("view", [None])[0] == view, (
+                    f"视图没能从链接里读回来：{overview!r}"
+                )
+
+    def test_the_unassigned_domain_survives_the_round_trip(self):
+        """未归域（空串）必须显式写出 domain=
+
+        URL 里「domain=」和「不写这个参数」长得一样，于是未归域和全部域
+        会生成同一个 href，侧边栏里两项一起亮成 active——看着像同时选中了
+        两个范围。
+        """
+        hrefs = _run_scope_links(self.CASES)
+        unassigned = hrefs[("grid", "")][0]
+        everything = hrefs[("grid", "__all__")][0]
+
+        assert "domain=" in unassigned, f"未归域没显式写进 URL：{unassigned!r}"
+        assert unassigned != everything, "未归域和全部域生成了同一个 href"
+
+    def test_a_box_link_keeps_the_axes_and_has_exactly_one_question_mark(self):
+        """盒子链接要保住两个轴，且只能有一个 '?'"""
+        from urllib.parse import parse_qs, urlsplit
+
+        for (view, domain), (_overview, box) in _run_scope_links(self.CASES).items():
+            assert box.count("?") == 1, f"盒子链接里有多个 '?'：{box!r}"
+
+            parts = urlsplit(box)
+            q = parse_qs(parts.query, keep_blank_values=True)
+            assert parts.path == "/", f"盒子链接的路径不该变：{box!r}"
+            assert q.get("box", [None])[0] == "wms_ops_box", f"盒子 id 丢了：{box!r}"
+            assert q.get("domain", ["__all__"])[0] == domain, f"盒子链接丢了范围：{box!r}"
+            if view == "topology":
+                assert q.get("view", [None])[0] == view, f"盒子链接丢了视图：{box!r}"
+
+    def test_the_sidebar_compares_hrefs_that_agree_with_each_other(self):
+        """侧边栏 active 高亮是拿 href 比 href 的——两边必须用同一个函数
+
+        `ensureSidebar` 里 `a.getAttribute('href') === overviewHref(_view, _domainFilter)`。
+        两边一旦不是同一套拼法，高亮就永远对不上——而且症状是「点了没反应」
+        加「当前项不亮」，看着像筛选坏了，实际只是比较的两端长得不一样。
+        """
+        assert "overviewHref(_view, _domainFilter)" in HTML_PAGE, (
+            "侧边栏 active 的比较基准必须用 overviewHref —— "
+            "换成手拼字符串就会和链接对不上，症状是永远不高亮"
+        )
+        assert "_domainFilter === key" in HTML_PAGE, (
+            "范围项的 active 判据应当是「就是当前这个范围」——"
+            "拼出来的字符串比较会让空串范围永远不高亮"
+        )
+
+    def test_the_page_reads_the_empty_domain_back_as_empty(self):
+        """URL 读回一侧：domain= 必须读成空串，不能静默变成「全部域」
+
+        这一半和拼链接那一半是同一个 bug 的两头。链接侧已经用 has() 判
+        「参数在不在」；读回侧如果还用 `_params.get('domain') || ALL_DOMAINS`，
+        空串就是 falsy，会被当成没给这个参数——点「未归域」看见的是全部 8 只
+        盒，侧边栏高亮也回不到它身上，同样一条错都不报。
+
+        这里直接把 HTML_PAGE 里那段真源码掏出来，在 node 里喂三种 URL。
+        """
+        import shutil
+        import subprocess
+
+        node = shutil.which("node")
+        if not node:
+            pytest.skip("没有 node，跳过 URL 读回守卫")
+
+        start = HTML_PAGE.index("const _params = new URLSearchParams(")
+        end = HTML_PAGE.index(";", HTML_PAGE.index("_domainFilter", start)) + 1
+        reader = HTML_PAGE[start:end]
+
+        for search, expected in (
+            ("", "__all__"),          # 没给 domain
+            ("?domain=WMS", "WMS"),   # 真域
+            ("?domain=", ""),         # 未归域：空串是合法取值
+            ("?domain=WMS&view=topology", "WMS"),
+        ):
+            src = (
+                "const location = { search: " + json.dumps(search) + " };\n"
+                + _js_const("ALL_DOMAINS") + "\n"
+                + reader
+                + "\nconsole.log(JSON.stringify(_domainFilter));"
+            )
+            proc = subprocess.run(
+                [node, "-e", src], capture_output=True, text=True, timeout=30
+            )
+            assert proc.returncode == 0, f"node 跑 URL 读回失败：\n{proc.stderr}"
+            got = json.loads(proc.stdout.strip().splitlines()[-1])
+            assert got == expected, (
+                f"URL {search!r} 读回来是 {got!r}，应该是 {expected!r}。"
+                "用真值判断（||）会把未归域的空串当成「没给这个参数」，"
+                "静默退回全部域——看起来像筛选没生效。"
+            )

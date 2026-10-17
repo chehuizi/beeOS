@@ -1112,7 +1112,17 @@ function domainLabel(d) {{
 // 一旦盒子变得可点（点进去就是详情页），这就从「小别扭」变成
 // 「路找不回来了」：进详情、退回来，域没了。
 const _params = new URLSearchParams(location.search);
-let _domainFilter = _params.get('domain') || ALL_DOMAINS;
+// 判的是**参数在不在**，不是取到的值真不真。
+//
+// 以前写的是 `_params.get('domain') || ALL_DOMAINS`：未归域的 domain 是
+// 空串，链接里写成 `domain=`，读回来是 `''`——而 `''` 是 falsy，于是被
+// 当成「没写这个参数」，静默退回全部域。点「未归域」看见的是全部 8 只盒，
+// 侧边栏高亮也回不到它身上，同样一条错都不报。
+//
+// 空串是一个**合法的取值**，不能和「没给」混为一谈，所以只能用 has()。
+let _domainFilter = _params.has('domain')
+  ? _params.get('domain')
+  : ALL_DOMAINS;
 
 // 视图是**独立的第二个轴**，也进 URL。以前根本没有这个概念：
 // 点域 chip 顺手就把整页换成环形，读者以为在筛选，实际在换页面，
@@ -1123,25 +1133,49 @@ const VIEW_TOPOLOGY = 'topology';
 let _view = _params.get('view') === VIEW_TOPOLOGY
   ? VIEW_TOPOLOGY : VIEW_GRID;
 
-// 组装总览链接：范围和视图**都**带上。
+// ===== 链接拼装 =====
+//
+// 三个 href 共用同一段查询串逻辑，且**查询串自己带上前导 '?'**。
+//
+// 这里踩过一次很贵的坑：早先写成 `return '/' + v + d`，两段各自以 '&'
+// 开头，谁也不负责写 '?'，拼出来是 `/&domain=WMS`。那不是查询串，是一条
+// **路径**：浏览器跳过去，服务端当未知路由返 404，nginx 的兜底又把首页原样
+// 吐回来。于是点「WMS」看着毫无反应——页面纹丝不动、高亮还留在「全部域」、
+// 盒子一只没少，**而且不报任何错**。
+//
+// 更巧的是「全部域 + 网格」时两段都空，拼出来正好是能用的 `/`：只有默认
+// 页是好的，第一眼看不出坏了。而且盒子的链接是好的，因为 boxHref 自己先写了
+// `/?box=`——所以「能点的进得去、导航点不动」，像功能分模块坏了。
+//
+// 所以拆成 scopeQuery()（只拼查询串，形状最容易验）+ 两个 href 函数，
+// 由 tests 里 TestScopeAndViewLinksAreRealQueryUrls 用 node 真跑一遍。
 //
 // 未归域（domain 是空串）必须**显式**写出 `domain=`：URL 里空域名跟
 // 「不写这个参数」长得一模一样，于是未归域和全部域会生成同一个 href，
 // 侧边栏里两项一起亮成 active——看着像「同时选中了两个范围」。
 // 所以这里判的是「是不是全部域这个哨兵」，而不是「域名是不是空」。
+function scopeQuery(view, domain) {{
+  const parts = [];
+  if (domain !== ALL_DOMAINS) {{
+    parts.push('domain=' + encodeURIComponent(domain));
+  }}
+  if (view && view !== VIEW_GRID) {{
+    parts.push('view=' + encodeURIComponent(view));
+  }}
+  return parts.join('&');
+}}
+
+// 总览链接：范围和视图**都**带上。
 function overviewHref(view, domain) {{
-  const v = (view && view !== VIEW_GRID)
-    ? '&view=' + encodeURIComponent(view) : '';
-  const d = (domain !== ALL_DOMAINS)
-    ? '&domain=' + encodeURIComponent(domain) : '';
-  return '/' + v + d;
+  const q = scopeQuery(view, domain);
+  return q ? '/?' + q : '/';
 }}
 
 // 盒子的详情页链接。**带上当前域和视图**：点进去、再退回总览时，
 // 原来的「域 + 视图」还在。
 function boxHref(boxId, domain, view) {{
-  return '/?box=' + encodeURIComponent(boxId)
-    + overviewHref(view, domain).slice(1);
+  const q = scopeQuery(view, domain);
+  return '/?box=' + encodeURIComponent(boxId) + (q ? '&' + q : '');
 }}
 
 // ===== 侧边栏 =====

@@ -35,6 +35,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from kanban.trigger import (
+    ALL_DOMAINS_SCOPE,
     BOX_REGISTRY,
     TriggerError,
     box_context,
@@ -42,11 +43,11 @@ from kanban.trigger import (
     box_manifest,
     box_maturity,
     box_meta,
-    domain_layout,
     list_task_entries,
     order_boxes_by_flow,
     registered_box_ids,
     resolve_text_intake,
+    scope_layout,
     structure_business_text_with_llm,
     trigger_task,
 )
@@ -176,8 +177,13 @@ def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[s
         "boxes": boxes,
         "box_stats": box_stats,
         "domains": box_domains(all_boxes),
-        "domain_layouts": {
-            d: domain_layout(d) for d in box_domains(all_boxes)
+        # 键是**范围**，不是域：除了每个真域，还带一条「全部域」。
+        # 以前只有真域，所以「全部域」在布局表里查不到，前端只能据此
+        # 自行退回平铺——视图于是被域隐式决定了。视图/范围两个轴拆开后，
+        # 「全部域」也得有一份诚实的布局：它推不出环，原因是跨域。
+        "scope_layouts": {
+            d: scope_layout(d)
+            for d in [ALL_DOMAINS_SCOPE, *box_domains(all_boxes)]
         },
         "status_counts": status_counts,
         "acceptance_counts": acc_counts,
@@ -224,31 +230,67 @@ HTML_PAGE = f"""<!DOCTYPE html>
   }}
   .refresh-tag {{ color: #94a3b8; font-size: 11px; }}
 
-  /* ===== Filter chips ===== */
-  .filter-bar {{ }}
-  .filter-bar a {{
-    display: inline-block; padding: 6px 14px; margin-right: 8px;
-    background: white; border: 1px solid #e2e8f0; border-radius: 18px;
-    text-decoration: none; color: #475569; font-size: 13px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    transition: all 0.2s;
+  /* ===== 侧边栏 =====
+     「视图」和「范围」是两个独立的轴：视图决定盒子怎么摆（网格/拓扑），
+     范围决定摆哪些盒子（全部域/某个域）。以前这两件事焊在一起——
+     点域 chip 顺手把整页换成环形，读者以为在筛选，实际在换页面，
+     而 URL 里只有 domain 没有 view，切换这件事根本看不见。
+     拆开之后，「WMS 的网格」和「WMS 的拓扑」才都能拿到。 */
+  .page-body {{ display: flex; gap: 28px; align-items: flex-start; }}
+  .sidebar {{
+    flex: 0 0 216px; position: sticky; top: 32px;
+    display: flex; flex-direction: column; gap: 18px;
   }}
-  .filter-bar a:hover {{ transform: translateY(-1px); box-shadow: 0 4px 8px rgba(0,0,0,0.1); }}
-  .filter-bar a.active {{
-    background: linear-gradient(135deg, #2563eb, #1d4ed8);
-    color: white; border-color: transparent;
+  .side-group-label {{
+    font-size: 10px; color: #94a3b8; letter-spacing: 0.1em;
+    text-transform: uppercase; margin-bottom: 6px;
+  }}
+  .side-list {{ display: flex; flex-direction: column; gap: 2px; }}
+  .side-item {{
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 9px; border-radius: 7px;
+    color: #475569; font-size: 13px; text-decoration: none;
+  }}
+  .side-item:hover {{ background: rgba(148, 163, 184, 0.16); }}
+  .side-item.active {{
+    background: #0f766e; color: white; font-weight: 600;
+  }}
+  .side-item .count {{
+    margin-left: auto; font-size: 11px; opacity: 0.65;
+    font-variant-numeric: tabular-nums;
+  }}
+  .side-item.disabled {{
+    color: #94a3b8; cursor: not-allowed; opacity: 0.72;
+  }}
+  .side-item.disabled:hover {{ background: rgba(148, 163, 184, 0.08); }}
+  .side-note {{
+    font-size: 11px; line-height: 1.55; color: #64748b;
+    margin-top: 7px; padding: 7px 9px;
+    background: rgba(148, 163, 184, 0.13); border-radius: 7px;
+  }}
+  .side-box-dot {{
+    width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
+  }}
+  .side-box-name {{
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }}
+  .side-box-id {{
+    display: block; font-size: 10px; color: #94a3b8;
+    font-weight: 400; letter-spacing: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }}
+  .side-item.active .side-box-id {{ color: rgba(255, 255, 255, 0.8); }}
+  /* 窄屏侧边栏让位给内容。断点取 760：216px 侧边栏 + 内容在 800px 上
+     还能看，再窄就挤了，堆叠比横向压缩清楚。 */
+  @media (max-width: 760px) {{
+    .page-body {{ flex-direction: column; }}
+    .sidebar {{ position: static; flex: 1 1 auto; width: 100%; }}
   }}
 
-  /* ===== Domain 视图切换 =====
-     域成员从各盒 placement.domain 派生（服务端 box_domains），
-     这里只渲染菜单，不自己认哪只盒子属于哪个域。
-     空串 = 盒子没声明域，单独归「未归域」，不塞进任何真域。 */
-  .domain-bar {{ margin-top: 8px; }}
-  .domain-bar .domain-label {{
-    font-size: 11px; color: #94a3b8; margin-right: 8px;
-    letter-spacing: 0.06em; text-transform: uppercase;
-  }}
-  .domain-bar a.active {{ background: linear-gradient(135deg, #0f766e, #115e59); }}
+  /* 顶栏的 filter-bar / domain-bar 已经退役（连同 renderFilters、
+     renderDomainBar、ensureDomainBar）。它们把 11 个 chip 挤成两行、
+     随时换行，是整页最扎眼的东西而它纯粹是导航；而且域 chip 顺手把
+     视图也换了。导航现在住在侧边栏的「盒子」段，范围是独立的「范围」段。 */
 
   /* ===== 骨架盒 =====
      「未实现」和「实现了但不达标」必须看起来不一样。
@@ -1032,12 +1074,13 @@ HTML_PAGE = f"""<!DOCTYPE html>
     </div>
     <div class="head-right">
       <span class="refresh-tag" id="last-refresh">never</span>
-      <div class="filter-bar" id="filter-bar"></div>
-      <div class="filter-bar domain-bar" id="domain-bar"></div>
     </div>
   </div>
 
-  <div id="content">Loading...</div>
+  <div class="page-body">
+    <aside class="sidebar" id="sidebar"></aside>
+    <div id="content">Loading...</div>
+  </div>
 
 <script>
 const API = '/api/data';
@@ -1047,19 +1090,6 @@ async function fetchData() {{
   const url = box ? `${{API}}?box=${{encodeURIComponent(box)}}` : API;
   const resp = await fetch(url);
   return await resp.json();
-}}
-
-function renderFilters(boxes, current) {{
-  // 「全部域」这一项要回到**域视图**，不是回平铺：域视图以前只活在
-  // 内存里，导航链接理直气壮地把它丢了。盒子可点之后这条路走得很频繁。
-  const back = (_domainFilter && _domainFilter !== ALL_DOMAINS)
-    ? '/?domain=' + encodeURIComponent(_domainFilter) : '/';
-  let html = `<a href="${{back}}" class="${{current ? '' : 'active'}}">All beeBoxes</a>`;
-  for (const b of boxes) {{
-    const active = current === b ? 'active' : '';
-    html += `<a href="${{boxHref(b)}}" class="${{active}}">${{b}}</a>`;
-  }}
-  return html;
 }}
 
 // ===== Domain 视图切换 =====
@@ -1078,62 +1108,167 @@ function domainLabel(d) {{
   return d === '' ? UNASSIGNED_DOMAIN : d;
 }}
 
-// 当前域从 URL 读。域视图以前只活在内存里，刷新一下就没了——
+// 当前范围（域）从 URL 读。以前只活在内存里，刷新一下就没了——
 // 一旦盒子变得可点（点进去就是详情页），这就从「小别扭」变成
 // 「路找不回来了」：进详情、退回来，域没了。
 const _params = new URLSearchParams(location.search);
 let _domainFilter = _params.get('domain') || ALL_DOMAINS;
 
-// 盒子的详情页链接。**带上当前域**：点进去、再退回总览时，
-// 域视图还在。
-function boxHref(boxId, domain) {{
-  const d = (domain && domain !== ALL_DOMAINS)
+// 视图是**独立的第二个轴**，也进 URL。以前根本没有这个概念：
+// 点域 chip 顺手就把整页换成环形，读者以为在筛选，实际在换页面，
+// 而地址栏里只有 domain 没有 view —— 换了视图根本看不出来。
+// 两个轴都进 URL，「WMS 的网格」和「WMS 的拓扑」才都能拿到、都能分享。
+const VIEW_GRID = 'grid';
+const VIEW_TOPOLOGY = 'topology';
+let _view = _params.get('view') === VIEW_TOPOLOGY
+  ? VIEW_TOPOLOGY : VIEW_GRID;
+
+// 组装总览链接：范围和视图**都**带上。
+//
+// 未归域（domain 是空串）必须**显式**写出 `domain=`：URL 里空域名跟
+// 「不写这个参数」长得一模一样，于是未归域和全部域会生成同一个 href，
+// 侧边栏里两项一起亮成 active——看着像「同时选中了两个范围」。
+// 所以这里判的是「是不是全部域这个哨兵」，而不是「域名是不是空」。
+function overviewHref(view, domain) {{
+  const v = (view && view !== VIEW_GRID)
+    ? '&view=' + encodeURIComponent(view) : '';
+  const d = (domain !== ALL_DOMAINS)
     ? '&domain=' + encodeURIComponent(domain) : '';
-  return '/?box=' + encodeURIComponent(boxId) + d;
+  return '/' + v + d;
 }}
 
-function renderDomainBar(domains) {{
-  const keys = Object.keys(domains || {{}});
-  if (keys.length <= 1) return '';   // 只有一个域，切换没意义
-  let html = `<span class="domain-label">DOMAIN</span>`;
-  html += `<a href="#" class="${{_domainFilter === ALL_DOMAINS ? 'active' : ''}}"
-             data-domain="${{ALL_DOMAINS}}">全部域</a>`;
-  for (const d of keys) {{
-    const active = _domainFilter === d ? 'active' : '';
-    html += `<a href="#" class="${{active}}" data-domain="${{esc(d)}}"
-             >${{esc(domainLabel(d))}}<span class="bid"> (${{domains[d].length}})</span></a>`;
+// 盒子的详情页链接。**带上当前域和视图**：点进去、再退回总览时，
+// 原来的「域 + 视图」还在。
+function boxHref(boxId, domain, view) {{
+  return '/?box=' + encodeURIComponent(boxId)
+    + overviewHref(view, domain).slice(1);
+}}
+
+// ===== 侧边栏 =====
+//
+// 三段：**视图**（怎么摆）/ **范围**（摆哪些）/ **盒子**（直达详情）。
+//
+// 以前顶部是 11 个 chip 挤成两行、随时换行，是整页最扎眼的东西，
+// 而它纯粹是导航。现在收进左侧一栏，顶栏空了。
+//
+// 视图和范围是**两个独立的轴**。以前它们焊在一起：点域 chip 顺手把整页
+// 换成环形，读者以为在筛选，实际在换页面。现在选网格就是网格，
+// 选拓扑就是拓扑——能不能出环由服务端推导说了算，推不出来就把
+// 「拓扑」这一项禁用**并写明为什么**，而不是悄悄退回网格。
+
+// 当前范围的服务端布局。推不出环时返回 null + 原因。
+function currentScopeLayout(scopeLayouts) {{
+  const all = scopeLayouts || {{}};
+  const lay = all[_domainFilter] || null;
+  return {{ lay: lay, canRadial: !!(lay && lay.layout === 'radial') }};
+}}
+
+function renderSidebar(data, current) {{
+  const domains = data.domains || {{}};
+  const keys = Object.keys(domains);
+  const {{ lay, canRadial }} = currentScopeLayout(data.scope_layouts);
+
+  let html = '';
+
+  // —— 视图 ——
+  html += '<div class="side-group">';
+  html += '<div class="side-group-label">视图</div><div class="side-list">';
+  const views = [
+    [VIEW_GRID, '网格', '把范围内的盒子平铺，不画接线'],
+    [VIEW_TOPOLOGY, '拓扑', '按接线画成环：谁交给谁、谁汇进中心'],
+  ];
+  for (const [v, label, hint] of views) {{
+    const blocked = (v === VIEW_TOPOLOGY) && !canRadial;
+    const active = (_view === v) && !blocked;
+    if (blocked) {{
+      // 用真的 <button disabled>，不是一个没有 href 的 <a>：
+      // 后者在无障碍树里退化成 role=generic，还会把 title 当成可访问名，
+      // 读屏念出来的是那句原因而不是「拓扑」。禁用就该长成禁用的样子。
+      const why = (lay && lay.reason) || '这个范围推不出环';
+      html += '<button type="button" class="side-item disabled" disabled'
+        + ' title="' + esc(why) + '">' + esc(label)
+        + '<span class="count">不可用</span></button>';
+      continue;
+    }}
+    html += '<a class="side-item' + (active ? ' active' : '') + '"'
+      + ' href="' + esc(overviewHref(v, _domainFilter)) + '"'
+      + ' title="' + esc(hint) + '">' + esc(label) + '</a>';
   }}
+  html += '</div>';
+  // 选了拓扑但当前范围推不出环时，把原因摆在明面上
+  if (_view === VIEW_TOPOLOGY && !canRadial) {{
+    html += '<div class="side-note">这个范围画不出拓扑：'
+      + esc((lay && lay.reason) || '服务端没给出该范围的布局') + '</div>';
+  }}
+  html += '</div>';
+
+  // —— 范围 ——
+  html += '<div class="side-group">';
+  html += '<div class="side-group-label">范围</div><div class="side-list">';
+  const scopes = [[ALL_DOMAINS, '全部域', null]];
+  for (const d of keys) {{
+    scopes.push([d, domainLabel(d), (domains[d] || []).length]);
+  }}
+  for (const [key, label, count] of scopes) {{
+    const active = _domainFilter === key;
+    html += '<a class="side-item' + (active ? ' active' : '') + '"'
+      + ' href="' + esc(overviewHref(_view, key)) + '">'
+      + esc(label)
+      + (count == null ? ''
+        : '<span class="count">' + count + '</span>')
+      + '</a>';
+  }}
+  html += '</div></div>';
+
+  // —— 盒子 ——
+  // 只列**当前范围内**的盒子：侧边栏是导航，但导航到一个网格里看不见的
+  // 盒子会更迷惑——点进去、进详情、退回来，格子上还是空的。
+  html += '<div class="side-group">';
+  html += '<div class="side-group-label">盒子</div><div class="side-list">';
+  const stats = (data.box_stats || []).filter(
+    (s) => _domainFilter === ALL_DOMAINS
+      || ((s.meta || {{}}).domain || '') === _domainFilter);
+  for (const s of stats) {{
+    const id = s.box_id;
+    const meta = s.meta || {{}};
+    const name = meta.display_name || id;
+    const isSkeleton = s.maturity === 'skeleton';
+    const color = isSkeleton ? '#cbd5e1'
+      : ({{ good: '#16a34a', warn: '#f59e0b', bad: '#dc2626' }}[healthOf(s)] || '#cbd5e1');
+    const active = current === id;
+    html += '<a class="side-item' + (active ? ' active' : '') + '"'
+      + ' href="' + esc(boxHref(id, _domainFilter, _view)) + '">'
+      + '<span class="side-box-dot" style="background:' + color + '"></span>'
+      + '<span class="side-box-name">' + esc(name)
+      + '<span class="side-box-id">' + esc(id) + '</span></span>'
+      + '</a>';
+  }}
+  html += '</div></div>';
+
   return html;
 }}
 
-// **域菜单不能每 2 秒重建一次**。
+// **侧边栏不能每 2 秒重建一次**。
 //
-// 看板每 2s 拉一次数据重绘，重绘时如果把域菜单也 innerHTML 重建，
-// chip 上的 click 监听器就跟着一起没了——于是每一次点击都落在
-// 「刚被换掉、还没绑上监听」的那一瞬。真人也点不准，而且它不会报错：
-// 看板上域菜单看着好好的，就是按下去没反应。
-//
-// 所以：**域集合没变就不重建**，只同步 active 态。
-function ensureDomainBar(dbar, domains) {{
-  const sig = Object.keys(domains || {{}}).sort().join('|');
-  if (dbar.dataset.sig !== sig) {{
-    dbar.innerHTML = renderDomainBar(domains);
-    dbar.dataset.sig = sig;
-    for (const a of dbar.querySelectorAll('a')) {{
-      a.addEventListener('click', (ev) => {{
-        ev.preventDefault();
-        _domainFilter = a.getAttribute('data-domain');
-        syncDomainBar(dbar);
-        applyDomainFilter();
-      }});
-    }}
+// 看板每 2s 拉一次数据重绘，重绘时如果连侧边栏一起 innerHTML 重建，
+// 链接上的 click 监听器就跟着没了——于是每次点击都落在「刚被换掉、
+// 还没绑上监听」的那一瞬。真人也点不准，而且它不会报错：看着好好的，
+// 就是按下去没反应。所以**结构没变就不重建**，只同步 active 态。
+function ensureSidebar(el, data, current) {{
+  const sig = [
+    (data.boxes || []).join(','),
+    Object.keys(data.domains || {{}}).sort().join('|'),
+    JSON.stringify((data.scope_layouts || {{}})[_domainFilter] || null),
+  ].join('#');
+  if (el.dataset.sig !== sig) {{
+    el.innerHTML = renderSidebar(data, current);
+    el.dataset.sig = sig;
   }}
-  syncDomainBar(dbar);
-}}
-
-function syncDomainBar(dbar) {{
-  for (const a of dbar.querySelectorAll('a')) {{
-    a.classList.toggle('active', a.getAttribute('data-domain') === _domainFilter);
+  // active 态每轮**先清后加**：只 add 不 remove 的话，上一轮选中的那一项
+  // 会一直亮着——侧边栏里两项同时显示为当前选择。
+  const here = overviewHref(_view, _domainFilter);
+  for (const a of el.querySelectorAll('.side-item')) {{
+    a.classList.toggle('active', (a.getAttribute('href') || '') === here);
   }}
 }}
 
@@ -1454,7 +1589,7 @@ function renderCube(box) {{
   // 键盘 Tab 过去全都自动可用。用 click 模拟出来的「可点」卡片
   // 一旦被人用键盘试一次就露馅——它压根不是链接。
   const domain = (box.meta || {{}}).domain || '';
-  return `<a class="box-card" href="${{boxHref(box.box_id, _domainFilter)}}"
+  return `<a class="box-card" href="${{boxHref(box.box_id, _domainFilter, _view)}}"
      data-box-domain="${{esc(domain)}}">
     ${{cubeHtml(box)}}
   </a>`;
@@ -1645,7 +1780,7 @@ function renderRadial(layout, stats) {{
     // 环上和圆心那张都是真链接：环形视图要回答「谁接谁」，
     // 想点开某一只看细节时不该先得切回平铺。
     return '<a class="' + cls + '" data-box="' + esc(id) + '"'
-      + ' href="' + esc(boxHref(id, _domainFilter)) + '"'
+      + ' href="' + esc(boxHref(id, _domainFilter, _view)) + '"'
       + ' style="left:' + (cx + p.x - RADIAL_CARD_W / 2).toFixed(1) + 'px;'
       + 'top:' + (cx + p.y - RADIAL_CARD_H / 2).toFixed(1) + 'px">'
       + compactCubeHtml(s)
@@ -2836,9 +2971,8 @@ function render(data) {{
     'single-box', isSingle && data.box_stats && data.box_stats.length > 0
   );
 
-  document.getElementById('filter-bar').innerHTML = renderFilters(data.boxes, box);
-  const dbar = document.getElementById('domain-bar');
-  if (dbar) ensureDomainBar(dbar, data.domains);
+  const side = document.getElementById('sidebar');
+  if (side) ensureSidebar(side, data, box);
   document.getElementById('last-refresh').textContent =
     'refreshed ' + new Date().toLocaleTimeString();
 
@@ -2872,20 +3006,24 @@ function render(data) {{
       （判据已声明、腿还没实现，跑出来必然全红，计进去会拿「没写」冒充「没做好」）：
       ${{skipped.map(esc).join(' · ')}}</div>`;
   }}
+  // 作用域提到 if 外面：下面渲染网格之后还要用它决定要不要做 DOM 过滤。
+  const {{ lay, canRadial }} = currentScopeLayout(data.scope_layouts);
   if (data.box_stats && data.box_stats.length > 0) {{
-    // 选中了某个域、且服务端能推导出中心 → 环形；否则平铺。
-    // 环形布局是服务端算的：它凭什么当中心是**接线**决定的，不是看板决定的。
-    const lay = (data.domain_layouts || {{}})[_domainFilter] || null;
-    if (lay && lay.layout === 'radial') {{
+    // **视图由读者选，范围由接线决定能不能画**——两个轴独立。
+    // 以前这里是 `lay.layout === 'radial' ? 环形 : 平铺`：点域 chip 顺手
+    // 换掉整页布局，读者以为在筛选、实际在换页面，URL 里也看不出视图变了。
+    //
+    // 选拓扑但当前范围推不出环时：**不静默退回网格**，把原因摆出来。
+    if (_view === VIEW_TOPOLOGY && canRadial) {{
       html += `<div class="section"><div class="section-title">${{esc(domainLabel(lay.domain))}} 域
         （环上 ${{lay.ring.length}} 只 · 汇点由接线推导）</div>`;
       html += renderRadial(lay, data.box_stats);
       html += `</div>`;
     }} else {{
-      if (lay && lay.reason) {{
-        html += `<div class="skeleton-note">该域退回平铺：${{esc(lay.reason)}}。<br>
-          退回来的时候要说清楚原因——不然看着像「就是平铺的」，
-          读的人会以为这个域没有结构。</div>`;
+      if (_view === VIEW_TOPOLOGY) {{
+        html += `<div class="skeleton-note">这个范围画不出拓扑：
+          ${{esc((lay && lay.reason) || '服务端没给出该范围的布局')}}。<br>
+          不静默退回网格——看着像「就是平铺的」，读的人会以为这个范围没有结构。</div>`;
       }}
       html += `<div class="section"><div class="section-title">beeBoxes in Flight
         (<span id="box-count">${{data.box_stats.length}}</span>)</div>`;
@@ -2904,8 +3042,8 @@ function render(data) {{
   // **必须在 innerHTML 之后**。放前面的话它过滤的是上一轮的旧 DOM，
   // 新插进来的卡片一个都没过滤——于是每 2 秒刷新一次，域选择就被悄悄清掉，
   // 而看板上菜单还亮着「WMS」，看着像选了没反应。
-  if (!((data.domain_layouts || {{}})[_domainFilter] || {{}}).layout
-      || (data.domain_layouts || {{}})[_domainFilter].layout !== 'radial') {{
+  // 只在网格视图下过滤：环形视图的卡片本来就是按域渲染的，没有域外成员。
+  if (!(_view === VIEW_TOPOLOGY && canRadial)) {{
     applyDomainFilter();
   }}
   bindTilt();

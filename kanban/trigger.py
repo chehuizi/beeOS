@@ -220,7 +220,68 @@ def domain_layout(domain: str) -> dict[str, Any]:
     """
     ids = [b for b in order_boxes_by_flow(registered_box_ids())
            if (BOX_REGISTRY[b][0]().placement.domain == domain)]
+    return _layout_for(ids, domain)
+
+
+# 「全部域」哨兵，与前端 ALL_DOMAINS 一致。
+# 它**不是**一个域：它没有 placement.domain，也没有成员表。
+ALL_DOMAINS_SCOPE = "__all__"
+
+
+def scope_layout(scope: str) -> dict[str, Any]:
+    """一个**范围**（不一定是单个域）的布局
+
+    「视图」和「范围」是两个独立的轴：网格/拓扑由读者选，域只决定看哪些盒子。
+    所以这里必须能回答「全部域」这种跨域范围——以前没有这种情况，
+    是因为点域 chip 顺手把视图也换了，两个轴被焊死成一个。
+
+    **跨域范围一律不出环，而且这不是偷懒**：见 `_layout_for` 里
+    multi_domain 那段，域内唯一汇点的规则跨了几条互不相干的流水线之后
+    就不成立了，硬凑一个中心等于替业务声明一条不存在的拓扑。
+    """
+    if scope == ALL_DOMAINS_SCOPE:
+        ids = order_boxes_by_flow(registered_box_ids())
+        domains = sorted({BOX_REGISTRY[b][0]().placement.domain or "（未归域）"
+                          for b in ids})
+        return _layout_for(ids, "全部域", multi_domain=len(domains) > 1)
+    return domain_layout(scope)
+
+
+def _layout_for(
+    ids: list[str],
+    domain: str,
+    *,
+    multi_domain: bool = False,
+) -> dict[str, Any]:
+    """给定一批盒子，推导出中心 / 环序 / 三类边
+
+    `domain` 只是报错文案里的称呼。`multi_domain` 为真表示这批盒子横跨
+    多个域——此时**直接退回平铺**，连中心都不找。
+    """
+    ids = list(ids)
     idset = set(ids)
+
+    if multi_domain:
+        # 域内唯一汇点这条规则，跨了几条互不相干的流水线之后就不成立了。
+        # 硬凑的话会怎样：拿「全部域」试，唯一汇点算出来是
+        # wms_system_box，于是费用报销线的 receipt_capture_box 被画成
+        # WMS 流水线的一环、还画了条边投给它——**假的**。
+        # 看板一旦这么画，就是在替业务声明一个没人声明过的拓扑，
+        # 而且图上看不出任何异常。所以这里连边都不画。
+        return {
+            "domain": domain,
+            "layout": "flat",
+            "reason": (
+                "范围横跨多个域，各域流水线互不相干，没有共同汇点——"
+                "硬凑一个中心等于替业务声明一条不存在的拓扑"
+            ),
+            "center": None,
+            "ring": list(ids),
+            "handoffs": [],
+            "feeds_center": [],
+            "feedback": [],
+            "boxes": ids,
+        }
 
     edges = [
         (b, t)

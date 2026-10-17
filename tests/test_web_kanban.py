@@ -108,7 +108,10 @@ class TestDashboardData:
             "boxes",
             "box_stats",
             "domains",
-            "domain_layouts",
+            # scope_layouts 不是 domain_layouts：键是**范围**，除了每个真域
+            # 还带一条「全部域」。以前只有真域，「全部域」查不到布局，
+            # 视图于是被域隐式决定了。
+            "scope_layouts",
             "status_counts",
             "acceptance_counts",
             "metrics",
@@ -116,6 +119,47 @@ class TestDashboardData:
             "recent",
             "exceptions",
         }
+
+    def test_the_all_domains_scope_is_in_the_layout_table(self, tmp_path: Path):
+        """「全部域」必须有一份诚实的布局，而不是让前端自行猜测
+
+        缺了它，前端拿不到 `scope_layouts['__all__']`，就退回到
+        「有没有 radial 记录」来判断视图——域于是又偷偷决定了视图。
+        """
+        from kanban.trigger import ALL_DOMAINS_SCOPE
+
+        store = TaskRunStore(path=tmp_path / "x.jsonl")
+        lays = dashboard_data(store)["scope_layouts"]
+        assert ALL_DOMAINS_SCOPE in lays, (
+            "scope_layouts 里没有「全部域」这一条——"
+            "前端会退回按域隐式决定视图，两个轴又焊回去了"
+        )
+        assert set(lays) == {ALL_DOMAINS_SCOPE, *lays.keys()} | set(
+            dashboard_data(store)["domains"]
+        ), "scope_layouts 的键应恰好是「全部域」+ 每个域"
+
+    def test_a_cross_domain_scope_never_becomes_a_ring(self, tmp_path: Path):
+        """跨域范围一律不出环——而且不能只靠「碰巧推不出来」
+
+        「全部域」确实算得出唯一汇点（wms_system_box），因为域内汇点
+        那条规则跨了几条互不相干的流水线之后**照样成立**：它只看图结构。
+        于是费用报销线的 receipt_capture_box 会被画成 WMS 流水线的一环，
+        还画了条边投给它——**假的**，而图上看不出任何异常。
+
+        看板一旦这么画，就是在替业务声明一条没人声明过的拓扑。
+        """
+        from kanban.trigger import ALL_DOMAINS_SCOPE
+
+        store = TaskRunStore(path=tmp_path / "x.jsonl")
+        lay = dashboard_data(store)["scope_layouts"][ALL_DOMAINS_SCOPE]
+        assert lay["layout"] == "flat", (
+            "跨域范围被画成了环——那等于替业务声明了一个不存在的拓扑"
+        )
+        assert lay["center"] is None, "退回平铺就不要再报中心"
+        assert lay["reason"], "退回平铺必须说清为什么"
+        assert lay["handoffs"] == [] and lay["feeds_center"] == [] and lay["feedback"] == [], (
+            "跨域范围不该画出任何边——边是接线的事实，跨域的边没人声明过"
+        )
 
     def test_box_filter_applied(self, tmp_path: Path):
         store = TaskRunStore(path=tmp_path / "x.jsonl")
@@ -883,4 +927,69 @@ class TestTheFlatGridStaysScannable:
             "`.boxes-scene` 要 justify-content: flex-start。"
             "居中时 8 只盒子排 6 列，最后一排两只孤零零浮在正中间，"
             "看着像漏排——而且每排起点都不同，没法按列扫"
+        )
+
+
+class TestViewAndScopeAreTwoSeparateAxes:
+    """视图（怎么摆）和范围（摆哪些）必须是两个独立的选择
+
+    以前代码里根本没有「视图」：渲染分支写的是
+    `lay && lay.layout === 'radial' ? 环形 : 平铺`——也就是**点域 chip
+    顺手把整页布局换掉**。读者以为自己在筛选，实际在换页面，而 URL 里
+    只有 `domain` 没有 `view`，换视图这件事根本看不出来。
+
+    更贵的代价是两个轴被焊死：全部域下永远看不到环形，WMS 下永远看不了网格。
+
+    这条守卫守的就是「视图由 _view 决定，域只决定能不能画」。
+    """
+
+    def test_both_axes_are_read_from_the_url(self):
+        """两个轴都进 URL——否则换视图既看不出来也没法分享"""
+        assert "_params.get('view')" in HTML_PAGE, (
+            "视图没从 URL 读——换个视图地址栏纹丝不动，刷新就丢"
+        )
+        assert "_params.get('domain')" in HTML_PAGE, "范围没从 URL 读"
+
+    def test_the_render_branch_follows_the_view_not_the_scope(self):
+        """渲染分支必须先问 _view，不能拿 lay.layout 当条件
+
+        只查 `render()` 函数体：`currentScopeLayout` 里有同一段
+        `lay && lay.layout === 'radial'`，那是**能力判断**（这个范围
+        能不能画成环），是合法且必要的。一把梭子搜全文会把它一起打掉，
+        那种守卫逼着人把能力判断也改成假的——守住的东西自己先错了。
+        """
+        start = HTML_PAGE.index("\nfunction render(data) {")
+        end = HTML_PAGE.index("\nasync function tick(", start)
+        # 先剥掉行注释再查：render() 里那条注释**正是在解释这个反模式**
+        # （`lay.layout === 'radial' ? 环形 : 平铺`），查全文会命中注释本身。
+        # 守的是代码，不是散文——不然哪天有人把注释改个说法，守卫就废了。
+        body = "\n".join(
+            line.split("//", 1)[0] for line in HTML_PAGE[start:end].splitlines()
+        )
+
+        assert "_view === VIEW_TOPOLOGY && canRadial" in body, (
+            "渲染分支必须先判断读者选了哪个视图。"
+            "写成只看 lay.layout 就是域在替读者决定视图"
+        )
+        assert "lay.layout" not in body, (
+            "render() 里不该再出现 lay.layout —— "
+            "「点域 chip 顺手换整页布局」的老写法，两个轴又焊回去了。"
+            "能不能画环由 currentScopeLayout 算好传进来，render 只看 canRadial"
+        )
+
+    def test_a_scope_that_cannot_ring_disables_topology_instead_of_falling_back(self):
+        """推不出环时必须禁用 + 写明原因，不许静默退回网格"""
+        assert "'<button type=\"button\" class=\"side-item disabled\" disabled'" in HTML_PAGE, (
+            "拓扑不可用时要渲染成真的 disabled button——"
+            "没有 href 的 <a> 在无障碍树里退化成 role=generic"
+        )
+        assert "这个范围画不出拓扑" in HTML_PAGE, (
+            "选拓扑但推不出环时，得在正文里说清原因，"
+            "不能悄悄画成网格——看着像「这个范围没有结构」"
+        )
+
+    def test_the_scope_table_covers_the_all_domains_sentinel(self):
+        """scope_layouts 必须含「全部域」——少了它前端就退回按域猜视图"""
+        assert "ALL_DOMAINS_SCOPE" in HTML_PAGE or "__all__" in HTML_PAGE, (
+            "scope_layouts 没覆盖「全部域」这个范围"
         )

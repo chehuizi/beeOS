@@ -9,6 +9,11 @@ dependencies = [
     # 之前漏声明，本地 .venv 里碰巧装了所以一直没暴露；部署到干净
     # 环境时直接 ModuleNotFoundError 起不来。
     "httpx>=0.27",
+    # 小票盒收 HEIC（iPhone 拍的），盒子在 read_receipt 里转 JPEG。
+    # 硬依赖不是图省事：macOS 开发机有 sips 兜底，Linux 服务端没有，
+    # 只靠 sips 的版本在开发机全绿、到服务端第一次投 HEIC 就履约中止。
+    # 声明它，那条路才是所有环境都真跑过的那条。libheif 打包在 wheel 里。
+    "pillow-heif>=0.16",
 ]
 
 [project.optional-dependencies]

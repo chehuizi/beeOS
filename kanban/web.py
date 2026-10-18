@@ -3312,6 +3312,57 @@ class KanbanRequestHandler(BaseHTTPRequestHandler):
                     box_manifest(b) for b in order_boxes_by_flow(registered_box_ids())
                 ]
             })
+        elif parsed.path.startswith("/api/runs/"):
+            # 单次履约的完整记录（含产出本体）——「引用一次产出」的最小单位。
+            # 以前产出只活在 trigger 那一瞬间的响应体里，请求一关就没了；
+            # 响应体也不引用得到，因为没人记 run_id。
+            run_id = unquote(parsed.path[len("/api/runs/"):])
+            record = self.store.get_run(run_id) if self.store else None
+            if record is None:
+                self._send_json(404, {
+                    "error": f"unknown task_run_id: {run_id!r}",
+                })
+                return
+            self._send_json(200, record)
+        elif parsed.path.startswith("/api/boxes/") and \
+                parsed.path.endswith("/artifacts"):
+            # **产出的读取接口**——盒子作为独立 API 单元的另一半。
+            # `GET /api/boxes/{id}` 答的是「它是什么」，这个答「它产出过什么」。
+            # 以前后者唯一入口是 `GET /api/data?box=`，那是**看板渲染载荷**
+            # （scope_layouts / domains / box_stats 都只为渲染存在），
+            # 程序要用产出只能整个吞下去再刨——渲染接口不能当查询接口用。
+            # 这里单独开一个：形状由 result_schema 决定，与渲染无关。
+            bid = unquote(parsed.path[len("/api/boxes/"):-len("/artifacts")])
+            manifest = box_manifest(bid)
+            if not manifest:
+                self._send_json(404, {
+                    "error": f"unknown box: {bid!r}",
+                    "registered": sorted(BOX_REGISTRY),
+                })
+                return
+            limit = _int_param(qs, "limit", 20, maximum=200)
+            accepted_only = (qs.get("accepted_only") or [""])[0] == "1"
+            rows = self.store.list_artifacts(
+                bid, limit, accepted_only=accepted_only
+            ) if self.store else []
+            self._send_json(200, {
+                "box_id": bid,
+                "result_schema": manifest["produces"]["schema"],
+                "fields": manifest["produces"]["fields"],
+                "count": len(rows),
+                "artifacts": [
+                    {
+                        "task_run_id": r["task_run_id"],
+                        "created_at": r["created_at"],
+                        "status": r["status"],
+                        "acceptance_status": r["acceptance_status"],
+                        "rejection_class": r["rejection_class"],
+                        "artifact_truncated": r.get("artifact_truncated", False),
+                        "artifact": r["artifact"],
+                    }
+                    for r in rows
+                ],
+            })
         elif parsed.path.startswith("/api/boxes/"):
             # 单盒自描述：调用方不读源码就能知道它是什么、怎么调、吐什么
             bid = unquote(parsed.path[len("/api/boxes/"):])
@@ -3388,6 +3439,13 @@ class KanbanRequestHandler(BaseHTTPRequestHandler):
                 return
 
             pkg = result.get("result") or {}
+            # **这里原来硬编码着 wms_requirement_box 的产出字段**
+            # （requirement_count / _extractor_note）。投料路径早就修好了——
+            # 按能力解析、不写死 box_id——但响应形状还留着，等于看板服务器
+            # 仍然知道某一只盒子的产出长什么样：换个盒子这条路就撒谎。
+            #
+            # 产出是**盒子自己的契约**（result_schema），调用方能从
+            # GET /api/boxes/{id} 查到。这里只给产出本体 + 这次履约的结论。
             self._send_json(200, {
                 "task_run_id": result.get("task_run_id"),
                 "box_id": box_id,
@@ -3400,8 +3458,6 @@ class KanbanRequestHandler(BaseHTTPRequestHandler):
                 "artifact_type": result.get("artifact_type"),
                 "op_trace": result.get("op_trace"),
                 "payload": pkg,
-                "requirement_count": pkg.get("requirement_count", 0),
-                "note": pkg.get("_extractor_note") or "",
             })
             return
 
@@ -3451,6 +3507,24 @@ class KanbanRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+
+def _int_param(
+    qs: dict[str, list[str]], name: str, default: int, *, maximum: int = 1000
+) -> int:
+    """查询串里的整数参数——夹在 [1, maximum] 之间。
+
+    不夹上限的话 `?limit=999999` 会把整份 store 序列化出去；而
+    `int()` 直接抛异常会把一个普通的坏参数变成 500。
+    """
+    raw = (qs.get(name) or [""])[0]
+    if not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(1, min(value, maximum))
 
     def log_message(self, format: str, *args: Any) -> None:
         # 简化日志输出

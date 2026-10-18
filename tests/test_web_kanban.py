@@ -10,8 +10,10 @@
 from __future__ import annotations
 
 import html as html_mod
+import inspect
 import json
 import re
+import sys
 import socket
 import threading
 import time
@@ -23,7 +25,13 @@ import pytest
 
 from boxes.inventory_shortage.runner import RUNNER as INVENTORY_RUNNER
 from boxes.modeling.runner import RUNNER as MODELING_RUNNER
-from kanban.web import HTML_PAGE, KanbanRequestHandler, dashboard_data
+from kanban.trigger import box_manifest
+from kanban.web import (
+    HTML_PAGE,
+    KanbanRequestHandler,
+    _int_param,
+    dashboard_data,
+)
 from runtime.store import TaskRunStore
 from runtime import create_task_run, BeelineExecutor
 from boxes.inventory_shortage import get_definition as get_inv_def
@@ -1536,4 +1544,238 @@ class TestTheDetailPageHasAVisibleWayBack:
         assert all(c.startswith("updateBackLink(") for c in calls), (
             f"render() 里的 updateBackLink 必须在语句首位，实际：{calls}——"
             "挂在 if 后面就是个死调用，退回总览时退路不会被同步"
+        )
+
+
+class TestABoxIsAQueryableUnit:
+    """盒子作为独立 API 单元：能调、能读回产出
+
+    以前 `GET /api/boxes/{id}` 只答「它是什么」，产出没有读取接口——
+    唯一入口是 `GET /api/data?box=`，那是**看板渲染载荷**
+    （scope_layouts / domains / box_stats 都只为渲染存在）。
+    程序要拿到产出只能整个吞下去再刨：渲染接口不能当查询接口用。
+    而且产出当时**根本没落盘**——只在 trigger 那一瞬间的响应体里存在过。
+    """
+
+    def _api(self, tmp_path):
+        store = TaskRunStore(path=str(Path(tmp_path) / "runs.jsonl"))
+        server = ThreadingHTTPServer(("127.0.0.1", 0), KanbanRequestHandler)
+        server.RequestHandlerClass.store = store
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        return server, store
+
+    def _get(self, server, path: str):
+        host, port = server.server_address
+        conn = HTTPConnection(host, port, timeout=10)
+        conn.request("GET", path)
+        resp = conn.getresponse()
+        body = json.loads(resp.read() or b"{}")
+        return resp.status, body
+
+    def _post(self, server, path: str, payload: dict):
+        host, port = server.server_address
+        conn = HTTPConnection(host, port, timeout=30)
+        conn.request(
+            "POST", path, json.dumps(payload),
+            {"Content-Type": "application/json"},
+        )
+        resp = conn.getresponse()
+        body = json.loads(resp.read() or b"{}")
+        return resp.status, body
+
+    def test_the_produced_artifact_survives_the_response(self, tmp_path):
+        """产出必须落盘——不然「引用一次产出」根本无从谈起
+
+        当初不落盘的理由是「体积大且能从重放得到」，**后半句对 LLM 腿是错的**：
+        receipt_capture / requirement_capture 都调 complete_json 带采样，
+        重放出来的是另一个产出。于是不落盘 = 产出永久丢失。
+        """
+        box = get_mod_def()
+        beeline = get_mod_beeline()
+        tr = create_task_run(
+            "o", "i", box.result.result_schema, f"{box.id}@v{box.version}",
+            beeline.id, beeline.version, "rt", "in",
+        )
+        tr.result = {"_extractor": "llm", "business_goal": "把 WMS 讲清楚"}
+        server, store = self._api(tmp_path)
+        try:
+            store.append(tr, box_id=box.id, acceptance_status="accepted")
+            rec = store.list_recent()[0]
+            assert rec["artifact"] == {
+                "_extractor": "llm", "business_goal": "把 WMS 讲清楚",
+            }, f"产出没落盘：{rec}"
+            assert rec["artifact_truncated"] is False
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_an_oversized_artifact_is_truncated_loudly_not_silently(self, tmp_path):
+        """超限要**显式标 truncated**——静默丢字段就是「算了却看不见」"""
+        from runtime.store import ARTIFACT_MAX_BYTES
+
+        box = get_mod_def()
+        beeline = get_mod_beeline()
+        tr = create_task_run(
+            "o", "i", box.result.result_schema, f"{box.id}@v{box.version}",
+            beeline.id, beeline.version, "rt", "in",
+        )
+        tr.result = {"nodes": ["x" * 4096 for _ in range(200)]}
+        server, store = self._api(tmp_path)
+        try:
+            store.append(tr, box_id=box.id, acceptance_status="accepted")
+            rec = store.list_recent()[0]
+            assert rec["artifact_truncated"] is True
+            assert rec["artifact"]["_truncated"] is True
+            assert "超过上限" in rec["artifact"]["_note"]
+        finally:
+            server.shutdown()
+            server.server_close()
+        assert ARTIFACT_MAX_BYTES > 0
+
+    def test_the_artifacts_endpoint_answers_what_the_box_produced(self, tmp_path):
+        server, store = self._api(tmp_path)
+        try:
+            box = get_mod_def()
+            beeline = get_mod_beeline()
+
+            def _run(n: int, acceptance: str):
+                tr = create_task_run(
+                    "o", "i", box.result.result_schema,
+                    f"{box.id}@v{box.version}", beeline.id, beeline.version,
+                    "rt", "in",
+                )
+                tr.result = {"business_goal": f"目标{n}"}
+                store.append(tr, box_id=box.id, acceptance_status=acceptance)
+
+            _run(1, "accepted")
+            _run(2, "rejected")
+
+            status, body = self._get(server, f"/api/boxes/{box.id}/artifacts")
+            assert status == 200, body
+            assert body["result_schema"] == box.result.result_schema
+            assert body["count"] == 2
+            # rejected 的产出照样读得到：判它不通过和读它产出了什么，是两件事
+            assert [a["acceptance_status"] for a in body["artifacts"]] == [
+                "rejected", "accepted",
+            ], body["artifacts"]
+            for a in body["artifacts"]:
+                assert a["task_run_id"], "产出必须可追溯到某一次履约"
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_a_single_run_is_retrievable_by_id(self, tmp_path):
+        server, store = self._api(tmp_path)
+        try:
+            box = get_mod_def()
+            beeline = get_mod_beeline()
+            tr = create_task_run(
+                "o", "i", box.result.result_schema, f"{box.id}@v{box.version}",
+                beeline.id, beeline.version, "rt", "in",
+            )
+            tr.result = {"business_goal": "可被引用的那次产出"}
+            store.append(tr, box_id=box.id, acceptance_status="accepted")
+            rid = tr.identity.task_run_id
+
+            status, body = self._get(server, f"/api/runs/{rid}")
+            assert status == 200, body
+            assert body["task_run_id"] == rid
+            assert body["artifact"] == {"business_goal": "可被引用的那次产出"}
+
+            status, _ = self._get(server, "/api/runs/does-not-exist")
+            assert status == 404, "不存在的 run 必须 404，不能静默返空"
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_the_artifacts_route_does_not_swallow_the_single_box_route(self, tmp_path):
+        """/api/boxes/{id} 和 /api/boxes/{id}/artifacts 两条路由都得活着"""
+        server, _store = self._api(tmp_path)
+        try:
+            assert self._get(server, "/api/boxes/wms_system_box")[0] == 200
+            assert self._get(
+                server, "/api/boxes/wms_system_box/artifacts"
+            )[0] == 200
+            assert self._get(server, "/api/boxes/no_such_box/artifacts")[0] == 404
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_limit_is_clamped_so_a_query_cannot_drain_the_store(self):
+        """`limit` 要夹在 [1, 200]——不然 `?limit=999999` 把整份 store 吐出去
+
+        上一版这条守卫写成了同义反复（拿默认参数和显式默认值比，两边都是
+        False），所以把夹取整个删掉它照样绿。回退验证时才发现的。
+        判据得**直接打在被测函数上**，不是打在一个碰巧相等的比较上。
+        """
+        assert _int_param({}, "limit", 20) == 20
+        assert _int_param({"limit": ["5"]}, "limit", 20) == 5
+        # 坏参数退回默认值，而不是抛异常变成 500
+        assert _int_param({"limit": ["abc"]}, "limit", 20) == 20
+        assert _int_param({"limit": [""]}, "limit", 20) == 20
+        # 上下界都要夹
+        assert _int_param({"limit": ["0"]}, "limit", 20, maximum=200) == 1
+        assert _int_param({"limit": ["-5"]}, "limit", 20, maximum=200) == 1
+        assert _int_param({"limit": ["999999"]}, "limit", 20, maximum=200) == 200
+
+    def test_the_artifacts_route_honours_the_limit(self, tmp_path):
+        """接口本身也要真的按 limit 截断——夹取在两层都得成立"""
+        server, store = self._api(tmp_path)
+        try:
+            box = get_mod_def()
+            beeline = get_mod_beeline()
+            for i in range(5):
+                tr = create_task_run(
+                    "o", "i", box.result.result_schema,
+                    f"{box.id}@v{box.version}", beeline.id, beeline.version,
+                    "rt", "in",
+                )
+                tr.result = {"i": i}
+                store.append(tr, box_id=box.id, acceptance_status="accepted")
+
+            _, body = self._get(server, f"/api/boxes/{box.id}/artifacts?limit=2")
+            assert body["count"] == 2, body["count"]
+            _, body = self._get(server, f"/api/boxes/{box.id}/artifacts?limit=999999")
+            assert body["count"] == 5, "条数本来就少于上限，不该被截"
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_the_manifest_declares_what_the_http_layer_actually_accepts(self):
+        """manifest 里的能力声明不能和 HTTP 层脱节
+
+        `accepts_free_text` 声明的是「这只盒子能直接吃一段自然语言」——
+        以前这件事只在 HTTP 层的 /api/structure 里，声明里查不到，
+        调用方只能试一次。而 `write_mode: trigger_only` 是**如实标注**
+        「write 没有独立实现」，不是留白。
+        """
+        m = box_manifest("wms_requirement_box")
+        assert m["tasks"][0]["accepts_free_text"] is True, (
+            "吃自然语言的盒子必须在 manifest 里声明"
+        )
+        assert m["tasks"][0]["payload_kind"] == "text"
+
+        m2 = box_manifest("wms_ops_box")
+        assert m2["tasks"][0]["accepts_free_text"] is False
+        for task in (m["tasks"][0], m2["tasks"][0]):
+            assert task["write_mode"] == "trigger_only", (
+                "write 没有「只存不跑」的实现，必须如实标注而不是留白"
+            )
+
+    def test_the_http_layer_knows_no_single_box_output_field(self):
+        """HTTP 层不许出现某一只盒子的产出字段名
+
+        投料路径早就按能力解析、不写死 box_id 了；但响应形状里还留着
+        `requirement_count` / `_extractor_note` —— 那等于看板服务器仍然知道
+        某一只盒子的产出长什么样，换个盒子这条路就撒谎。
+        """
+        # 读 **Python 源码**（不是 HTML_PAGE——那是渲染后的页面），
+        # 并且剥掉 # 行注释：解释「为什么删掉」的那段注释里就写着这个字段名。
+        src = inspect.getsource(sys.modules[KanbanRequestHandler.__module__])
+        body = "\n".join(
+            ln.split("#", 1)[0] for ln in src.splitlines()
+        )
+        assert "requirement_count" not in body, (
+            "HTTP 层硬编码了某只盒子的产出字段——产出是盒子自己的契约"
         )

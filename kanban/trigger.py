@@ -655,6 +655,17 @@ def box_manifest(box_id: str) -> dict[str, Any]:
             "beeline_version": task.beeline_version,
             "trigger": task.trigger,
             "payload_kind": _payload_kind(schema),
+            # **投料能不能直接是一段自由文本**。
+            # 以前调用方读到 manifest 不知道自己能不能直接 POST 一段自然
+            # 语言进去——那个能力在 HTTP 层的 /api/structure 里，不在任何
+            # 声明里。读不到就只能试一次，而试错会把业务表述投进错误的盒子
+            # （resolve_text_intake 遇到多个候选时是拒绝而不是猜，但拒绝对
+            # 调用方来说和「不支持」长得一模一样）。
+            "accepts_free_text": _payload_kind(schema) == "text",
+            # write 这一步今天到底能不能单独做。**如实标注，别假装有三个动词**：
+            # POST /api/trigger 是「投料 + 执行」一把梭，没有「只存不跑」——
+            # 所以 write 的唯一合法实现就是 trigger。写清楚比留白强。
+            "write_mode": "trigger_only",
             "media_fields": [
                 {
                     "name": f.name,

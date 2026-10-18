@@ -10,12 +10,19 @@ runtime.store - TaskRun JSONL 持久化 + 查询
 Record 形状（精简版，比完整 TaskRun 小）：
   task_run_id, box_id, beeline_id, status, acceptance_status,
   started_at, finished_at, op_count, exception_count, duration_ms,
-  observed（本次实测到的判据原值）, error_kind（中止归因）
+  observed（本次实测到的判据原值）, error_kind（中止归因）,
+  artifact（**产出本体**）, artifact_truncated（产出是否因超限被截断）
 
 为什么要 observed：盒子在 definition.metrics 里声明了指标目标，
 但目标不是事实。事实得从每次履约的实测值里聚合出来，而实测值原先只活在
 当次请求的响应体里——请求一关就没了，声明就永远只是声明。
 落盘这一份，盒子才能在任意时刻回答「我最近跑得怎么样」。
+
+为什么要 artifact：产出以前也只活在当次响应体里。理由写的是「体积大且
+能从重放得到」，但**「能重放得到」对 LLM 腿是错的**——那两只盒子都调
+complete_json 带采样，重放出来的是另一个产出。落盘这一份，产出才可引用、
+可对账、可追溯。体积大的那半仍然成立，所以设 ARTIFACT_MAX_BYTES 上限，
+超了**显式标 truncated**，不静默丢。
 """
 
 from __future__ import annotations
@@ -27,6 +34,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 from runtime.models import TaskRun, TaskRunStatus, AcceptanceStatus
+
+# 单条产出落盘上限。nodes / edges 的图能到几百 KB，而 task run 记录是
+# JSONL 追加写、每次启动全量载入内存——不设上限的话看板会随产出图变大
+# 一起变慢。超限不是静默丢，是 artifact_truncated=true + 一份说明。
+ARTIFACT_MAX_BYTES = 256 * 1024
 
 
 def task_run_to_record(
@@ -46,8 +58,7 @@ def task_run_to_record(
         if e.event == "op_finish" and (e.detail or {}).get("status") == "failed"
     )
 
-    # 规则介入记录：整份 result 不落盘（含 nodes / edges，体积大且能从重放得到），
-    # 但「这条产出里哪些环节没走模型」必须事后可查。
+    # 规则介入记录：哪些环节没走模型必须事后可查。
     # 原字段叫 degradation —— 降级删掉后它已经不指降级了，改名免得误导。
     # 现在的两种情况：捕获盒恒为 None（只有 LLM 一条腿）；
     # 建模盒可能带 note（business_goal 取规则版、id 重编号）。
@@ -56,6 +67,33 @@ def task_run_to_record(
         note = task_run.result.get("_extractor_note") or ""
         if note:
             rule_applied = {"note": note}
+
+    # **产出本体落盘**（以前不落盘）。
+    #
+    # 当初不落的理由是「体积大且能从重放得到」——**后半句对 LLM 腿是错的**：
+    # receipt_capture_box / requirement_capture_box 都调 complete_json 带采样，
+    # 重放拿到的是**另一个**产出，不是这一个。也就是说不落盘 = 产出永久丢失，
+    # 只有 trigger 那一瞬间的 HTTP 响应里存在过。
+    #
+    # 「体积大」那半句仍然成立（nodes / edges 的图），所以这里设上限：
+    # 超了**显式截断并标 artifact_truncated=true**，不做静默丢弃——
+    # 静默丢字段和「算了却看不见」是同一族病，读的人无从知道自己拿到的是全的。
+    artifact = None
+    artifact_truncated = False
+    if task_run.result is not None:
+        encoded = json.dumps(task_run.result, ensure_ascii=False, default=str)
+        if len(encoded) <= ARTIFACT_MAX_BYTES:
+            artifact = task_run.result
+        else:
+            artifact_truncated = True
+            artifact = {
+                "_truncated": True,
+                "_full_bytes": len(encoded),
+                "_note": (
+                    f"产出 {len(encoded)} 字节，超过上限 {ARTIFACT_MAX_BYTES}，"
+                    "这里只保留了元信息——不是产出本身"
+                ),
+            }
 
     # 中止归因：整轮跑挂在哪个设施上（llm_call / op_error / 没挂）。
     error_kind = None
@@ -75,6 +113,8 @@ def task_run_to_record(
         "acceptance_status": acceptance_status,
         "rejection_class": rejection_class,
         "rule_applied": rule_applied,
+        "artifact": artifact,
+        "artifact_truncated": artifact_truncated,
         "observed": observed or {},
         "error_kind": error_kind,
         "started_at": task_run.identity.started_at.isoformat() if task_run.identity.started_at else None,
@@ -139,6 +179,44 @@ class TaskRunStore:
             records = [r for r in records if r["box_id"] == box_id]
         # 按 created_at 倒序
         return sorted(records, key=lambda r: r["created_at"], reverse=True)[:limit]
+
+    def get_run(self, task_run_id: str) -> Optional[dict[str, Any]]:
+        """按 task_run_id 取单次履约的完整记录（含产出本体）
+
+        找不到返回 None —— 调用方据此回 404。
+        这是「引用一次产出」的最小单位：拿到 run_id 就能把当时的产出、
+        判据实测值、中止归因一并取回来，不必重放（LLM 腿重放也不等于原来那次）。
+        """
+        for r in self._cache:
+            if r.get("task_run_id") == task_run_id:
+                return r
+        return None
+
+    def list_artifacts(
+        self,
+        box_id: str,
+        limit: int = 20,
+        *,
+        accepted_only: bool = False,
+    ) -> list[dict[str, Any]]:
+        """某只盒子产出过的产物（倒序）
+
+        **只收录真正产出东西的那次**：failed 的轮次没有产出，accepted/rejected
+        才有产出可读——rejected 的产出照样能读，判它不通过和读它产出了什么
+        是两件事，要看「为什么被判红」就不能把 rejected 过滤掉。
+
+        形状是「产出 + 出自哪一次」两层：产出本体给人/程序用，
+        run_id / 时间戳 / 判据结论给它可追溯性。没有后面那层，
+        一份孤立的产出没法回答「这是什么时候、哪一次跑出来的」。
+        """
+        rows = [
+            r
+            for r in self._cache
+            if r["box_id"] == box_id and r.get("artifact") is not None
+            and (not accepted_only or r.get("acceptance_status") == "accepted")
+        ]
+        rows.sort(key=lambda r: r["created_at"], reverse=True)
+        return rows[:limit]
 
     def count_by_status(self) -> dict[str, int]:
         """按 status 统计"""

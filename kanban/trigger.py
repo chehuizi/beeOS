@@ -79,7 +79,7 @@ BOX_REGISTRY: dict[
     ),
     "wms_system_box": (
         get_wms_system_definition,
-        {"beeline_wms_system_v1": get_wms_system_beeline},
+        {"beeline_wms_system_v2": get_wms_system_beeline},
     ),
     "wms_development_box": (
         get_wms_development_definition,
@@ -555,15 +555,17 @@ def resolve_text_intake(
 
 
 def _text_tasks(box_id: str):
-    """该盒所有 payload_kind == text 的 task（按声明顺序）"""
+    """该盒所有**显式声明**吃自然语言的 task（按声明顺序）
+
+    这里读的是 `TaskDef.accepts_free_text`，不是 `_payload_kind`。
+    `_payload_kind` 答的是「投料框渲染成文本框还是 JSON 编辑器」，
+    形状上像文本框不等于业务上吃自然语言——详见 core.models.TaskDef。
+    """
     entry = BOX_REGISTRY.get(box_id)
     if entry is None:
         raise TriggerError(f"unknown box_id: {box_id!r}")
     definition = entry[0]()
-    return [
-        t for t in definition.task
-        if _payload_kind(definition.get_schema(t.task_schema)) == "text"
-    ]
+    return [t for t in definition.task if t.accepts_free_text]
 
 
 def list_task_entries(box_id: str) -> list[dict[str, Any]]:
@@ -655,13 +657,19 @@ def box_manifest(box_id: str) -> dict[str, Any]:
             "beeline_version": task.beeline_version,
             "trigger": task.trigger,
             "payload_kind": _payload_kind(schema),
-            # **投料能不能直接是一段自由文本**。
+            # **投料能不能直接是一段自由文本**——盒子自己声明的，不是推的。
             # 以前调用方读到 manifest 不知道自己能不能直接 POST 一段自然
             # 语言进去——那个能力在 HTTP 层的 /api/structure 里，不在任何
             # 声明里。读不到就只能试一次，而试错会把业务表述投进错误的盒子
             # （resolve_text_intake 遇到多个候选时是拒绝而不是猜，但拒绝对
             # 调用方来说和「不支持」长得一模一样）。
-            "accepts_free_text": _payload_kind(schema) == "text",
+            #
+            # 报 task 的声明值，不报 `_payload_kind`：payload_kind 是投料框
+            # **长什么样**，这里是**能不能直接喂人话**。wms_system_box 的
+            # 投料全是非必填标量，形状上是文本框，但它不吃业务表述——
+            # 报成 true 就等于告诉调用方「把需求描述发这儿」，然后我们
+            # 去拿它当观测地址解析。
+            "accepts_free_text": task.accepts_free_text,
             # write 这一步今天到底能不能单独做。**如实标注，别假装有三个动词**：
             # POST /api/trigger 是「投料 + 执行」一把梭，没有「只存不跑」——
             # 所以 write 的唯一合法实现就是 trigger。写清楚比留白强。

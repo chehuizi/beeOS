@@ -56,7 +56,15 @@ WMS_REQUIREMENT_BOX = BeeBoxDefinition(
         # 接线只写「投给谁」。「谁投给我」由注册表反推——
         # 两侧各写一遍的话，这边改了那边忘了，那只盒子
         # 的上游就悄悄空了，而没有任何东西会报错。
-        feeds_into=["wms_design_box", "wms_system_box"],
+        # **只有设计盒**。v1 里还有一条 wms_system_box，那是反的：
+        # 需求盒产出的是系统档案的**输入**（读基线：这份系统该是什么样），
+        # 不是往档案里加东西。声明它「投给」系统盒，等于说档案是需求盒的下游，
+        # 而真实关系正好相反。
+        #
+        # 这条假边还制造了一个更实际的问题：它让 requirement 也成了
+        # feeds_center 的一员，于是「五个生命周期盒都往系统盒汇」这句话
+        # 在数据上不再成立，而拓扑图是照着这句话画的。
+        feeds_into=["wms_design_box"],
     ),
 
     task=[
@@ -65,7 +73,11 @@ WMS_REQUIREMENT_BOX = BeeBoxDefinition(
             task_schema="schema_business_narrative",
             beeline_id="beeline_wms_requirement_v1",
             beeline_version=1,
-            trigger=(
+            # **全注册表里唯一吃业务自然语言的盒子**（直到下一只盒子
+            # 也需要接人话为止）。显式声明，不靠投料 schema 的形状推：
+            # 详见 core.models.TaskDef.accepts_free_text。
+            accepts_free_text=True,
+trigger=(
                 "业务方用自然语言描述业务\n"
                 "OR 产品经理要一份可投料的结构化需求集\n"
                 "OR 上一轮抽取有需求被人工改回原文重抽"

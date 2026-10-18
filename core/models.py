@@ -149,6 +149,28 @@ class TaskDef(BaseModel):
     beeline_version: int = Field(description="绑定的 beeline 具体 version")
     trigger: Optional[str] = Field(default=None, description="触发条件描述（业务化）")
 
+    # 这只盒子吃不吃**业务自然语言**——「我要记一笔差旅」那种，
+    # 而不是「target_base_url=http://…」那种。
+    #
+    # **为什么必须声明，不能从 schema 形状推**：
+    # `kanban.trigger._payload_kind` 按「必填字段里有没有 array/object/ref」
+    # 判断投料框该渲染成文本框还是 JSON 编辑器。那答的是**长什么样**，
+    # 不是**接不接自然语言**——两件事。
+    #
+    # 推断错过一次：wms_system_box 的投料三个字段全是可选标量，
+    # 形状上就是「一个文本框」，于是它被算成了吃自然语言的盒子，
+    # 一句业务表述会被 `/api/structure` 默认路由进系统档案盒——
+    # 那只盒子的活是去观测线上系统，不是解析人话。
+    #
+    # 形状推断还有一个更隐蔽的失败：给一个本来吃文本的盒子加一个
+    # 可选的对象字段，推断结果不变；反过来给不吃文本的盒子去掉
+    # 一个必填字段，它就突然开始吃文本了。**谁接自然语言是业务属性，
+    # 改字段不该改这件事。**
+    accepts_free_text: bool = Field(
+        default=False,
+        description="是否接收业务自然语言输入。默认否——猜错会让无关业务表述被路由进这只盒子",
+    )
+
 
 class AcceptanceRule(BaseModel):
     """履约合同（Contract）：验收标准（单次判据）

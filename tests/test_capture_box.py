@@ -159,12 +159,16 @@ class TestFeedInto:
     盒子只能通过看板去知道自己接谁。现在接线跟着盒子走。
     """
 
-    def test_capture_feeds_design_and_system(self):
+    def test_capture_feeds_only_design(self):
+        """需求盒的下游**只有**设计盒——系统档案盒那条边是假的，已删
+
+        v1 里这里还有一条 `wms_system_box`，方向反了：需求盒产出的是系统
+        档案的**输入**（读基线：这份系统该是什么样），不是往档案里加东西。
+        留着它会让「五个生命周期盒都往系统盒汇」这句话在数据上不成立，
+        而拓扑图是照着这句话画的。
+        """
         from kanban.trigger import box_meta
-        assert box_meta("wms_requirement_box")["feeds_into"] == [
-            "wms_design_box",
-            "wms_system_box",
-        ]
+        assert box_meta("wms_requirement_box")["feeds_into"] == ["wms_design_box"]
 
     def test_design_feeds_development_and_system(self):
         from kanban.trigger import box_meta
@@ -185,11 +189,14 @@ class TestFeedInto:
         改一只盒子顺手改了下游，这组测试会一片绿地带过去。
         需求 → 设计 → 开发 → 测试 → 运维 → 分析 → 系统档案，是一条
         **生命周期链**，每一环还额外直投系统档案盒（各自领域的事实先落档案）。
+
+        唯一的例外是**需求盒**：它不汇入档案盒。它产出的是档案的输入
+        （读基线），不是档案的内容——这条边在 v2 里删掉了。
         """
         from kanban.trigger import BOX_REGISTRY
 
         chain = {
-            "wms_requirement_box": ["wms_design_box", "wms_system_box"],
+            "wms_requirement_box": ["wms_design_box"],
             "wms_design_box": ["wms_development_box", "wms_system_box"],
             "wms_development_box": ["wms_testing_box", "wms_system_box"],
             "wms_testing_box": ["wms_ops_box", "wms_system_box"],
@@ -205,6 +212,40 @@ class TestFeedInto:
             assert BOX_REGISTRY[bid][0]().placement.feeds_into == expected, (
                 f"{bid} 的下游变了"
             )
+
+    def test_the_system_box_is_the_only_sink_and_has_exactly_one(self):
+        """系统档案盒必须**恰好是**一个汇点，且没有下游
+
+        这条不是重复上一条：上一条钉的是「有哪些边」，这条钉的是
+        「域里有且仅有一个汇点」。两者会一起坏，坏法不一样：
+
+        - 上一条能绿、这条红 = 有人加了一只新的汇点盒，
+          于是拓扑不再是环形，看板的 `sinks[0] if len(sinks)==1 else None`
+          会算出 None，环形中心消失
+        - 上一条红、这条绿 = 单边接线被改动（不是新盒子）
+
+        中心算不出来时看板会禁用拓扑 Tab 并写明原因，而不是静默退回
+        网格——所以这里必须确保中心**算得出来**。
+        """
+        from kanban.trigger import BOX_REGISTRY, domain_layout
+
+        domain_boxes = [
+            bid for bid, (loader, _) in BOX_REGISTRY.items()
+            if loader().placement.domain == "WMS"
+        ]
+        sinks = [b for b in domain_boxes if "wms_system_box" in BOX_REGISTRY[b][0]().placement.feeds_into]
+        assert sorted(sinks) == [
+            "wms_analysis_box", "wms_design_box", "wms_development_box",
+            "wms_ops_box", "wms_testing_box",
+        ], f"WMS 域的汇点集合变了：{sorted(sinks)}"
+
+        # 没有下游的盒子：只有系统档案盒
+        terminal = [b for b in domain_boxes if not BOX_REGISTRY[b][0]().placement.feeds_into]
+        assert terminal == ["wms_system_box"], f"域里出现了别的终点：{terminal}"
+
+        layout = domain_layout("WMS")
+        assert layout["layout"] == "radial", "拓扑退化了，环形出不来"
+        assert layout["center"] == "wms_system_box", "环形中心算不出来了"
 
     def test_the_closed_loop_edge_is_declared_as_feedback_not_feeds(self):
         """闭环那条边必须走 feedback_into——混进 feeds_into 会让主干成环

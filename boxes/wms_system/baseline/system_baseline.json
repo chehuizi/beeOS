@@ -1,0 +1,95 @@
+{
+  "baseline_id": "wms_system_baseline",
+  "description": [
+    "wms_system_box 的基线：这套 WMS「应该是什么样」的声明值。",
+    "档案盒子的另一半（实测值）由腿去线上探；两边对不上就是漂移。",
+    "**这份文件里的每个数字都必须带出处**——没有出处的数字，",
+    "半年后没人知道它从哪来，也就没法判断它过期了没有。"
+  ],
+  "provenance": {
+    "source_repo": "git@github.com:chehuizi/wms.git",
+    "branch": "feature/init",
+    "commit": "f8bf6d2",
+    "captured_at": "2026-10-18",
+    "note": "从该 commit 的源码静态抽取；线上未装 springdoc，所以接口清单无法从运行时反查（/wms/v3/api-docs 会被 nginx try_files 兜底成 SPA 首页，返回 200 但内容是 HTML）"
+  },
+  "target": {
+    "base_url_env": "BEEOS_WMS_BASE_URL",
+    "default_base_url": "http://127.0.0.1:8080",
+    "note": "beeOS 与 WMS 同机部署，默认走回环地址，绕开 nginx；公网入口是 http://101.37.146.194/wms，可通过环境变量切过去"
+  },
+  "declared_totals": {
+    "controller_count": {
+      "value": 14,
+      "source": "server/src/main/java/**/*Controller.java"
+    },
+    "http_endpoint_count": {
+      "value": 78,
+      "source": "@Get/@Post/@Put/@Delete/@Patch Mapping 计数"
+    },
+    "get_endpoint_count": {
+      "value": 33,
+      "source": "@GetMapping 计数"
+    },
+    "schema_table_count": {
+      "value": 22,
+      "source": "server/src/main/resources/db/migration/*.sql 的 CREATE TABLE 计数"
+    },
+    "flyway_migration_count": {
+      "value": 3,
+      "source": "server/src/main/resources/db/migration/V*.sql"
+    }
+  },
+  "readonly_endpoints": [
+    "/api/v1/health",
+    "/api/v1/customers",
+    "/api/v1/inbound-orders",
+    "/api/v1/putaway-tasks",
+    "/api/v1/inventories",
+    "/api/v1/inventories/movements",
+    "/api/v1/locations",
+    "/api/v1/outbound-orders",
+    "/api/v1/pick-tasks",
+    "/api/v1/waves",
+    "/api/v1/reports/dashboard",
+    "/api/v1/reports/inventory-summary",
+    "/api/v1/reports/inbound-outbound",
+    "/api/v1/reports/stock-aging",
+    "/api/v1/serials",
+    "/api/v1/skus",
+    "/api/v1/skus/categories",
+    "/api/v1/stocktake-orders",
+    "/api/v1/warehouses"
+  ],
+  "readonly_endpoint_rationale": [
+    "只收**无路径变量的 GET**：带 {id} 的要现编一个 id 出来，",
+    "那不是观测，是造数据；写操作（POST/PUT/DELETE）一律不探，",
+    "探测档案不该在生产上留下副作用。",
+    "这 19 条来自 33 条 GET 中剔掉 14 条带路径变量的。"
+  ],
+  "envelope": {
+    "wrapper_key": "code",
+    "ok_value": 0,
+    "message_key": "message",
+    "data_key": "data",
+    "exception": "/api/v1/health 不走统一包络，直接返回扁平 JSON（契约第 8 节）",
+    "exception_paths": [
+      "/api/v1/health"
+    ]
+  },
+  "unverifiable_aspects": [
+    {
+      "aspect": "deployed_version",
+      "reason": "jar 的 MANIFEST 只有 pom 写死的 Implementation-Version: 0.1.0；server/pom.xml 未配置 git-commit-id 插件，jar 内不存在 git.properties，所以运行时拿不到自己对应的 commit"
+    },
+    {
+      "aspect": "external_dependencies",
+      "reason": "系统没有声明外部依赖的单一来源：pom 里的依赖是构建期依赖，运行期实际连了谁只有日志才知道，没有可查询的清单"
+    }
+  ],
+  "unverifiable_policy": "这些维度不是「暂时没查」，是「以现在的系统形态查不到」。补齐它们要改 WMS 本身（比如给 jar 加 git.properties），不是改这只盒子。",
+  "health": {
+    "path": "/api/v1/health",
+    "source": "HealthController @GetMapping(\"/health\")，类级 @RequestMapping(\"/api/v1\")"
+  }
+}

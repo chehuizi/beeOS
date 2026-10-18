@@ -345,18 +345,24 @@ class TestSkeletonIsHonest:
 
         这条是「未实现」这三个字的**唯一凭据**。只看 `maturity`
         字段的话，那只是一行声明；真跑一遍红，才知道这条声明是真的。
+
+        **样例盒是 `wms_ops_box`**，不是 `wms_system_box`：后者在 v2 里
+        真的实现了腿（会发 HTTP 去探线上那套 WMS），拿它当骨架样例会
+        在目标不可达时红、在线可达时绿——那就不是骨架测试了，
+        是把「今天线上通不通」当成了「这只盒子实现没实现」。
+
+        骨架盒的定义就是：**换成哪只盒子都一样红**。
+        所以这里断言的是它的判据名，跟线上状态无关。
         """
         store = TaskRunStore(tmp_path / "runs.jsonl")
         r = trigger_task(
-            "wms_system_box",
-            "handle_system_request",
+            "wms_ops_box",
+            "handle_ops_request",
             {
-                "snapshot_id": "snap-1",
-                "components": ["wms-api", "wms-core"],
-                "interfaces": ["inbound.order"],
-                # 骨架盒还没定义部署拓扑的形状，所以投料里是一个引用
-                "deployment": "deploy://prod/2026-10-15",
-                "observed_at": "2026-10-15T08:00:00",
+                "ops_task_id": "ops-1",
+                "change_request": "把库存索引改成 BRIN",
+                "alerts": ["p99 延迟升高"],
+                "rollback_target": "deploy://prod/2026-10-15",
             },
             store,
         )
@@ -366,10 +372,10 @@ class TestSkeletonIsHonest:
         )
         outcomes = {d["metric"]: d["outcome"] for d in r["acceptance_detail"]}
         assert outcomes == {
-            "component_completeness": "failed",
-            "interface_compliance": "failed",
-            "version_traceability": "failed",
-            "version_drift_free": "failed",
+            "change_approval_rate": "failed",
+            "rollback_readiness": "failed",
+            "incident_documented": "failed",
+            "runtime_state_recorded": "failed",
         }, (
             f"骨架盒不该有判据通过或被判不适用：{outcomes}"
         )

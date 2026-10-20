@@ -107,7 +107,13 @@ WMS_ANALYSIS_BOX = BeeBoxDefinition(
                 condition="compared_metric_count == 0", action="no_deliver",
             ),
             ExceptionRule(
-                condition="gap_count > 0 and next_requirement_seed == ''", action="escalate",
+                # 「有差距」且「还没把下一轮需求播种下去」→ 升级人工。
+                # 字段名是 next_requirement_seeded（带 ed），类型是 boolean，
+                # 所以比的是 == false 而不是 == ''。
+                # 原写法 "gap_count > 0 and next_requirement_seed == ''" 三处都错：
+                # 小写 and（evaluator 只认大写 AND）、字段名少个 ed、拿布尔比空串。
+                # 它一直静默返 False——这条规则从来没响过。
+                condition="gap_count > 0 AND next_requirement_seeded == false", action="escalate",
             ),
         ],
         view="generic",

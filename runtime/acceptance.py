@@ -17,6 +17,7 @@ runtime.acceptance - Acceptance 阶段评估器
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from core.models import AcceptanceRule, ExceptionRule, ResultDef, is_not_applicable
@@ -79,41 +80,102 @@ def _find_exception_rule(
     return None
 
 
+def condition_parts(condition: str) -> list[str]:
+    """把一个 condition 按 AND 切成若干段
+
+    AND 大小写都认：写成小写 `and` 是很自然的手滑，而它的后果是
+    整条规则静默失效——**不报错、不提示**，比抛异常更难发现。
+
+    切分要求 AND 两侧有空白，避免把字段名里的字母误当连接词
+    （`brand` 里也有 `and`）。
+    """
+    return [
+        part.strip()
+        for part in re.split(r"\s+AND\s+", condition.strip(), flags=re.IGNORECASE)
+        if part.strip()
+    ]
+
+
+def condition_fields(condition: str) -> list[str]:
+    """这个条件实际会去读哪些字段
+
+    **必须和 `_evaluate_condition` 用同一套解析。**
+
+    这不是洁癖，是一个已经犯过的错：守卫原来用
+    `re.split(r"(>=|<=|==|!=|>|<)", cond, maxsplit=1)` 取**位置最靠前**的
+    比较符，被验的代码按 `(">=", "<=", "==", "!=", ">", "<")` 的**优先级顺序**
+    找第一个出现的。条件里有两个比较符时两边选到不同的字段——
+    守卫验的是它自己那套解析，于是放行了一条实际永远不触发的规则。
+
+    守卫用被验者自己的解析，才能保证「验的就是那个」。
+    """
+    fields: list[str] = []
+    for part in condition_parts(condition):
+        match = re.search(r"(>=|<=|==|!=|>|<)", part)
+        if match is None:
+            continue  # 裸标识符：不读任何字段
+        fields.append(part[: match.start()].strip())
+    return fields
+
+
 def _evaluate_condition(condition: str, result: dict[str, Any]) -> bool:
     """极简 condition 评估（PoC 用）——支持：
     - "refund_amount > 500"
     - "customer_tier == enterprise AND severity == critical"
+
+    解析规则集中在 `condition_parts` / `condition_fields`，
+    守卫读的是同一份——见 condition_fields 的说明。
     """
-    cond = condition.strip()
-    # AND 分割
-    if " AND " in cond:
-        return all(_evaluate_condition(p, result) for p in cond.split(" AND "))
-    # 单条件：field op value
-    for op, op_fn in (
-        (">=", lambda a, b: a >= b),
-        ("<=", lambda a, b: a <= b),
-        ("==", lambda a, b: a == b),
-        ("!=", lambda a, b: a != b),
-        (">", lambda a, b: a > b),
-        ("<", lambda a, b: a < b),
-    ):
-        if op in cond:
-            field, value = cond.split(op, 1)
-            field = field.strip()
-            value = value.strip()
-            actual = result.get(field)
-            # 尝试转换 value
-            try:
-                if value in ("true", "false"):
-                    value = value == "true"
-                else:
-                    value = float(value) if "." in value else int(value)
-            except (ValueError, TypeError):
-                value = value.strip('"').strip("'")
-            if actual is None:
-                return False
-            return op_fn(actual, value)
-    return False
+    parts = condition_parts(condition)
+    if not parts:
+        return False
+    if len(parts) > 1:
+        return all(_evaluate_condition(part, result) for part in parts)
+
+    cond = parts[0]
+    matches = list(re.finditer(r"(>=|<=|==|!=|>|<)", cond))
+    if not matches:
+        # 裸标识符：一个 op 都匹配不上 → 永不触发。
+        # 这里静默返 False 是刻意的（见 _evaluate_rule 的注释），
+        # 所以「有没有 op」必须由守卫提前拦住。
+        return False
+    if len(matches) > 1:
+        # 一段里塞了两个比较符（多半是漏了 AND）。
+        # 硬跑下去会在比较时抛 TypeError——那会把整个 acceptance 评估
+        # 掀翻，看板上这只盒子直接 500，比规则不触发还糟。
+        # 守卫会提前拦住这种写法，这里只是不让它炸。
+        return False
+    match = matches[0]
+
+    op = match.group(1)
+    field = cond[: match.start()].strip()
+    value = cond[match.end():].strip()
+
+    op_fns = {
+        ">=": lambda a, b: a >= b,
+        "<=": lambda a, b: a <= b,
+        "==": lambda a, b: a == b,
+        "!=": lambda a, b: a != b,
+        ">": lambda a, b: a > b,
+        "<": lambda a, b: a < b,
+    }
+    # 尝试转换 value
+    try:
+        if value in ("true", "false"):
+            value = value == "true"
+        else:
+            value = float(value) if "." in value else int(value)
+    except (ValueError, TypeError):
+        value = value.strip('"').strip("'")
+    actual = result.get(field)
+    if actual is None:
+        return False
+    try:
+        return op_fns[op](actual, value)
+    except TypeError:
+        # 类型对不上（比如拿 int 和一个没转成数字的 str 比）。
+        # 同样是「这条规则这次不适用」，不是「整个评估崩掉」。
+        return False
 
 
 def _classify_failure(

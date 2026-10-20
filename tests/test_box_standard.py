@@ -246,7 +246,7 @@ class TestDeclarationCoherence:
 
 
 class TestExceptionConditionsAreReachable:
-    """exception.condition 的字段必须是产出里真有的量
+    """exception.condition 必须**真的能被触发**
 
     `_evaluate_condition` 拿到 `result.get(field)` 是 None 就直接
     `return False`——**不报错、不提示**。后果是这条规则写在那里，
@@ -255,27 +255,166 @@ class TestExceptionConditionsAreReachable:
 
     这比判据读不到值更隐蔽：判据读不到会判红（吵），异常读不到
     只是永远不响（安静地没做）。
+
+    ## 为什么守卫必须用被验者自己的解析器
+
+    这条踩过：守卫原来用
+    `re.split(r"(>=|<=|==|!=|>|<)", cond, maxsplit=1)` 取**位置最靠前**的
+    比较符，而 `_evaluate_condition` 按 `(">=", "<=", "==", "!=", ">", "<")`
+    的**优先级顺序**找第一个出现的。条件里有两个比较符时两边选到
+    **不同的字段**——守卫验的是它自己那套解析，于是放行了一条
+    实际永远不触发的规则。
+
+    已犯过：wms_analysis_box 的
+    "gap_count > 0 and next_requirement_seed == ''"
+    守卫解析出 `gap_count`（存在）→ 放行；
+    实际解析先撞上 `==`，字段变成
+    "gap_count > 0 and next_requirement_seed" → 读不到 → 永不触发。
+    同一个条件还错了两处：小写 `and`（evaluator 只认大写）、
+    字段名少个 `ed`、拿布尔去比空串。
+
+    现在守卫读 `runtime.acceptance.condition_parts / condition_fields`，
+    跟被验者是同一份解析。
     """
 
     @pytest.mark.parametrize("box_id", ALL_BOXES)
     def test_condition_names_a_field_the_result_can_carry(self, box_id):
-        import re
+        from runtime.acceptance import condition_fields, condition_parts
 
         d = BOX_REGISTRY[box_id][0]()
         fields = {f.name for f in d.get_schema(d.result.result_schema).fields}
         for rule in d.result.exceptions:
             cond = rule.condition.strip()
-            # 裸标识符（没有比较符）永远不触发——_evaluate_condition
-            # 一个 op 都匹配不上就 return False
-            assert re.search(r"(>=|<=|==|!=|>|<)", cond), (
-                f"{box_id}: exception {cond!r} 不是 `field op value` 三段式，"
-                f"它永远不会触发"
+            for part in condition_parts(cond):
+                ops = re.findall(r"(>=|<=|==|!=|>|<)", part)
+                assert ops, (
+                    f"{box_id}: exception {cond!r} 里的这一段 {part!r} 不是 "
+                    f"`field op value` 三段式——裸标识符永远不触发"
+                )
+                assert len(ops) == 1, (
+                    f"{box_id}: exception {cond!r} 里的这一段 {part!r} 有 "
+                    f"{len(ops)} 个比较符（{ops}）——多半是漏了 AND。"
+                    f"硬跑下去会在比较时抛 TypeError，把整次 acceptance 评估掀翻"
+                )
+            for field in condition_fields(cond):
+                assert field in fields, (
+                    f"{box_id}: exception {cond!r} 会去读字段 {field!r}，"
+                    f"但它不在产出 schema 里（可用字段：{sorted(fields)}）"
+                    f"→ result.get() 返回 None → 这条规则永远不触发"
+                )
+
+    @pytest.mark.parametrize("box_id", ALL_BOXES)
+    def test_every_condition_part_can_actually_be_read(self, box_id):
+        """条件里**每一段**都要读得到值，不只是第一段
+
+        `_evaluate_condition` 对 AND 段是 `all(...)` 短路求值：
+        第一段 False 就直接返回 False，后面那段读没读到值根本没人知道。
+        所以「多段条件」比「单段条件」多一个静默失效的点。
+        """
+        from runtime.acceptance import condition_fields, condition_parts
+
+        d = BOX_REGISTRY[box_id][0]()
+        for rule in d.result.exceptions:
+            parts = condition_parts(rule.condition)
+            read = condition_fields(rule.condition)
+            assert len(read) == len(parts), (
+                f"{box_id}: exception {rule.condition!r} 切成了 {len(parts)} 段，"
+                f"但只读 {len(read)} 个字段——有一段没有比较符"
             )
-            field = re.split(r"(>=|<=|==|!=|>|<)", cond, maxsplit=1)[0].strip()
-            assert field in fields, (
-                f"{box_id}: exception {cond!r} 的字段 {field!r} 不在产出 "
-                f"schema 里 → result.get() 返回 None → 这条规则永远不触发"
+
+    @pytest.mark.parametrize("box_id", ALL_BOXES)
+    def test_every_condition_can_actually_fire(self, box_id):
+        """每条规则都得能**真的响**——不只是字段存在
+
+        「字段在 schema 里」是弱证明：字段在，但取值类型对不上、
+        或者比较符写反了，规则照样永远不响。
+
+        这里反着验：给每条规则造一个**该触发**的产出，
+        断言 `_evaluate_condition` 真的返回 True。
+        造不出来 = 这条规则从写下来那天起就没响过。
+        """
+        from runtime.acceptance import _evaluate_condition, condition_parts
+
+        d = BOX_REGISTRY[box_id][0]()
+        for rule in d.result.exceptions:
+            satisfying = {}
+            for part in condition_parts(rule.condition):
+                field, op, value = _split_comparison(part)
+                satisfying[field] = _value_satisfying(op, value)
+            assert _evaluate_condition(rule.condition, satisfying) is True, (
+                f"{box_id}: exception {rule.condition!r} 在一个本该触发的产出上"
+                f"（{satisfying}）没有触发——这条规则从来就没响过"
             )
+
+    @pytest.mark.parametrize("box_id", ALL_BOXES)
+    def test_condition_value_type_matches_the_field_type(self, box_id):
+        """条件里的值，类型必须跟字段类型对得上
+
+        「字段存在」和「规则能响」都证明不了这一条：
+        - 字段在 schema 里，规则也能被合成值点亮——但生产里那个字段
+          存的是布尔，拿它跟空串比，永远是 False
+        - 合成值是**照着条件挑类型**的，所以它天然发现不了类型不匹配
+
+        已犯过：`next_requirement_seeded`（boolean）被拿去跟 `''` 比。
+        """
+        from runtime.acceptance import condition_parts
+
+        d = BOX_REGISTRY[box_id][0]()
+        schema = d.get_schema(d.result.result_schema)
+        types = {f.name: f.type for f in schema.fields}
+
+        for rule in d.result.exceptions:
+            for part in condition_parts(rule.condition):
+                field, _op, value = _split_comparison(part)
+                if field not in types:
+                    continue  # 字段不存在由另一条守卫管
+                field_type = types[field]
+                literal_type = _literal_type(value)
+                if literal_type is None:
+                    continue  # 值不是字面量（引号里的自由文本等），不判
+                if not _types_compatible(field_type, literal_type):
+                    raise AssertionError(
+                        f"{box_id}: exception {rule.condition!r} 里 {field!r} "
+                        f"在产出 schema 里是 {field_type}，条件却拿它跟 "
+                        f"{literal_type} 类型的值比——这条规则永远不响"
+                    )
+
+
+def test_no_test_in_this_file_is_nested_inside_another_function():
+    """本文件里不允许有「嵌在别的函数里」的测试
+
+    这条是给一个真实踩过的坑写的：往类中间插模块级 helper 函数时，
+    紧跟其后缩进的那个 `def test_xxx` 变成了 **helper 的内嵌函数**，
+    不是类的方法——pytest 收不到它，于是它一次也没跑过，
+    而源码里它好好地待着，看起来在守着某件事。
+
+    实测：`test_condition_value_type_matches_the_field_type` 就这样死了
+    一轮，测试总数 108 → 116（只多了一条守卫的 8 个参数化），
+    而我以为三条新守卫全都在跑。
+
+    **「写下来了」不等于「会跑」**——跟「声明了却拿不到」是同一族病。
+    """
+    import ast
+
+    src = pathlib.Path(__file__).read_text(encoding="utf-8")
+    tree = ast.parse(src)
+
+    nested = []
+
+    def walk(node, ancestors):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if child.name.startswith("test_") and ancestors:
+                    nested.append((child.name, ancestors[-1]))
+                walk(child, ancestors + [child.name])
+            else:
+                walk(child, ancestors)
+
+    walk(tree, [])
+    assert not nested, (
+        f"这些测试被嵌在别的函数里，pytest 收不到：{nested}——"
+        "它们一次也没跑过，而源码里看着好好的"
+    )
 
 
 class TestSkeletonIsHonest:
@@ -941,3 +1080,70 @@ class TestRadialLayoutIsDerived:
                 f"{why}（缺：{frag}）——连线端点就不会吸附到看得见的盒子上，"
                 f"表现为线两头各悬空半个盒子，而且不会报任何错"
             )
+
+
+def _split_comparison(part: str) -> tuple[str, str, str]:
+    """把 `field op value` 拆成三元组"""
+    m = re.search(r"(>=|<=|==|!=|>|<)", part)
+    assert m, f"{part!r} 不是三段式"
+    return (
+        part[: m.start()].strip(),
+        m.group(1),
+        part[m.end():].strip().strip("\"'"),
+    )
+
+
+def _value_satisfying(op: str, value: str) -> Any:
+    """造一个能让 `field op value` 成立的值"""
+    if value in ("true", "false"):
+        target = value == "true"
+        return target if op == "==" else (not target)
+    try:
+        number = float(value) if "." in value else int(value)
+    except (TypeError, ValueError):
+        return value
+    if op == ">":
+        return number + 1
+    if op == ">=":
+        return number
+    if op == "<":
+        return number - 1
+    if op == "<=":
+        return number
+    if op == "==":
+        return number
+    if op == "!=":
+        return number + 1
+    return number
+
+
+def _literal_type(value: str) -> str | None:
+    """字面量的类型；不是字面量（自由文本）时返回 None"""
+    if value in ("true", "false"):
+        return "boolean"
+    try:
+        int(value)
+        return "integer"
+    except (TypeError, ValueError):
+        pass
+    try:
+        float(value)
+        return "number"
+    except (TypeError, ValueError):
+        pass
+    return "string"
+
+
+def _types_compatible(field_type: str, literal_type: str) -> bool:
+    """产出字段的类型能不能跟条件里的字面量比"""
+    if field_type in ("object", "array", "enum") or field_type.startswith("ref:"):
+        return True  # 这几种类型从字面量看不出该比什么，放行
+    if field_type == "boolean":
+        return literal_type == "boolean"
+    if field_type == "integer":
+        return literal_type in ("integer", "number")
+    if field_type == "number":
+        return literal_type in ("integer", "number")
+    if field_type == "string":
+        return literal_type == "string"
+    return True

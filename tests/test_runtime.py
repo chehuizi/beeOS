@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 from boxes.inventory_shortage import get_definition
 from boxes.inventory_shortage.runner import RUNNER as INVENTORY_RUNNER
-from beelines import get_inventory_shortage_beeline
+from boxes.inventory_shortage.beeline import get_beeline as get_inventory_shortage_beeline
 from core.beeline_models import Beeline, Bee, NextRef, Operation
 from core.models import AcceptanceRule, ExceptionRule, ResultDef
 from runtime import (

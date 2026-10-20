@@ -24,11 +24,11 @@ from runtime import (
     evaluate_acceptance,
 )
 from boxes.inventory_shortage import get_definition as get_inv_def
-from beelines.inventory_shortage import get_beeline as get_inv_beeline
+from boxes.inventory_shortage.beeline import get_beeline as get_inv_beeline
 from boxes.inventory_shortage.runner import RUNNER as INVENTORY_RUNNER
 from boxes.modeling.runner import RUNNER as MODELING_RUNNER
 from boxes.modeling import get_definition as get_mod_def
-from beelines.modeling import get_beeline as get_mod_beeline
+from boxes.modeling.beeline import get_beeline as get_mod_beeline
 from kanban.cli import render_dashboard
 
 

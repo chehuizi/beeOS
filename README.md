@@ -21,7 +21,6 @@ flowchart TB
     Repo --> Docs[docs/ design]
     Repo --> Core[core/ kernel]
     Repo --> Boxes[boxes/ products]
-    Repo --> Beelines[beelines/ procedures]
     Repo --> Runtime[runtime/ executor]
     Repo --> Tests[tests/ verification]
 
@@ -69,11 +68,14 @@ flowchart TB
 - **`boxes/`** — 业务履约盒子（产品层，**两条产品线**）
   - `inventory_shortage/` — 第一只盒子：订单异常履约（**Operations Line**）
   - `modeling/` — 第二只盒子：业务建模履约（**Software Line 第一只**）
-  - 每只盒子：`__init__.py` / `schemas.py` / `definition.py` / `README.md`
+  - 每只盒子：`__init__.py` / `schemas.py` / `definition.py` / `runner.py`
+    / `measure.py` / `beeline.py` / `README.md`
 
-- **`beelines/`** — 履约作业路线（procedure 实现，独立维护）
-  - `inventory_shortage.py` — beeline_inventory_shortage_v3 v12（8 ops + 4 分支）
-  - `modeling.py` — beeline_wms_design_v1 v1（7 ops 顺序链）
+  **beeline 住在盒子里**（`boxes/<box>/beeline.py`），因为它跟盒子是 1:1
+  且不可分割：它引用的 schema id 全部来自本盒的 `schemas.py`，每个 op 的
+  handler 都在本盒的 `runner.py` 里。顶层一个 `beelines/` 目录只会让人
+  以为存在一种可复用的跨盒路线，实际上一条都没有。
+  路线细节见 [`docs/beeline.md`](docs/beeline.md)。
 
 - **`runtime/`** — 执行运行时（PoC 2 落地）
   - `models.py` — TaskRun durable object + 9 状态机 + Acceptance 4 状态
@@ -130,23 +132,25 @@ flowchart LR
 # 端到端冒烟（订单异常）
 .venv/bin/python -c "
 from boxes.inventory_shortage import get_definition
-from beelines.inventory_shortage import get_beeline
+from boxes.inventory_shortage import get_beeline
+from boxes.inventory_shortage.runner import RUNNER
 from runtime import create_task_run, BeelineExecutor, evaluate_acceptance
 box = get_definition(); beeline = get_beeline()
 tr = create_task_run('o', 'handle_order_exception', box.result.result_schema, f'{box.id}@v{box.version}', beeline.id, beeline.version, 'rt', 'in')
-tr = BeelineExecutor().execute(tr, beeline, {'exception_type': 'inventory_shortage', 'amount': 100})
+tr = BeelineExecutor(RUNNER).execute(tr, beeline, {'exception_type': 'inventory_shortage', 'amount': 100})
 print('inventory_shortage:', tr.status.value)
 "
 
 # 端到端冒烟（业务建模）
 .venv/bin/python -c "
 from boxes.modeling import get_definition
-from beelines.modeling import get_beeline
+from boxes.modeling import get_beeline
+from boxes.modeling.runner import RUNNER
 from runtime import create_task_run, BeelineExecutor, evaluate_acceptance
 box = get_definition(); beeline = get_beeline()
 input_data = {'set_id': 'r1', 'business_goal': 'test', 'requirements': [{'requirement_id': 'req_obj_1', 'description': 'x', 'requirement_type': 'object', 'priority': 'must_have'}]}
 tr = create_task_run('pm', 'handle_modeling_request', box.result.result_schema, f'{box.id}@v{box.version}', beeline.id, beeline.version, 'rt', 'in')
-tr = BeelineExecutor().execute(tr, beeline, input_data)
+tr = BeelineExecutor(RUNNER).execute(tr, beeline, input_data)
 print('modeling:', tr.status.value, 'result:', tr.result)
 "
 

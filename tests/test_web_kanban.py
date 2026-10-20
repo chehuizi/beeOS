@@ -35,9 +35,9 @@ from kanban.web import (
 from runtime.store import TaskRunStore
 from runtime import create_task_run, BeelineExecutor
 from boxes.inventory_shortage import get_definition as get_inv_def
-from beelines.inventory_shortage import get_beeline as get_inv_beeline
+from boxes.inventory_shortage.beeline import get_beeline as get_inv_beeline
 from boxes.modeling import get_definition as get_mod_def
-from beelines.modeling import get_beeline as get_mod_beeline
+from boxes.modeling.beeline import get_beeline as get_mod_beeline
 
 # 看板盒子名单 = 注册表按业务流向排出来的那一串。
 # 手抄进各个测试会漂：加一只盒子就得改 N 处，漏一处就是一条假绿。

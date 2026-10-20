@@ -19,5 +19,6 @@ Software Line 第一只盒子——按结构化需求产出可验证的业务模
 """
 
 from boxes.modeling.definition import WMS_DESIGN_BOX, get_definition
+from boxes.modeling.beeline import WMS_DESIGN_BEELINE, get_beeline
 
-__all__ = ["WMS_DESIGN_BOX", "get_definition"]
+__all__ = ["WMS_DESIGN_BOX", "get_definition", "WMS_DESIGN_BEELINE", "get_beeline"]

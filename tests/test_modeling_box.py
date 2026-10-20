@@ -2,7 +2,7 @@
 
 覆盖范围：
 - boxes.modeling definition 加载 + 5 机械 acceptance + 3 exception
-- beelines.modeling 加载 + 7 ops 顺序链
+- boxes.modeling.beeline 加载 + 7 ops 顺序链
 - 端到端：requirement set → parse → classify → generate → verify → evidence → ACCEPTED
 """
 
@@ -17,8 +17,8 @@ from boxes.modeling import WMS_DESIGN_BOX, get_definition
 from boxes.modeling.runner import RUNNER as MODELING_RUNNER
 from boxes.modeling.measure import COMPUTERS as MODEL_COMPUTERS
 from boxes.modeling.schemas import REQUIREMENT_TYPES
-from beelines.modeling import WMS_DESIGN_BEELINE, get_beeline
-from beelines import get_inventory_shortage_beeline
+from boxes.modeling.beeline import WMS_DESIGN_BEELINE, get_beeline
+from boxes.inventory_shortage.beeline import get_beeline as get_inventory_shortage_beeline
 from core import metrics as m
 from runtime import (
     BeelineExecutor,

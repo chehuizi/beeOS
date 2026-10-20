@@ -3,7 +3,7 @@
 覆盖范围：
 - core.beeline_models 各组件 + 模型校验
 - Beeline 顶层 + op_id 唯一 + next 引用 + DAG 检测
-- beelines.inventory_shortage 库存不足 beeline 完整加载
+- boxes.inventory_shortage.beeline 库存不足 beeline 完整加载
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from core.beeline_models import (
     NextRef,
     Operation,
 )
-from beelines import INVENTORY_SHORTAGE_BEELINE, get_inventory_shortage_beeline
+from boxes.inventory_shortage.beeline import INVENTORY_SHORTAGE_BEELINE, get_beeline as get_inventory_shortage_beeline
 
 
 # ============================================================
@@ -211,7 +211,7 @@ class TestBeelineValidation:
 
 
 # ============================================================
-# beelines.inventory_shortage 集成验证
+# boxes.inventory_shortage.beeline 集成验证
 # ============================================================
 
 
@@ -323,3 +323,100 @@ class TestInventoryShortageBeeline:
 
         # 全部访问完成
         assert all(c == BLACK for c in color.values())
+
+# ============================================================
+# beeline 住在盒子里
+# ============================================================
+
+
+class TestBeelineLivesInsideItsBox:
+    """beeline 与盒子是 1:1 且不可分割——所以它住在 `boxes/<box>/beeline.py`
+
+    这不是审美问题，是有事实支撑的布局决定：
+
+    - 9 只盒子 9 条 beeline，没有一条被两只盒子共享
+    - 每条 beeline 引用的 schema id **全部**来自本盒的 `schemas.py`
+    - 每个 op 的 handler 都在本盒的 `runner.py` 里
+
+    所以顶层一个 `beelines/` 目录没有任何可复用性可言，
+    它只会让人以为存在一种「跨盒作业路线」——而实际上一条都没有。
+
+    哪天真出现跨盒流程（一条发版路线串 dev → test → ops），
+    那应该另立一层（比如 `flows/`），并且先给模型加跨盒表达力
+    （`Operation.input_from` 现在只接受 `"external"` 或同一条 beeline
+    内的 op_id）。**不是把顶层目录留着等它长大。**
+    """
+
+    def test_there_is_no_top_level_beelines_package(self):
+        import pathlib
+
+        repo = pathlib.Path(__file__).resolve().parents[1]
+        assert not (repo / "beelines").exists(), (
+            "顶层又出现了 beelines/ 包——beeline 住在自己盒子里。"
+            "顶层目录会让人以为存在可复用的跨盒路线，实际上一条都没有"
+        )
+
+    def test_every_registered_box_carries_its_own_beeline(self):
+        """每只注册盒子都能从自己那儿拿到自己的 beeline
+
+        之前 beeline 在顶层，盒子不带它——于是「盒子是可插拔单元、
+        带得走自己的实现」这条判据对 beeline 是不成立的。
+        """
+        from kanban.trigger import BOX_REGISTRY
+
+        for box_id, (_loader, beelines) in BOX_REGISTRY.items():
+            assert beelines, f"{box_id} 没有 beeline"
+            for beeline_id, get_beeline_fn in beelines.items():
+                beeline = get_beeline_fn()
+                assert beeline.id == beeline_id, (
+                    f"{box_id}: 注册表键 {beeline_id!r} != beeline.id {beeline.id!r}"
+                )
+                # 盒子自己声明的 task 指向的就是这条
+                box = BOX_REGISTRY[box_id][0]()
+                task = next(t for t in box.task if t.beeline_id == beeline_id)
+                assert task.beeline_version == beeline.version, (
+                    f"{box_id}: task 引用 beeline v{task.beeline_version}，"
+                    f"但 beeline 实际是 v{beeline.version}"
+                )
+
+    def test_a_beeline_only_names_its_own_box_schemas(self):
+        """beeline 引用的 schema 必须全是本盒的——这条是布局决定的依据
+
+        一旦有 beeline 引用了别的盒子的 schema，它就**不能**住在盒子里了：
+        那是一条跨盒路线，属于另一层东西（flows/），不属于这只盒子。
+        这条守卫会在那一刻转红，而不是让布局悄悄失效。
+        """
+        from kanban.trigger import BOX_REGISTRY
+
+        for box_id, (loader, beelines) in BOX_REGISTRY.items():
+            box = loader()
+            own = {s.id for s in box.schemas}
+            for beeline_id, get_beeline_fn in beelines.items():
+                beeline = get_beeline_fn()
+                used = set()
+                for op in beeline.operations:
+                    used.add(op.input)
+                    used.add(op.output)
+                foreign = sorted(s for s in used if s not in own)
+                assert not foreign, (
+                    f"{box_id} 的 {beeline_id} 引用了不属于本盒的 schema：{foreign}。"
+                    "跨盒路线不该住在盒子里——那属于另一层（flows/），"
+                    "而且模型得先支持跨盒引用"
+                )
+
+    def test_a_beeline_only_uses_its_own_box_handlers(self):
+        """beeline 每个 op 的 handler 必须在本盒的 runner 里"""
+        from kanban.trigger import BOX_REGISTRY, RUNNER_REGISTRY
+
+        for box_id, (_loader, beelines) in BOX_REGISTRY.items():
+            runner = RUNNER_REGISTRY.get(box_id)
+            assert runner is not None, f"{box_id} 没有 runner"
+            for beeline_id, get_beeline_fn in beelines.items():
+                beeline = get_beeline_fn()
+                missing = [
+                    op.type for op in beeline.operations
+                    if not runner.supports(op.type)
+                ]
+                assert not missing, (
+                    f"{box_id} 的 {beeline_id} 有 op 在本盒 runner 里找不到：{missing}"
+                )

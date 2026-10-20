@@ -5,11 +5,26 @@
 
 ## 与 boxes/ 的关系
 
-- **boxes/** — 业务履约盒子（contract + intent + queen policy）
-- **beelines/** — 履约作业路线（operation 有向图 + 幂等性策略）
+- **boxes/** — 业务履约盒子（contract + intent + queen policy + 作业路线）
 
-beeline 独立维护，**不归 beeBox definition 管**——
-beeBox definition 通过 `task[].beeline_id + beeline_version` 引用 beeline。
+beeline **住在盒子里**：`boxes/<box>/beeline.py`。
+
+理由不是「整齐」，是事实：beeline 与盒子是 **1:1 且不可分割** 的——
+它引用的 schema id 全部来自本盒的 `schemas.py`，每个 op 的 handler
+都在本盒的 `runner.py` 里。9 只盒子 9 条 beeline，没有一条被两只盒子
+共享，没有一条引用过别的盒子的 schema。
+
+放在仓库顶层一个单独的目录，只会让人以为存在一种「可复用的跨盒作业路线」，
+而实际上一条都没有。
+
+**但「不归 definition 管」这一点仍然成立**：definition 不内嵌路线，
+它通过 `task[].beeline_id + beeline_version` **引用**它。
+位置和引用方式是两件事。
+
+将来如果真出现跨盒流程（一条发版路线串起 dev → test → ops），
+那应该另立一层（比如 `flows/`），不是把 `beelines/` 留在原地等它长大——
+而且跨盒 beeline 需要先有模型支持：`Operation.input_from` 现在只接受
+`"external"` 或同一条 beeline 内的 op_id。
 
 ```mermaid
 flowchart LR
@@ -23,9 +38,18 @@ flowchart LR
 ## 布局
 
 ```
-beelines/
-  __init__.py                # 入口（导出所有 beeline）
-  inventory_shortage.py      # 库存不足订单履约作业路线（v3 ver12）
+boxes/
+  inventory_shortage/
+    beeline.py               # 库存不足订单履约作业路线（v3 ver12）
+    definition.py
+    runner.py
+    schemas.py
+  wms_system/
+    beeline.py               # WMS System Box 的作业路线（system_intake → probe → packager）
+    definition.py
+    runner.py
+    schemas.py
+    baseline/                # 盒子自带的基线资产
 ```
 
 ## 第一只 beeline：beeline_inventory_shortage_v3 (v12)
@@ -68,7 +92,7 @@ flowchart TB
 ## 加载
 
 ```python
-from beelines import get_beeline
+from boxes.inventory_shortage import get_beeline
 
 b = get_beeline()                                # beeline_inventory_shortage_v3 v12
 b.get_operation("try_alternative_warehouse")     # 查 operation

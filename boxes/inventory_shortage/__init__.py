@@ -11,5 +11,6 @@
 """
 
 from boxes.inventory_shortage.definition import get_definition, ORDER_EXCEPTION_BOX
+from boxes.inventory_shortage.beeline import INVENTORY_SHORTAGE_BEELINE, get_beeline
 
-__all__ = ["get_definition", "ORDER_EXCEPTION_BOX"]
+__all__ = ["get_definition", "ORDER_EXCEPTION_BOX", "INVENTORY_SHORTAGE_BEELINE", "get_beeline"]

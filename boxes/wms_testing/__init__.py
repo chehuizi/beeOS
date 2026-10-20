@@ -17,5 +17,6 @@ from __future__ import annotations
 
 from boxes.wms_testing.definition import WMS_TESTING_BOX, get_definition
 from boxes.wms_testing.runner import RUNNER, WMS_TESTING_HANDLERS
+from boxes.wms_testing.beeline import WMS_TESTING_BEELINE, get_beeline
 
-__all__ = ["WMS_TESTING_BOX", "get_definition", "RUNNER", "WMS_TESTING_HANDLERS"]
+__all__ = ["WMS_TESTING_BOX", "get_definition", "RUNNER", "WMS_TESTING_HANDLERS", "WMS_TESTING_BEELINE", "get_beeline"]

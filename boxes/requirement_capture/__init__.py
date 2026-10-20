@@ -22,5 +22,6 @@ from boxes.requirement_capture.definition import (
     WMS_REQUIREMENT_BOX,
     get_definition,
 )
+from boxes.requirement_capture.beeline import WMS_REQUIREMENT_BEELINE, get_beeline
 
-__all__ = ["WMS_REQUIREMENT_BOX", "get_definition"]
+__all__ = ["WMS_REQUIREMENT_BOX", "get_definition", "WMS_REQUIREMENT_BEELINE", "get_beeline"]

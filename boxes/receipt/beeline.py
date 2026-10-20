@@ -1,5 +1,5 @@
 """
-beelines.receipt - 小票识别盒的履约流水线
+boxes.receipt - 小票识别盒的履约流水线
 
 三步，每步一个工位：
 1. read_receipt     看图抄字（唯一真调 LLM 的一步）
@@ -8,6 +8,11 @@ beelines.receipt - 小票识别盒的履约流水线
 
 跟其他 beeline 的区别只有一处，但很关键：**LLM 只在第 1 步**。
 校验和打包都不再碰模型，所以「模型为了好看把数字凑平」这条路是堵死的。
+
+beeline 跟盒子是 **1:1 且不可分割** 的：它引用的 schema id 全部来自本盒的
+`schemas.py`，每个 op 的 handler 都在本盒的 `runner.py` 里。所以它住在盒子
+里面，而不是仓库顶层一个单独的目录——顶层目录会让人以为存在一种
+「可复用的跨盒作业路线」，而实际上一条都没有。
 """
 
 from __future__ import annotations

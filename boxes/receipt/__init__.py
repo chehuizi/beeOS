@@ -6,5 +6,6 @@
 """
 
 from boxes.receipt.definition import RECEIPT_CAPTURE_BOX, get_definition
+from boxes.receipt.beeline import RECEIPT_CAPTURE_BEELINE, get_beeline
 
-__all__ = ["RECEIPT_CAPTURE_BOX", "get_definition"]
+__all__ = ["RECEIPT_CAPTURE_BOX", "get_definition", "RECEIPT_CAPTURE_BEELINE", "get_beeline"]

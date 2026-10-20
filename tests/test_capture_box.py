@@ -19,7 +19,7 @@ import pytest
 
 from boxes.requirement_capture import get_definition as get_capture_definition
 from boxes.modeling import get_definition as get_modeling_definition
-from beelines import get_requirement_capture_beeline
+from boxes.requirement_capture.beeline import get_beeline as get_requirement_capture_beeline
 from kanban.trigger import (
     TriggerError,
     list_task_entries,

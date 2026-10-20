@@ -1,5 +1,5 @@
 """
-beelines.inventory_shortage - 库存不足订单履约作业路线
+boxes.inventory_shortage - 库存不足订单履约作业路线
 
 按 [docs/examples/order-exception-box.md §3 beeline] 翻译成 pydantic 模型。
 
@@ -29,6 +29,11 @@ beelines.inventory_shortage - 库存不足订单履约作业路线
             notify_customer 用 forbidden（不重复通知）
             escalate_to_human 用 required（不重复升级）
 - 无环：每条 try_* 失败降级到下一个 try_*，不回头
+
+beeline 跟盒子是 **1:1 且不可分割** 的：它引用的 schema id 全部来自本盒的
+`schemas.py`，每个 op 的 handler 都在本盒的 `runner.py` 里。所以它住在盒子
+里面，而不是仓库顶层一个单独的目录——顶层目录会让人以为存在一种
+「可复用的跨盒作业路线」，而实际上一条都没有。
 """
 
 from __future__ import annotations

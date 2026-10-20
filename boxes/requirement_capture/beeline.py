@@ -1,5 +1,5 @@
 """
-beelines.requirement_capture - 需求捕获履约作业路线
+boxes.requirement_capture - 需求捕获履约作业路线
 
 Software Line 第二只 beeline。
 
@@ -26,6 +26,11 @@ Software Line 第二只 beeline。
 编排特征：
 - 顺序链（无分支）
 - 幂等性：所有 op = required（key=set_id，同一份原文重复抽取产出同结果）
+
+beeline 跟盒子是 **1:1 且不可分割** 的：它引用的 schema id 全部来自本盒的
+`schemas.py`，每个 op 的 handler 都在本盒的 `runner.py` 里。所以它住在盒子
+里面，而不是仓库顶层一个单独的目录——顶层目录会让人以为存在一种
+「可复用的跨盒作业路线」，而实际上一条都没有。
 """
 
 from __future__ import annotations

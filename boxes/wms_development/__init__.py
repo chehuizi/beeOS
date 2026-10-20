@@ -17,5 +17,6 @@ from __future__ import annotations
 
 from boxes.wms_development.definition import WMS_DEVELOPMENT_BOX, get_definition
 from boxes.wms_development.runner import RUNNER, WMS_DEVELOPMENT_HANDLERS
+from boxes.wms_development.beeline import WMS_DEVELOPMENT_BEELINE, get_beeline
 
-__all__ = ["WMS_DEVELOPMENT_BOX", "get_definition", "RUNNER", "WMS_DEVELOPMENT_HANDLERS"]
+__all__ = ["WMS_DEVELOPMENT_BOX", "get_definition", "RUNNER", "WMS_DEVELOPMENT_HANDLERS", "WMS_DEVELOPMENT_BEELINE", "get_beeline"]

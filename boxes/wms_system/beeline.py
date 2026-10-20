@@ -1,4 +1,4 @@
-"""beelines.wms_system - WMS System Box 的作业路线
+"""boxes.wms_system - WMS System Box 的作业路线
 
 WMS 系统档案盒——把「真实在跑的那套 WMS 是什么样」写成一份带出处的档案。
 
@@ -26,6 +26,11 @@ v1 的 `system_verify` 名不副实——它既不 verify 也不 observe。
 v2 把它换成 `system_probe`，输出 schema 也从 `schema_system_verification`
 （只有三个计数，看不出验了什么）换成 `schema_system_observation`
 （每条端点带 reached / status_code / envelope_ok / error）。
+
+beeline 跟盒子是 **1:1 且不可分割** 的：它引用的 schema id 全部来自本盒的
+`schemas.py`，每个 op 的 handler 都在本盒的 `runner.py` 里。所以它住在盒子
+里面，而不是仓库顶层一个单独的目录——顶层目录会让人以为存在一种
+「可复用的跨盒作业路线」，而实际上一条都没有。
 """
 
 from __future__ import annotations

@@ -17,5 +17,6 @@ from __future__ import annotations
 
 from boxes.wms_ops.definition import WMS_OPS_BOX, get_definition
 from boxes.wms_ops.runner import RUNNER, WMS_OPS_HANDLERS
+from boxes.wms_ops.beeline import WMS_OPS_BEELINE, get_beeline
 
-__all__ = ["WMS_OPS_BOX", "get_definition", "RUNNER", "WMS_OPS_HANDLERS"]
+__all__ = ["WMS_OPS_BOX", "get_definition", "RUNNER", "WMS_OPS_HANDLERS", "WMS_OPS_BEELINE", "get_beeline"]

@@ -1,4 +1,4 @@
-"""beelines.wms_ops - WMS Ops Box 的作业路线
+"""boxes.wms_ops - WMS Ops Box 的作业路线
 
 WMS 运维盒——管**上线之后**的事：变更审批、发布执行、故障处置、回滚能力、以及把线上真实状态回写进系统档案。
 
@@ -9,6 +9,11 @@ op 链：
 
 **这三个 op 现在还没有实现**（runner 里是桩）。beeline 是声明：它先把
 要走的路线和每一步的数据形状钉住，腿才跟着路走。
+
+beeline 跟盒子是 **1:1 且不可分割** 的：它引用的 schema id 全部来自本盒的
+`schemas.py`，每个 op 的 handler 都在本盒的 `runner.py` 里。所以它住在盒子
+里面，而不是仓库顶层一个单独的目录——顶层目录会让人以为存在一种
+「可复用的跨盒作业路线」，而实际上一条都没有。
 """
 
 from __future__ import annotations

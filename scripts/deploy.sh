@@ -61,15 +61,21 @@ STAGE="$(mktemp -d /tmp/beeos-stage-XXXXXX)"
 trap 'rm -rf "$STAGE" /tmp/beeos-release.tar.gz' EXIT
 tar xzf /tmp/beeos-release.tar.gz -C "$STAGE"
 
+# **先清 __pycache__，再同步**——顺序反了会留下空壳目录：
+# sync 的「删空目录」那一步会跳过含 __pycache__ 的目录
+# （__pycache__ 在保留名单里），所以先清掉它，那一步才看得见「空」。
+
 # 用应用自己的 venv python：服务器的系统 python3 是 3.6，
 # 而 sync 脚本要跑的目录里有 3.12 的包——两者不是一回事。
 PY_BIN="$REMOTE_DIR/.venv/bin/python"
 [ -x "$PY_BIN" ] || PY_BIN=python3
 
+find "$REMOTE_DIR" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+find "$REMOTE_DIR" -name '*.pyc' -type f -delete 2>/dev/null || true
+
 "$PY_BIN" "$STAGE/scripts/_sync_release.py" "$STAGE" "$REMOTE_DIR"
 
 chown -R deploy:deploy "$REMOTE_DIR"
-find "$REMOTE_DIR" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
 systemctl restart "$SERVICE"
 sleep 3

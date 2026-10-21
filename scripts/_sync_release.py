@@ -14,8 +14,6 @@
 （运行时数据目录除外：.venv / logs / data）。
 """
 
-from __future__ import annotations
-
 import filecmp
 import os
 import shutil
@@ -26,16 +24,16 @@ from pathlib import Path
 PRESERVE_DIRS = {".venv", "logs", "data", "__pycache__", ".git"}
 
 
-def should_skip(path: Path, target: Path) -> bool:
+def should_skip(path, target):
     rel = path.relative_to(target)
     return bool(PRESERVE_DIRS & set(rel.parts))
 
 
-def main() -> int:
+def main():
     stage, target = Path(sys.argv[1]), Path(sys.argv[2])
 
     # 目标里多出来的文件 = git 里已经没有的
-    stale: list[Path] = []
+    stale = []
     for path in target.rglob("*"):
         if not path.is_file():
             continue

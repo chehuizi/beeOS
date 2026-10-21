@@ -61,8 +61,12 @@ STAGE="$(mktemp -d /tmp/beeos-stage-XXXXXX)"
 trap 'rm -rf "$STAGE" /tmp/beeos-release.tar.gz' EXIT
 tar xzf /tmp/beeos-release.tar.gz -C "$STAGE"
 
-# sync 脚本随包一起发过去
-python3 "$STAGE/scripts/_sync_release.py" "$STAGE" "$REMOTE_DIR"
+# 用应用自己的 venv python：服务器的系统 python3 是 3.6，
+# 而 sync 脚本要跑的目录里有 3.12 的包——两者不是一回事。
+PY_BIN="$REMOTE_DIR/.venv/bin/python"
+[ -x "$PY_BIN" ] || PY_BIN=python3
+
+"$PY_BIN" "$STAGE/scripts/_sync_release.py" "$STAGE" "$REMOTE_DIR"
 
 chown -R deploy:deploy "$REMOTE_DIR"
 find "$REMOTE_DIR" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true

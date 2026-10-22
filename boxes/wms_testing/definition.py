@@ -57,6 +57,8 @@ WMS_TESTING_BOX = BeeBoxDefinition(
             task_schema="schema_test_task_input",
             beeline_id="beeline_wms_testing_v1",
             beeline_version=1,
+            # 本次履约处理的业务对象标识（归档按它分组）
+            subject_ref_field="requirement_ref",
             trigger=(
                 "开发盒出制品要验收\nOR 发版前跑全量回归\nOR 生产出了单据异常要复现"
             ),

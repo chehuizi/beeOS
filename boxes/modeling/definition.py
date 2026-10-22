@@ -71,6 +71,8 @@ WMS_DESIGN_BOX = BeeBoxDefinition(
             task_schema="schema_business_requirement_set",
             beeline_id="beeline_wms_design_v1",
             beeline_version=1,
+            # 本次履约处理的业务对象标识（归档按它分组）
+            subject_ref_field="set_id",
             trigger=(
                 "仓储主管提交结构化 WMS 需求集（上架 / 拣货 / 盘点 / 波次合并）\n"
                 "OR 货主要求重新出 WMS 模型\n"

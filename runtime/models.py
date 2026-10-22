@@ -173,6 +173,15 @@ class TaskRunIdentity(BaseModel):
     runtime_id: str
     instance_id: str
 
+    # 本次履约处理的业务对象的稳定标识。
+    #
+    # 由盒子在 `TaskDef.subject_ref_field` 里声明，运行时从投料抽取。
+    # 留空 = 这只盒子的履约不针对特定业务对象（小票捕获、档案同步）。
+    #
+    # **它在创建瞬间固化**，跟 payload 一样不可变——它是「这次履约关于谁」的
+    # 事实，不是事后补的标签。归档按它分组。
+    subject_ref: Optional[str] = None
+
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
@@ -269,6 +278,7 @@ def create_task_run(
     beeline_version: int,
     runtime_id: str,
     instance_id: str,
+    subject_ref: Optional[str] = None,
 ) -> TaskRun:
     """工厂函数：创建一个 task run（status=triggered）"""
     identity = TaskRunIdentity(
@@ -280,5 +290,6 @@ def create_task_run(
         beeline_version=beeline_version,
         runtime_id=runtime_id,
         instance_id=instance_id,
+        subject_ref=subject_ref,
     )
     return TaskRun(identity=identity)

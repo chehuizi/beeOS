@@ -57,6 +57,8 @@ WMS_DEVELOPMENT_BOX = BeeBoxDefinition(
             task_schema="schema_dev_task_input",
             beeline_id="beeline_wms_development_v1",
             beeline_version=1,
+            # 本次履约处理的业务对象标识（归档按它分组）
+            subject_ref_field="design_package_ref",
             trigger=(
                 "设计包评审通过要落代码\nOR 线上缺陷要打补丁\nOR 发版前要出可复现的构建产物"
             ),

@@ -57,6 +57,8 @@ WMS_OPS_BOX = BeeBoxDefinition(
             task_schema="schema_ops_task_input",
             beeline_id="beeline_wms_ops_v1",
             beeline_version=1,
+            # 本次履约处理的业务对象标识（归档按它分组）
+            subject_ref_field="ops_task_id",
             trigger=(
                 "要发版走变更审批\nOR 生产告警要处置\nOR 要回滚上一版\nOR 线上拓扑变了要回写系统档案"
             ),

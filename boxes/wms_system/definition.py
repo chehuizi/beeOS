@@ -86,6 +86,9 @@ WMS_SYSTEM_BOX = BeeBoxDefinition(
             task_schema="schema_system_probe_input",
             beeline_id="beeline_wms_system_v2",
             beeline_version=2,
+            # **不声明 subject_ref_field**：这只盒子**就是**档案本身。
+            # 它不针对某个业务对象——它描述整个系统。
+            # （它一次同步的产出是全量观测，不属于任何一个需求单元。）
             trigger=(
                 "发版后同步系统档案\nOR 新增/下线一个服务要更新接口清单\n"
                 "OR 架构评审前拉一份当前可观测状态\nOR 发现档案跟真实部署对不上"

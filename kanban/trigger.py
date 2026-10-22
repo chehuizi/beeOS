@@ -899,6 +899,39 @@ def trigger_task(
             + "; ".join(contract_errors)
         )
 
+    # ===== 业务对象标识：按盒子的声明从投料抽取 =====
+    # 声明了就必须真的给，缺 → 拒绝这次履约。
+    # 不静默降级成空：一条「归不到任何工作单元」的履约在归档里等于凭空消失，
+    # 而没人会注意到少了一条——那正是「算了却看不见」那一族病。
+    subject_ref = None
+    if task.subject_ref_field:
+        if task.subject_ref_field not in {f.name for f in schema.fields}:
+            raise TriggerError(
+                f"box {box_id!r} task {task_type!r} declares "
+                f"subject_ref_field={task.subject_ref_field!r}, but that field "
+                f"is not in task_schema {task.task_schema!r} "
+                f"(fields: {[f.name for f in schema.fields]})"
+            )
+        raw = payload.get(task.subject_ref_field)
+        if raw is None or not str(raw).strip():
+            raise TriggerError(
+                f"box {box_id!r} task {task_type!r} requires "
+                f"{task.subject_ref_field!r} in the payload — it identifies "
+                f"which business object this fulfillment is about. "
+                f"Got: {raw!r}. 缺它，这次履约在归档里就归不到任何工作单元"
+            )
+        # 值必须是 **id 字符串**，不能是整份对象。
+        # `ref:` 类型在 runtime/contract.py 里不做深校验，所以传什么都能过——
+        # 那就把「必须是 id」这条要求放在这里显式拦住，
+        # 否则 subject_ref 会变成一份对象的 repr，归档里出现 `{'package_id': ...}` 这种东西。
+        if not isinstance(raw, str):
+            raise TriggerError(
+                f"box {box_id!r} task {task_type!r}: {task.subject_ref_field!r} "
+                f"must be an id string, got {type(raw).__name__}. "
+                f"它标的是「这次履约关于哪个业务对象」，不是那份对象本身"
+            )
+        subject_ref = raw.strip()
+
     task_run = create_task_run(
         originator=originator,
         intent=task_type,
@@ -908,6 +941,7 @@ def trigger_task(
         beeline_version=beeline.version,
         runtime_id="runtime_kanban",
         instance_id="instance_kanban",
+        subject_ref=subject_ref,
     )
     runner = RUNNER_REGISTRY.get(box_id)
     if runner is None:

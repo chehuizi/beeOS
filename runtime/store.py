@@ -109,6 +109,9 @@ def task_run_to_record(
         "beeline_version": task_run.identity.beeline_version,
         "intent": task_run.identity.intent,
         "originator": task_run.identity.originator,
+        # 业务对象标识：归档按它把履约归到工作单元（需求 / 运维任务）。
+        # 索引字段——它在 payload 里刨不出来，所以必须是记录的一等公民。
+        "subject_ref": task_run.identity.subject_ref,
         "status": task_run.status.value,
         "acceptance_status": acceptance_status,
         "rejection_class": rejection_class,
@@ -191,6 +194,33 @@ class TaskRunStore:
             if r.get("task_run_id") == task_run_id:
                 return r
         return None
+
+    def list_by_subject(
+        self,
+        subject_ref: str,
+        limit: int = 200,
+        *,
+        box_id: Optional[str] = None,
+        accepted_only: bool = False,
+    ) -> list[dict[str, Any]]:
+        """某个业务对象关联的所有履约（倒序）
+
+        归档按「工作单元」分组变化时用这个：一个需求集（set_id），
+        一路串起设计、开发、测试、分析那几次履约。
+
+        `accepted_only=True` 是归档写回的门槛：**只有验过的才进档案**。
+        不验就写回去，等于把「说过的东西」当成「事实」记下来——
+        档案是下一个需求的地面，地面上的错会一路传下去。
+        """
+        records = [
+            r for r in self._cache
+            if r.get("subject_ref") == subject_ref
+        ]
+        if box_id is not None:
+            records = [r for r in records if r["box_id"] == box_id]
+        if accepted_only:
+            records = [r for r in records if r.get("acceptance_status") == "accepted"]
+        return sorted(records, key=lambda r: r["created_at"], reverse=True)[:limit]
 
     def list_artifacts(
         self,

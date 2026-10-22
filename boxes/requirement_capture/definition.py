@@ -73,6 +73,11 @@ WMS_REQUIREMENT_BOX = BeeBoxDefinition(
             task_schema="schema_business_narrative",
             beeline_id="beeline_wms_requirement_v1",
             beeline_version=1,
+            # **不声明 subject_ref_field**：这只盒子**产生**业务对象（需求集），
+            # 不消费。对象 id 是这次履约的**产出**，不是投料给的——
+            # 自由文本投料（/api/structure）根本没有 set_id，
+            # 把它设成必填会把那条路堵死。
+            # 归档按需求集分组时，需求盒这一次履约靠「产出的 set_id」认领。
             # **全注册表里唯一吃业务自然语言的盒子**（直到下一只盒子
             # 也需要接人话为止）。显式声明，不靠投料 schema 的形状推：
             # 详见 core.models.TaskDef.accepts_free_text。

@@ -75,6 +75,8 @@ WMS_ANALYSIS_BOX = BeeBoxDefinition(
             task_schema="schema_analysis_input",
             beeline_id="beeline_wms_analysis_v1",
             beeline_version=1,
+            # 本次履约处理的业务对象标识（归档按它分组）
+            subject_ref_field="requirement_ref",
             trigger=(
                 "需求上线满一个观察窗口\n"
                 "OR 某条需求的关键指标连续偏离预期\n"

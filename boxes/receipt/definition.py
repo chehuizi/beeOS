@@ -160,6 +160,9 @@ RECEIPT_CAPTURE_BOX = BeeBoxDefinition(
             task_schema="schema_receipt_photo",
             beeline_id="beeline_receipt_capture_v1",
             beeline_version=1,
+            # **不声明 subject_ref_field**：小票没有预存 id——
+            # 它的标识是这次履约**产出**的（package_id 等），
+            # 投料里只有一张照片和一句商家提示，指不出「这是哪张单子」。
             trigger=(
                 "财务 / 店长拍一张收银小票要录进账\n"
                 "OR 批量报销要先把小票转成结构化明细\n"

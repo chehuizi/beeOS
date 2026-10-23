@@ -17,9 +17,9 @@ from __future__ import annotations
 from typing import Any
 
 from boxes.modeling.domain import (
-    WMS_CONSTRAINTS,
-    WMS_ENTITIES,
-    label_of,
+    kind_category,
+    label_for_kind,
+    statement_for_kind,
 )
 from core.models import NOT_APPLICABLE
 from runtime.runner import HandlerRunner
@@ -140,9 +140,34 @@ def _simulate_generate_model_elements(input_data: dict[str, Any]) -> dict[str, A
         """同一个需求绑到多个概念时，元素 id 要唯一"""
         return f"{prefix}_{rid}" if index == 0 else f"{prefix}_{rid}_{index}"
 
+    def _bindings_for(rid: str, k: dict[str, str] | None) -> list[dict[str, str]]:
+        """这个模型元素背后的全部绑定（带证据）
+
+        一个元素可能同时带好几个概念（库存要按 SKU 和库位分别记账），
+        所以绑定是**列表**——`wms_kind` 只是它的主项。
+        """
+        if k is not None:
+            return [dict(k)]
+        return [dict(b) for b in bindings_of(rid)]
+
     def _kinds_or_placeholder(rid: str) -> list[dict[str, str] | None]:
         ks = kinds_of(rid)
         return list(ks) if ks else [None]
+
+    def bindings_of(rid: str) -> list[dict[str, str]]:
+        """这条需求绑到的 WMS 概念（每条带原文证据）"""
+        return bindings.get(rid, [])
+
+    def primary(rid: str, category: str) -> str | None:
+        """这条需求在指定类别上的主绑定（没有则 None）
+
+        **按概念类别取，不按需求类型取**——需求类型是位置推出来的，
+        概念类别是概念自己的性质。
+        """
+        for b in bindings_of(rid):
+            if kind_category(b["kind"]) == category:
+                return b["kind"]
+        return None
 
     # 实体：一条需求可能同时提到几个 WMS 概念（库存要按 SKU 和库位分别记账）
     # → 每个概念一个模型元素，wms_kind 指明是哪个。
@@ -154,6 +179,7 @@ def _simulate_generate_model_elements(input_data: dict[str, Any]) -> dict[str, A
                 "name": name_of(rid, "Entity"),
                 "pattern": DDD_PATTERNS["object"][0],
                 "wms_kind": k["kind"] if k else None,
+                "wms_bindings": _bindings_for(rid, k),
                 "trace_to": rid,
             })
 
@@ -169,7 +195,10 @@ def _simulate_generate_model_elements(input_data: dict[str, Any]) -> dict[str, A
                 "condition": f"<condition for {rid}>",
                 "action": f"<action for {rid}>",
                 "pattern": DDD_PATTERNS["rule"][0],
-                "wms_constraint": k["kind"] if k else None,
+                # 规则上的 WMS 约束 = **约束类别**的绑定。
+                # 需求被放在流程上（位置=process）时，它讲的仍可能是一条约束。
+                "wms_constraint": primary(rid, "constraint"),
+                "wms_bindings": _bindings_for(rid, k),
                 "trace_to": rid,
             })
 
@@ -183,6 +212,7 @@ def _simulate_generate_model_elements(input_data: dict[str, Any]) -> dict[str, A
                 "name": name_of(rid, "Process"),
                 "pattern": DDD_PATTERNS["process"][0],
                 "wms_kind": k["kind"] if k else None,
+                "wms_bindings": _bindings_for(rid, k),
                 "trace_to": rid,
             })
 
@@ -198,6 +228,7 @@ def _simulate_generate_model_elements(input_data: dict[str, Any]) -> dict[str, A
                 "target": 0.85,
                 "pattern": DDD_PATTERNS["metric"][0],
                 "wms_kind": k["kind"] if k else None,
+                "wms_bindings": _bindings_for(rid, k),
                 "trace_to": rid,
             })
 
@@ -209,6 +240,7 @@ def _simulate_generate_model_elements(input_data: dict[str, Any]) -> dict[str, A
                 "name": name_of(rid, "Event"),
                 "pattern": DDD_PATTERNS["event"][0],
                 "wms_kind": k["kind"] if k else None,
+                "wms_bindings": _bindings_for(rid, k),
                 "trace_to": rid,
             })
 
@@ -317,29 +349,42 @@ def _simulate_check_consistency(input_data: dict[str, Any]) -> dict[str, Any]:
     # 不是 entity 数量。实体多不等于覆盖全——一个 SKU 实体挂在一条需求上，
     # 另外九条没人管，照样该红。
     modelable_ids = input_data.get("modelable_ids", [])
-    bound_by_entity = {
-        e.get("trace_to") for e in entities if e.get("wms_kind") and e.get("trace_to")
-    }
-    bound_by_rule = {
-        r.get("trace_to") for r in rules if r.get("wms_constraint") and r.get("trace_to")
-    }
-    # 指标也算绑定。少了这一支，「拣货准确率 99.5%」这种清清楚楚的
-    # WMS 需求会因为类型是 metric 而判红——判据假定了需求的形状。
-    bound_by_metric = {
-        m.get("trace_to") for m in metrics if m.get("wms_kind") and m.get("trace_to")
-    }
-    bound_by_process = {
-        pr.get("trace_to") for pr in processes if pr.get("wms_kind") and pr.get("trace_to")
-    }
-    bound_by_event = {
-        ev.get("trace_to") for ev in events if ev.get("wms_kind") and ev.get("trace_to")
-    }
-    bound = (bound_by_entity | bound_by_rule | bound_by_metric
-             | bound_by_process | bound_by_event)
+
+    # 绑定的分母是**可建模需求**，不是元素数量。
+    # 「绑上了」= 这条需求至少有一个 WMS 概念绑定（带证据）。
+    #
+    # **按绑定算，不按 wms_kind 字段算**：一条需求可能被放在流程上
+    # （位置=process），但它讲的是一条 WMS 约束——那种情况下它的
+    # wms_kind 是 fefo，而 wms_constraint 是 None（那个字段只给规则元素）。
+    # 只看 wms_constraint 会漏掉它，只看 wms_kind 又会把非规则元素算进来。
+    all_elements = list(entities) + list(rules) + list(processes) \
+        + list(metrics) + list(events)
+    bound = set()
+    constraint_bound = set()
+    metric_bound = set()
+    for el in all_elements:
+        bs = el.get("wms_bindings") or []
+        if not bs:
+            continue
+        rid = el.get("trace_to")
+        if not rid:
+            continue
+        bound.add(rid)
+        for b in bs:
+            cat = kind_category(b.get("kind"))
+            if cat == "constraint":
+                constraint_bound.add(rid)
+            elif cat == "metric":
+                metric_bound.add(rid)
     unbound = [rid for rid in modelable_ids if rid not in bound]
 
     # 规则侧：至少有一条真的约束了 WMS 业务。
-    bound_rules = [r for r in rules if r.get("wms_constraint")]
+    # **按概念类别算**（哪条需求绑到了约束类概念），
+    # 不按「元素是不是 rule 类型」算——需求被放在流程上也是一条约束。
+    bound_rules = [
+        b for el in all_elements for b in (el.get("wms_bindings") or [])
+        if kind_category(b.get("kind")) == "constraint"
+    ]
 
     # ---- 三态，不是两态 ----
     #
@@ -351,7 +396,7 @@ def _simulate_check_consistency(input_data: dict[str, Any]) -> dict[str, Any]:
     #
     # 判据：没有任何 rule 型需求 → 这条判据**用不上**（n/a），
     # 不是「没过」。n/a 不算失败但也不算通过，看板分开显示。
-    if rules:
+    if constraint_bound:
         wms_rule_binding = len(bound_rules) > 0
     else:
         wms_rule_binding = NOT_APPLICABLE
@@ -390,7 +435,11 @@ def _simulate_check_consistency(input_data: dict[str, Any]) -> dict[str, Any]:
         "__broken_references__": broken,
         "__structural_compliance__": not violations,
         "__structure_violations__": violations,
-        "__metrics_defined__": len(metrics) > 0,
+        # 「模型里定义了指标」= **有需求绑到了 WMS 指标概念**。
+        # 以前是 len(metrics) > 0（元素类型是 metric 的个数）——
+        # 那是位置推断的结果：需求被放在流程上时，模型里就一个指标都没有，
+        # 而模型其实谈的就是「临期 SKU 数」。判据在假设需求的形状。
+        "__metrics_defined__": len(metric_bound) > 0,
         "__metrics_without_target__": metrics_without_target,
     }
 
@@ -440,6 +489,33 @@ def _simulate_generate_evidence(input_data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _domain_rows(input_data: dict[str, Any], category: str) -> list[dict[str, Any]]:
+    """WMS 域摘要里的某类概念行（按**概念种类**筛，不按元素类型筛）"""
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for elist in (input_data.get("entities", []), input_data.get("rules", []),
+                  input_data.get("processes", []), input_data.get("metrics", []),
+                  input_data.get("events", [])):
+        for el in elist:
+            for b in el.get("wms_bindings") or []:
+                kind = b.get("kind")
+                if kind_category(kind) != category:
+                    continue
+                key = (kind, el.get("trace_to", ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append({
+                    "kind": kind,
+                    "label": label_for_kind(kind),
+                    "statement": statement_for_kind(kind),
+                    "name": el.get("name", ""),
+                    "trace_to": el.get("trace_to", ""),
+                    "evidence": b.get("evidence", ""),
+                })
+    return rows
+
+
 def _simulate_package_model(input_data: dict[str, Any]) -> dict[str, Any]:
     """合并成 BusinessModelPackage（task run result 顶层）
 
@@ -466,26 +542,17 @@ def _simulate_package_model(input_data: dict[str, Any]) -> dict[str, Any]:
         "wms_rule_binding": input_data.get("wms_rule_binding", False),
         # WMS 域摘要：**判了就要看得见**。不带出来的话，看板上只有
         # 一个红叉，读者不知道模型里到底认出了哪些 WMS 概念。
+        #
+        # **按概念种类分组，不按元素类型分组**：
+        # 一条需求被放在流程上（位置=process），它讲的仍可能是一条约束——
+        # 那时候它在 elements 里的位置是 domain_services，但它讲的是 fefo。
+        # 按位置分组的话，读者会以为模型里没有这条约束。
         "wms_domain": {
             "domain": "WMS",
-            "entities": [
-                {
-                    "kind": e.get("wms_kind"),
-                    "label": label_of(e.get("wms_kind"), WMS_ENTITIES),
-                    "name": e.get("name", ""),
-                    "trace_to": e.get("trace_to", ""),
-                }
-                for e in input_data.get("entities", []) if e.get("wms_kind")
-            ],
-            "constraints": [
-                {
-                    "kind": r.get("wms_constraint"),
-                    "label": label_of(r.get("wms_constraint"), WMS_CONSTRAINTS),
-                    "statement": WMS_CONSTRAINTS.get(r.get("wms_constraint"), {}).get("statement", ""),
-                    "trace_to": r.get("trace_to", ""),
-                }
-                for r in input_data.get("rules", []) if r.get("wms_constraint")
-            ],
+            "entities": _domain_rows(input_data, "entity"),
+            "constraints": _domain_rows(input_data, "constraint"),
+            "metrics": _domain_rows(input_data, "metric"),
+            "reports": _domain_rows(input_data, "report"),
             "bound_requirement_count": input_data.get("bound_modelable_count", 0),
             "modelable_requirement_count": len(input_data.get("modelable_ids", [])),
         },
@@ -508,7 +575,18 @@ def _simulate_package_model(input_data: dict[str, Any]) -> dict[str, Any]:
         # 「声明了却拿不到」——schema 里写着有，产出里没有，按 schema 生成的
         # 消费方永远拿不到判据明细。红了也不知道红在哪条需求上。
         # evidence 是 evidence_generator 那一步整个搬过来，不是重算。
+        # **evidence 是证据腿的产出整个搬过来**，不是手挑几个字段。
+        #
+        # 以前这里手挑了 8 个字段，把 `set_id` / `business_goal` /
+        # `requirement_count` 漏在外面——而 `schema_model_evidence` 声明
+        # 它们是必填。于是**产出的模型包不满足它自己声明的 result schema**
+        # （12 条契约错），而没人看见（`ref:` 以前不做深校验）。
+        #
+        # 「挑几个字段」= 挑的时候就会漏。整份搬过来就不会。
         "evidence": {
+            "set_id": input_data.get("set_id", ""),
+            "business_goal": input_data.get("business_goal", ""),
+            "requirement_count": input_data.get("requirement_count", 0),
             "requirement_coverage": input_data.get("requirement_coverage", 0.0),
             "rule_consistency": input_data.get("rule_consistency", True),
             "reference_integrity": input_data.get("reference_integrity", True),

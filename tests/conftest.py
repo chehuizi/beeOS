@@ -70,6 +70,7 @@ def stub_wms_binder(prompt: str, **kw) -> dict:
         WMS_CONSTRAINTS,
         WMS_ENTITIES,
         WMS_METRIC_KEYWORDS,
+        WMS_REPORTS,
         requirement_sentences,
     )
 
@@ -79,12 +80,23 @@ def stub_wms_binder(prompt: str, **kw) -> dict:
         line = line.strip()
         if not line.startswith("- id="):
             continue
-        m = re.match(r"- id=(\S+)\s+type=(\S+)\s+描述：(.*)", line)
+        m = re.match(r"- id=(\S+)\s+type=([^\s（(]+)", line)
         if not m:
             continue
-        rid, rtype, description = m.group(1), m.group(2), m.group(3)
+        rid, rtype = m.group(1), m.group(2)
+        # 描述在「描述：」之后（类型后面可能带位置提示，别把它吃进描述里）
+        desc_m = re.search(r"描述：(.*)$", line)
+        description = desc_m.group(1) if desc_m else ""
 
         kinds = []
+        # 报表概念**不看类型**——「临期 SKU 要能在库存看板看到」这句话
+        # 放在需求盒的哪个位置上都不影响它讲的是一张报表。
+        # （真实路径里类型只是提示，桩也得跟上，否则桩比产品还严。）
+        for kind, spec in WMS_REPORTS.items():
+            _, evidence = _match_keyword(description, spec["keywords"])
+            if evidence:
+                kinds.append({"kind": kind, "evidence": evidence})
+                break
         if rtype in ("object", "process", "event"):
             for kind, spec in WMS_ENTITIES.items():
                 _, evidence = _match_keyword(description, spec["keywords"])

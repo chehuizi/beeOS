@@ -366,6 +366,23 @@ class TestModelingMockSemantics:
             {"set_id": set_id, "business_goal": "g", "requirements": requirements},
         )
 
+    def test_the_produced_package_satisfies_its_own_result_schema(self):
+        """产出的模型包必须满足 result schema 声明的形状
+
+        以前**不满足**（12 条契约错）：
+        - `evidence` 是手挑的 8 个字段，把 `set_id` / `business_goal` /
+          `requirement_count` 漏在外面，而 schema 声明它们必填
+        - `model_elements` 装的是 DDD 五组，schema 声明的是 op 产出的形状
+
+        而没人看见——`ref:` 以前不做深校验，产出从来不被自己的契约检查过。
+        「挑几个字段」= 挑的时候就会漏；整份搬过来就不会。
+        """
+        box = get_definition()
+        schema = box.get_schema(box.result.result_schema)
+        task_run = self._run(_sample_requirement_set()["requirements"])
+        errors = validate_payload(task_run.result, schema, schemas=box.schemas)
+        assert errors == [], f"产出的模型包不满足自己的 result schema：{errors}"
+
     def test_classify_by_declared_type_not_id_suffix(self):
         """分类按声明的 requirement_type，id 尾号不影响分类"""
         task_run = self._run([
@@ -494,7 +511,11 @@ class TestModelingMockSemantics:
         # 事件可以随便叫，盒子就退回通用建模了。
         assert events == [
             {"event_id": "evt_r_evt", "name": "上架已完成",
-             "pattern": "domain_event", "wms_kind": "inbound", "trace_to": "r_evt"}
+             "pattern": "domain_event", "wms_kind": "inbound",
+             # 绑定是**列表**（带证据）：wms_kind 只是主项。
+             # 一个元素可能同时绑好几个 WMS 概念。
+             "wms_bindings": [{"kind": "inbound", "evidence": "上架"}],
+             "trace_to": "r_evt"}
         ]
         assert task_run.result["requirement_coverage"] == 100.0
         model = task_run.result["model_elements"]

@@ -37,22 +37,29 @@ from boxes.modeling.domain import (
     WMS_CONSTRAINTS,
     WMS_ENTITIES,
     WMS_METRICS,
+    WMS_REPORTS,
 )
 
 # ============================================================
 # 概念目录：给 LLM 看的候选集（**只有这个，没有别的**）
 # ============================================================
 #
-# 需求类型 → 允许的概念类别。**类别由声明的 requirement_type 定，不由 LLM 选**：
-# 一条 rule 只能绑约束，一条 metric 只能绑指标。
-# 这是机械结构——类型是声明的，就不该让模型去猜它属于哪一类。
+# 需求类型 → 概念类别（**只是给 LLM 的提示，不是限制**）
+#
+# 需求盒的 requirement_type 是**位置**推出来的（图上的节点→process、
+# 边的守卫→rule、节点的 measures→metric），不是语义判断。
+#
+# 真 LLM 实测过：业务方说「同一个 SKU 必须先出快过期的批次」，需求盒把它
+# 放在节点上（类型 = process），而设计盒正确地认出了 `fefo`。
+# **拿位置标签去否决语义判断，等于把对的答案改成错的**——所以这里只提示，
+# 不限制。概念类别由**概念本身**决定（见 domain.kind_category）。
 
-_TYPE_CATEGORY: dict[str, str] = {
-    "object": "entity",
-    "process": "entity",
-    "event": "entity",
-    "rule": "constraint",
-    "metric": "metric",
+_TYPE_HINT: dict[str, str] = {
+    "object": "实体",
+    "process": "流程",
+    "event": "事件",
+    "rule": "规则",
+    "metric": "指标",
 }
 
 
@@ -78,6 +85,16 @@ def _catalog_for(category: str) -> list[dict[str, Any]]:
             }
             for kind, spec in WMS_CONSTRAINTS.items()
         ]
+    if category == "report":
+        return [
+            {
+                "kind": kind,
+                "label": spec["label"],
+                "statement": spec["statement"],
+                "examples": spec["keywords"],
+            }
+            for kind, spec in WMS_REPORTS.items()
+        ]
     if category == "metric":
         return [
             {
@@ -101,11 +118,14 @@ def _kind_exists(kind: str) -> bool:
     return (
         kind in WMS_ENTITIES
         or kind in WMS_CONSTRAINTS
+        or kind in WMS_REPORTS
         or any(m["name"] == kind for m in WMS_METRICS)
     )
 
 
-_CATEGORY_LABEL = {"entity": "实体", "constraint": "约束", "metric": "指标"}
+_CATEGORY_LABEL = {
+    "entity": "实体", "constraint": "约束", "metric": "指标", "report": "报表",
+}
 
 
 # ============================================================
@@ -129,6 +149,9 @@ _BIND_PROMPT = """你是 WMS（仓储管理）领域建模助手。下面每条�
 ]}}
 
 规则：
+0. 每条需求后面的「位置」只是**参考**，不是限制——你要判断的是
+   「这句话讲的是哪个 WMS 概念」，不是「它出现在流程图的哪个位置」。
+   一句被放在流程里的规则，照样可以是一条 WMS 约束
 1. `kind` 必须逐字来自上面的概念 id。**自造 id 会被判为幻觉，作废**
 2. `evidence` 必须**逐字**出现在那条需求的描述里——不能改写、不能翻译、不能补充说明
 3. 一条需求可能同时对应多个概念（比如一句话里藏了两件事）
@@ -139,7 +162,7 @@ _BIND_PROMPT = """你是 WMS（仓储管理）领域建模助手。下面每条�
 
 def _build_prompt(requirements: list[dict[str, Any]]) -> str:
     catalog_lines: list[str] = []
-    for category in ("entity", "constraint", "metric"):
+    for category in ("entity", "constraint", "metric", "report"):
         items = _catalog_for(category)
         if not items:
             continue
@@ -153,9 +176,10 @@ def _build_prompt(requirements: list[dict[str, Any]]) -> str:
 
     req_lines = []
     for r in requirements:
+        rtype = r.get("requirement_type", "")
         req_lines.append(
             f"- id={r.get('requirement_id', '')} "
-            f"type={r.get('requirement_type', '')} "
+            f"type={rtype}（它在业务流里的位置：{_TYPE_HINT.get(rtype, rtype)}） "
             f"描述：{r.get('description', '')}"
         )
     return _BIND_PROMPT.format(catalog=catalog, requirements="\n".join(req_lines))
@@ -219,8 +243,6 @@ def bind_requirements(
             # LLM 编了一个不存在的需求 id → 幻觉，丢掉（不点名到某条需求上）
             continue
         description = str(req.get("description") or "")
-        allowed = _catalog_for(_TYPE_CATEGORY.get(req.get("requirement_type", ""), ""))
-        allowed_kinds = {c["kind"] for c in allowed}
 
         kinds = entry.get("kinds")
         if kinds is None:
@@ -241,15 +263,6 @@ def bind_requirements(
                 errors.append({
                     "requirement_id": rid,
                     "reason": f"概念 {kind!r} 不在 WMS 概念表里（自造的概念）",
-                })
-                continue
-            if kind not in allowed_kinds:
-                errors.append({
-                    "requirement_id": rid,
-                    "reason": (
-                        f"概念 {kind!r} 不属于 {req.get('requirement_type')!r} 类型"
-                        f"允许的类别"
-                    ),
                 })
                 continue
             if not evidence or evidence not in description:

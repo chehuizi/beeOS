@@ -23,14 +23,33 @@ boxes.modeling.schemas - 业务建模盒子的业务 schemas
 
 from __future__ import annotations
 
+from core.models import FieldDef, SchemaDef
+
 from boxes.modeling.domain import (
     WMS_CONSTRAINT_KINDS,
     WMS_ENTITY_KINDS,
     WMS_METRIC_KEYWORDS,
+    WMS_REPORT_KINDS,
 )
 
 WMS_METRIC_KINDS: tuple[str, ...] = tuple(WMS_METRIC_KEYWORDS)
-from core.models import FieldDef, SchemaDef
+
+# **全部 WMS 概念**（实体 / 约束 / 指标 / 报表）。
+#
+# 以前每个元素类型的 wms_kind 各自限死一类（实体只能填实体、规则只能填约束），
+# 那是拿**位置**（需求在流程图里的位置）去限定**语义**（这句话讲的是哪个
+# WMS 概念）。真 LLM 实测：业务方说「同一个 SKU 必须先出快过期的批次」，
+# 需求盒把它放在节点上（位置=process），而设计盒正确地认出了 `fefo`——
+# 位置标签不该否决语义判断，所以枚举放开成全量。
+#
+# 报表也算一类：业务方说「临期 30 天内 SKU 要能在库存看板看到」，
+# 讲的是 `inventory_dashboard` 这个报表，不是实体也不是指标。
+WMS_ALL_KINDS: tuple[str, ...] = (
+    tuple(WMS_ENTITY_KINDS)
+    + tuple(WMS_CONSTRAINT_KINDS)
+    + tuple(WMS_METRIC_KINDS)
+    + tuple(WMS_REPORT_KINDS)
+)
 
 
 # ============================================================
@@ -159,9 +178,145 @@ CLASSIFIED_REQUIREMENTS = SchemaDef(
 )
 
 
+# ============================================================
+# 模型元素的形状（**一份定义，两处引用**）
+# ============================================================
+#
+# 以前 `schema_model_elements`（op 产出）和模型包内嵌的 `model_elements`
+# 是两个不同的形状，**而包声明的是前者、装的是后者**——
+# 产出的包不满足它自己声明的 result schema，12 条契约错没人看见
+# （`ref:` 以前不做深校验，所以谁都没发现）。
+#
+# 现在：元素 item 只定义一次，op 产出和模型包共用；包用 DDD 五组的名字
+# （specifications / domain_services…），op 用流程图的名字（rules / processes…），
+# **但 item 的形状是同一份**。
+
+_WMS_BINDINGS = FieldDef(
+    name="wms_bindings",
+    type="array",
+    required=False,
+    items=FieldDef(
+        name="binding",
+        type="object",
+        properties=[
+            FieldDef(name="kind", type="string"),
+            # 证据必须逐字来自需求描述——机械层校验过，这里是给人看的
+            FieldDef(name="evidence", type="string"),
+        ],
+    ),
+    description="这个元素绑到的 WMS 概念（每条带原文证据）；wms_kind 只是主项",
+)
+
+ENTITY_ITEM = FieldDef(
+    name="entity",
+    type="object",
+    properties=[
+        FieldDef(name="entity_id", type="string"),
+        FieldDef(name="name", type="string"),
+        FieldDef(name="pattern", type="enum", values=list(MODEL_PATTERNS)),  # entity
+        # **这个盒子是 WMS 建模盒**：元素必须说得出自己是 WMS 的
+        # 哪个概念。说不出（null）就不算 WMS 模型的一分子。
+        FieldDef(
+            name="wms_kind",
+            type="enum",
+            values=list(WMS_ALL_KINDS) + [None],
+            required=False,
+            description="WMS 领域概念类型；认不出填 null（会被 wms_binding 判红）",
+        ),
+        _WMS_BINDINGS,
+        FieldDef(name="trace_to", type="string"),  # 关联 requirement_id
+    ],
+)
+
+EVENT_ITEM = FieldDef(
+    name="event",
+    type="object",
+    properties=[
+        FieldDef(name="event_id", type="string"),
+        FieldDef(name="name", type="string"),
+        FieldDef(name="pattern", type="enum", values=list(MODEL_PATTERNS)),  # domain_event
+        FieldDef(
+            name="wms_kind",
+            type="enum",
+            values=list(WMS_ALL_KINDS) + [None],
+            required=False,
+            description="这个事件在 WMS 里是哪个概念的变动；认不出填 null",
+        ),
+        _WMS_BINDINGS,
+        FieldDef(name="trace_to", type="string"),
+    ],
+)
+
+RULE_ITEM = FieldDef(
+    name="rule",
+    type="object",
+    properties=[
+        FieldDef(name="rule_id", type="string"),
+        FieldDef(name="name", type="string"),
+        FieldDef(name="condition", type="string"),
+        FieldDef(name="action", type="string"),
+        FieldDef(name="pattern", type="enum", values=list(MODEL_PATTERNS)),  # specification
+        # 「当库存 > 0 时…」是通用规则；「同一 SKU 同库位不可重复
+        # 占用」才是 WMS 规则。声明了约束的才算数——这条差别
+        # wms_rule_binding 判据能数得出来。
+        FieldDef(
+            name="wms_constraint",
+            type="enum",
+            values=list(WMS_CONSTRAINT_KINDS) + [None],
+            required=False,
+            description="约束的 WMS 业务类型；不是 WMS 约束填 null",
+        ),
+        _WMS_BINDINGS,
+        FieldDef(name="trace_to", type="string"),
+    ],
+)
+
+PROCESS_ITEM = FieldDef(
+    name="process",
+    type="object",
+    properties=[
+        FieldDef(name="process_id", type="string"),
+        FieldDef(name="name", type="string"),
+        FieldDef(name="pattern", type="enum", values=list(MODEL_PATTERNS)),  # domain_service
+        FieldDef(
+            name="wms_kind",
+            type="enum",
+            values=list(WMS_ALL_KINDS) + [None],
+            required=False,
+            description="这条流程动的 WMS 概念；不是 WMS 流程填 null",
+        ),
+        _WMS_BINDINGS,
+        FieldDef(name="trace_to", type="string"),
+    ],
+)
+
+METRIC_ITEM = FieldDef(
+    name="metric",
+    type="object",
+    properties=[
+        FieldDef(name="metric_id", type="string"),
+        FieldDef(name="name", type="string"),
+        FieldDef(name="target", type="number"),
+        FieldDef(name="pattern", type="enum", values=list(MODEL_PATTERNS)),  # domain_metric（扩展元素）
+        # 指标型需求也得能声明它是哪个 WMS 指标——
+        # 「拣货准确率 99.5%」是条 metric 类型的需求，
+        # 只因为类型不是 object 就判它「没绑上 WMS」是判据在犯病
+        FieldDef(
+            name="wms_kind",
+            type="enum",
+            values=list(WMS_ALL_KINDS) + [None],
+            required=False,
+            description="WMS 概念名；不是 WMS 指标填 null",
+        ),
+        _WMS_BINDINGS,
+        FieldDef(name="trace_to", type="string"),
+    ],
+)
+
+
 MODEL_ELEMENTS = SchemaDef(
     id="schema_model_elements",
-    description="生成的模型元素（DDD 战术设计：实体 / 规格 / 领域服务 / 领域事件 / 领域指标）",
+    description="生成的模型元素（op 产出：流程图视角的实体 / 规则 / 流程 / 指标 / 事件）",
     fields=[
         FieldDef(name="set_id", type="string"),
         FieldDef(name="business_goal", type="string"),
@@ -172,122 +327,39 @@ MODEL_ELEMENTS = SchemaDef(
             type="array",
             items=FieldDef(name="id", type="string"),
         ),
+        FieldDef(name="entities", type="array", items=ENTITY_ITEM),
+        FieldDef(name="events", type="array", items=EVENT_ITEM),
+        FieldDef(name="rules", type="array", items=RULE_ITEM),
+        FieldDef(name="processes", type="array", items=PROCESS_ITEM),
+        FieldDef(name="metrics", type="array", items=METRIC_ITEM),
+        # 绑定作废的原因（自造概念 / 证据不是原文）——判了就要看得见
         FieldDef(
-            name="entities",
+            name="binding_errors",
             type="array",
+            required=False,
             items=FieldDef(
-                name="entity",
+                name="binding_error",
                 type="object",
                 properties=[
-                    FieldDef(name="entity_id", type="string"),
-                    FieldDef(name="name", type="string"),
-                    FieldDef(name="pattern", type="enum", values=list(MODEL_PATTERNS)),  # entity
-                    # **这个盒子是 WMS 建模盒**：实体必须说得出自己是 WMS 的
-                    # 哪个概念。说不出（null）就不算 WMS 模型的一分子。
-                    FieldDef(
-                        name="wms_kind",
-                        type="enum",
-                        values=list(WMS_ENTITY_KINDS) + [None],
-                        required=False,
-                        description="WMS 领域实体类型；认不出填 null（会被 wms_binding 判红）",
-                    ),
-                    FieldDef(name="trace_to", type="string"),  # 关联 requirement_id
+                    FieldDef(name="requirement_id", type="string"),
+                    FieldDef(name="reason", type="string"),
                 ],
             ),
         ),
-        FieldDef(
-            name="events",
-            type="array",
-            items=FieldDef(
-                name="event",
-                type="object",
-                properties=[
-                    FieldDef(name="event_id", type="string"),
-                    FieldDef(name="name", type="string"),
-                    FieldDef(name="pattern", type="enum", values=list(MODEL_PATTERNS)),  # domain_event
-                    FieldDef(
-                        name="wms_kind",
-                        type="enum",
-                        values=list(WMS_ENTITY_KINDS) + [None],
-                        required=False,
-                        description="这个事件在 WMS 里是哪个概念的变动；认不出填 null",
-                    ),
-                    FieldDef(name="trace_to", type="string"),
-                ],
-            ),
-        ),
-        FieldDef(
-            name="rules",
-            type="array",
-            items=FieldDef(
-                name="rule",
-                type="object",
-                properties=[
-                    FieldDef(name="rule_id", type="string"),
-                    FieldDef(name="name", type="string"),
-                    FieldDef(name="condition", type="string"),
-                    FieldDef(name="action", type="string"),
-                    FieldDef(name="pattern", type="enum", values=list(MODEL_PATTERNS)),  # specification
-                    # 「当库存 > 0 时…」是通用规则；「同一 SKU 同库位不可重复
-                    # 占用」才是 WMS 规则。声明了约束的才算数——这条差别
-                    # wms_rule_binding 判据能数得出来。
-                    FieldDef(
-                        name="wms_constraint",
-                        type="enum",
-                        values=list(WMS_CONSTRAINT_KINDS) + [None],
-                        required=False,
-                        description="约束的 WMS 业务类型；不是 WMS 约束填 null",
-                    ),
-                    FieldDef(name="trace_to", type="string"),
-                ],
-            ),
-        ),
-        FieldDef(
-            name="processes",
-            type="array",
-            items=FieldDef(
-                name="process",
-                type="object",
-                properties=[
-                    FieldDef(name="process_id", type="string"),
-                    FieldDef(name="name", type="string"),
-                    FieldDef(name="pattern", type="enum", values=list(MODEL_PATTERNS)),  # domain_service
-                    FieldDef(
-                        name="wms_kind",
-                        type="enum",
-                        values=list(WMS_ENTITY_KINDS) + [None],
-                        required=False,
-                        description="这条流程动的 WMS 概念；不是 WMS 流程填 null",
-                    ),
-                    FieldDef(name="trace_to", type="string"),
-                ],
-            ),
-        ),
-        FieldDef(
-            name="metrics",
-            type="array",
-            items=FieldDef(
-                name="metric",
-                type="object",
-                properties=[
-                    FieldDef(name="metric_id", type="string"),
-                    FieldDef(name="name", type="string"),
-                    FieldDef(name="target", type="number"),
-                    FieldDef(name="pattern", type="enum", values=list(MODEL_PATTERNS)),  # domain_metric（扩展元素）
-                    # 指标型需求也得能声明它是哪个 WMS 指标——
-                    # 「拣货准确率 99.5%」是条 metric 类型的需求，
-                    # 只因为类型不是 object 就判它「没绑上 WMS」是判据在犯病
-                    FieldDef(
-                        name="wms_kind",
-                        type="enum",
-                        values=list(WMS_METRIC_KINDS),
-                        required=False,
-                        description="WMS 指标名；不是 WMS 指标填 null",
-                    ),
-                    FieldDef(name="trace_to", type="string"),
-                ],
-            ),
-        ),
+    ],
+)
+
+
+# 模型包内嵌的模型元素：**同一份 item 定义**，DDD 五组的名字
+MODEL_PACKAGE_ELEMENTS = SchemaDef(
+    id="schema_model_package_elements",
+    description="模型包内嵌的模型元素（DDD 战术设计的五组：实体 / 规格 / 领域服务 / 领域事件 / 领域指标）",
+    fields=[
+        FieldDef(name="entities", type="array", items=ENTITY_ITEM),
+        FieldDef(name="specifications", type="array", items=RULE_ITEM),
+        FieldDef(name="domain_services", type="array", items=PROCESS_ITEM),
+        FieldDef(name="domain_events", type="array", items=EVENT_ITEM),
+        FieldDef(name="domain_metrics", type="array", items=METRIC_ITEM),
     ],
 )
 
@@ -343,7 +415,7 @@ BUSINESS_MODEL_PACKAGE = SchemaDef(
         FieldDef(name="business_goal", type="string"),
         FieldDef(
             name="model_elements",
-            type="ref:schema_model_elements",
+            type="ref:schema_model_package_elements",
         ),
         FieldDef(
             name="evidence",
@@ -415,6 +487,7 @@ BUSINESS_MODEL_PACKAGE = SchemaDef(
                             FieldDef(name="label", type="string"),
                             FieldDef(name="name", type="string"),
                             FieldDef(name="trace_to", type="string"),
+                            FieldDef(name="evidence", type="string"),
                         ],
                     ),
                 ),
@@ -429,6 +502,44 @@ BUSINESS_MODEL_PACKAGE = SchemaDef(
                             FieldDef(name="label", type="string"),
                             FieldDef(name="statement", type="string"),
                             FieldDef(name="trace_to", type="string"),
+                            FieldDef(name="evidence", type="string"),
+                        ],
+                    ),
+                ),
+                # 指标组：**产出里有，schema 里也得有**。
+                # 只在产出里加字段而不声明，消费方按 schema 取数据就永远
+                # 取不到——「产出了却没声明」是「声明了却拿不到」的镜像病。
+                FieldDef(
+                    name="metrics",
+                    type="array",
+                    items=FieldDef(
+                        name="m",
+                        type="object",
+                        properties=[
+                            FieldDef(name="kind", type="string"),
+                            FieldDef(name="label", type="string"),
+                            FieldDef(name="statement", type="string"),
+                            FieldDef(name="trace_to", type="string"),
+                            FieldDef(name="evidence", type="string"),
+                        ],
+                    ),
+                ),
+                # 报表组：业务方说「临期 SKU 要能在库存看板看到」，
+                # 讲的是 `inventory_dashboard` 这个**报表**——
+                # 它既不是实体也不是指标。以前报表概念压根不在词表里，
+                # 于是这类需求绑不上任何东西。
+                FieldDef(
+                    name="reports",
+                    type="array",
+                    items=FieldDef(
+                        name="rp",
+                        type="object",
+                        properties=[
+                            FieldDef(name="kind", type="string"),
+                            FieldDef(name="label", type="string"),
+                            FieldDef(name="statement", type="string"),
+                            FieldDef(name="trace_to", type="string"),
+                            FieldDef(name="evidence", type="string"),
                         ],
                     ),
                 ),
@@ -454,6 +565,7 @@ ALL_SCHEMAS = [
     PARSED_REQUIREMENTS,
     CLASSIFIED_REQUIREMENTS,
     MODEL_ELEMENTS,
+    MODEL_PACKAGE_ELEMENTS,
     MODEL_EVIDENCE,
     BUSINESS_MODEL_PACKAGE,
 ]

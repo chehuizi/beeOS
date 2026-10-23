@@ -118,6 +118,29 @@ WMS_CONSTRAINTS: dict[str, dict[str, Any]] = {
 WMS_CONSTRAINT_KINDS: tuple[str, ...] = tuple(WMS_CONSTRAINTS)
 
 # ============================================================
+# WMS 报表 / 看板
+# ============================================================
+#
+# 单独一类，不塞进实体表：实体表的判准是「仓库里天天要记账的东西」，
+# 看板不是记账对象，它是一堆指标的呈现面。
+#
+# **它是词表里本来就该有的一条**——WMS 真的有一个看板
+# （线上 /wms/ 的首页，服务端是 `/api/v1/reports/dashboard`），
+# 而业务方真的会提它：「临期 30 天以内的 SKU 要能在**库存看板**看到」。
+#
+# 之前词表里没有它 → 需求盒把这句话拆出的「库存看板」这个片段绑不上任何概念
+# → `wms_binding` 判红（7/8 绑上）→ **主线需求在设计盒过不去**。
+WMS_REPORTS: dict[str, dict[str, Any]] = {
+    "inventory_dashboard": {
+        "label": "库存看板",
+        "statement": "仓储现场的看板/报表（库存、库位、单据、临期预警）",
+        "keywords": ["看板", "报表", "dashboard", "面板", "预警看板"],
+    },
+}
+
+WMS_REPORT_KINDS: tuple[str, ...] = tuple(WMS_REPORTS)
+
+# ============================================================
 # WMS 指标
 # ============================================================
 #
@@ -151,6 +174,20 @@ WMS_METRICS: tuple[dict[str, str], ...] = (
         "definition": "已占用库位 ÷ 可用库位",
         "target": 85.0,
         "direction": "higher_is_better",
+    },
+    {
+        # **这是词表里本来就该有的一条**——线上 WMS 的 dashboard 真的报这个数
+        # （`expiringSoonSkuCount`：30 天内到期且在库的 SKU 数）。
+        #
+        # 之前没有它 → 「临期 30 天以内的 SKU 要能在看板看到」这种需求
+        # 绑不上任何指标 → 模型里没有指标 → `metrics_defined` 判红。
+        # 指标表记的是**WMS 真的在盯的数**，不是同义词词典——
+        # 所以补它是补一个漏掉的事实，不是打补丁。
+        "name": "wms_expiring_soon_sku_count",
+        "label": "临期 SKU 数",
+        "definition": "在库且 30 天内到期的 SKU 数（临期预警口径）",
+        "target": 0.0,
+        "direction": "lower_is_better",
     },
 )
 
@@ -194,6 +231,9 @@ WMS_METRIC_KEYWORDS: dict[str, tuple[str, ...]] = {
     "wms_inventory_turnover_days": ("周转天数", "库存周转", "呆滞", "滞销", "turnover"),
     "wms_stockout_rate": ("缺货", "断货", "stockout", "缺货率"),
     "wms_space_utilization": ("库容利用率", "库容", "空间利用率", "利用率"),
+    "wms_expiring_soon_sku_count": (
+        "临期", "效期预警", "快过期", "临期预警", "即将过期", "到期",
+    ),
 }
 
 
@@ -225,11 +265,71 @@ def bind_constraint(*parts: Any) -> str | None:
     return None
 
 
+def kind_category(kind: str | None) -> str:
+    """这个 WMS 概念是哪一类：entity / constraint / metric / ''（不认识）
+
+    **为什么需要它**：需求盒给的 `requirement_type` 是**位置**推出来的
+    （图上的节点→process、边的守卫→rule、节点的 measures→metric），
+    不是语义判断。而 WMS 概念的性质（是实体？是约束？是指标？）
+    要由**概念本身**决定。
+
+    真 LLM 实测过：业务方说「同一个 SKU 必须先出快过期的批次」，
+    需求盒把它放在节点上（于是类型是 process），而设计盒正确地认出了
+    `fefo`——**拿位置标签去否决语义判断，就等于把对的答案改成错的**。
+    """
+    if not kind:
+        return ""
+    if kind in WMS_ENTITIES:
+        return "entity"
+    if kind in WMS_CONSTRAINTS:
+        return "constraint"
+    if kind in WMS_REPORTS:
+        return "report"
+    if any(m["name"] == kind for m in WMS_METRICS):
+        return "metric"
+    return ""
+
+
 def label_of(kind: str | None, table: dict[str, dict[str, Any]]) -> str:
     """词表查中文名。查不到返回原样——不拿兜底文案冒充真名"""
     if not kind:
         return ""
     return str(table.get(kind, {}).get("label", kind))
+
+
+def label_for_kind(kind: str | None) -> str:
+    """WMS 概念的中文名（**跨四类词表查**）
+
+    以前只看实体表和约束表 → 指标（`wms_expiring_soon_sku_count`）
+    和报表（`inventory_dashboard`）查不到，label 直接退回成英文 id，
+    看板上就出现一串机器名，而不是「临期 SKU 数」「库存看板」。
+    """
+    if not kind:
+        return ""
+    if kind in WMS_ENTITIES:
+        return label_of(kind, WMS_ENTITIES)
+    if kind in WMS_CONSTRAINTS:
+        return label_of(kind, WMS_CONSTRAINTS)
+    if kind in WMS_REPORTS:
+        return label_of(kind, WMS_REPORTS)
+    for m in WMS_METRICS:
+        if m["name"] == kind:
+            return str(m.get("label", kind))
+    return kind
+
+
+def statement_for_kind(kind: str | None) -> str:
+    """WMS 概念的正式表述（报表/约束/指标有，实体没有）"""
+    if not kind:
+        return ""
+    if kind in WMS_CONSTRAINTS:
+        return str(WMS_CONSTRAINTS[kind].get("statement", ""))
+    if kind in WMS_REPORTS:
+        return str(WMS_REPORTS[kind].get("statement", ""))
+    for m in WMS_METRICS:
+        if m["name"] == kind:
+            return str(m.get("definition", ""))
+    return ""
 
 
 _SENTENCE_SPLIT = re.compile(r"[。；;\n]")

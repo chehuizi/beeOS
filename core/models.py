@@ -193,6 +193,47 @@ class TaskDef(BaseModel):
         ),
     )
 
+    # 标识藏在**对象里面**时，从对象的哪个键取。
+    #
+    # **为什么要有这个**：`ref:` 类型的字段装的是**整份对象**（上游盒子的产出），
+    # 不是 id 字符串。于是「dev 盒子的 subject_ref 应该是哪个需求」，
+    # 答案在设计包对象的 `set_id` 里，而不是在设计包本身。
+    #
+    # 之前只有一个 `subject_ref_field`，它只能指向「直接就是 id」的字段——
+    # 于是 dev / testing 这两只「收对象」的盒子要么拿不到 subject_ref（归档里
+    # 归不到任何工作单元），要么被迫把整份对象塞进去（subject_ref 变成
+    # 一份对象的 repr）。两条都是「声明了却拿不到」。
+    #
+    # 声明了就必须是**对象**：字段值不是 dict → 拒绝；对象里没这个键 → 拒绝。
+    # 不静默降级成空——「算了却看不见」。
+    subject_ref_subfield: Optional[str] = Field(
+        default=None,
+        description=(
+            "从 subject_ref_field 指向的对象里取哪个键当业务对象标识。"
+            "留空表示该字段本身就是 id 字符串。声明了它，"
+            "该字段的值就必须是对象，且对象里必须有这个键"
+        ),
+    )
+
+    # 本次履约处理的业务对象是**哪一类**。
+    #
+    # **为什么不能只靠 subject_ref 的字符串判**：ops 盒子的 subject 是
+    # 运维事件号（ops_task_id），其余盒子的是需求号（set_id）。两者可能
+    # 撞字符串（`OPS-1` 和 `OPS-1`），不区分就分不出归档里这条记录
+    # 是「这条需求的一次运维」还是「一个运维事件」。
+    #
+    # **由盒子声明，不从字符串前缀猜**：前缀猜等于把业务约定写进内核。
+    # 声明了 subject_ref_field 就必须声明 subject_kind——否则「它关于谁」
+    # 是靠猜的，而猜错时没人会发现。
+    subject_kind: Optional[str] = Field(
+        default=None,
+        description=(
+            "业务对象的种类（如 requirement / ops_event）。"
+            "声明了 subject_ref_field 就必须声明它——"
+            "不声明就等于让运行时去猜"
+        ),
+    )
+
 
 class AcceptanceRule(BaseModel):
     """履约合同（Contract）：验收标准（单次判据）

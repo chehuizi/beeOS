@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import pytest
 
+from core.models import FieldDef
 from kanban.trigger import BOX_REGISTRY, TriggerError, trigger_task
 from runtime.store import TaskRunStore
 
@@ -85,8 +86,8 @@ class TestTheDeclarationIsReal:
 
         两道闸都可能拦住它，这都对：
         - 字段声明成 `string` 的 → runtime/contract.py 的类型校验先挡下
-        - 字段声明成 `ref:` 的 → 不做深校验，传什么都能过，
-          得由 trigger 里「必须是 id 字符串」这条显式拦住
+        - 字段声明成 `ref:` 的 → 形状校验（现在做深校验了）先挡下，
+          万一没挡住，还有 trigger 里「必须是 id 字符串」这条显式拦截
 
         不管哪道闸拦的，结果都一样：不能放一份对象进去，
         否则 subject_ref 会变成对象的 repr，
@@ -251,6 +252,199 @@ class TestTheRefIsRecordedAndFindable:
         assert all(r["acceptance_status"] == "accepted" for r in gated), (
             f"过滤后混进了没验过的：{[r['acceptance_status'] for r in gated]}"
         )
+
+
+# ============================================================
+# 标识藏在对象里（subject_ref_subfield）
+# ============================================================
+
+
+class TestTheRefCanLiveInsideAnObject:
+    """`ref:` 字段装的是整份对象，标识在对象的某个键上
+
+    以前只有 `subject_ref_field` 一个字段，它只能指向「直接就是 id」的字段。
+    于是 dev / testing 这两只**收对象**的盒子要么拿不到 subject_ref
+    （归档里归不到任何工作单元），要么被迫把整份对象塞进去
+    （subject_ref 变成一份对象的 repr）。两条都是「声明了却拿不到」。
+    """
+
+    @pytest.fixture
+    def lax_dev_box(self, monkeypatch):
+        """一只「契约很松」的开发盒：投料字段只声明 package_id，不声明 set_id
+
+        **为什么要造一只**：真实开发盒的 schema 把 set_id 声明成必填，
+        所以「对象里缺 set_id」会先被**结构契约闸**拦下——
+        trigger 里的 subfield 检查根本没机会触发。
+        那条守卫就永远不承重（拒的原因不是它）。
+
+        造这只盒子，是为了让「对象里缺这个键」只有 trigger 那一处能拦：
+        契约放行了（它不知道 subfield 的存在），只剩 subfield 检查。
+        """
+        import kanban.trigger as trigger_mod
+
+        definition = BOX_REGISTRY["wms_development_box"][0]()
+        schema = definition.get_schema("schema_dev_task_input")
+        lax_fields = [
+            f if f.name != "design_package_ref" else FieldDef(
+                name="design_package_ref", type="object", required=True,
+                properties=[FieldDef(name="package_id", type="string")],
+            )
+            for f in schema.fields
+        ]
+        lax_schema = schema.model_copy(update={"fields": lax_fields})
+        lax_schemas = [
+            lax_schema if s.id == schema.id else s for s in definition.schemas
+        ]
+        lax = definition.model_copy(update={"schemas": lax_schemas})
+
+        monkeypatch.setitem(
+            trigger_mod.BOX_REGISTRY, "wms_development_box",
+            (lambda: lax, BOX_REGISTRY["wms_development_box"][1]),
+        )
+        return lax
+
+    def test_the_subfield_must_exist_in_the_object(self, lax_dev_box):
+        """对象里没这个键 → 拒绝，不静默降级成空
+
+        这条只可能由 trigger 的 subfield 检查拦下——
+        契约闸不知道 subfield 的存在（见 lax_dev_box 的说明）。
+        """
+        schema = lax_dev_box.get_schema("schema_dev_task_input")
+        payload = _minimal_payload(schema)
+        payload["design_package_ref"] = {"package_id": "p1"}  # 缺 set_id
+        with pytest.raises(TriggerError) as exc:
+            trigger_task(
+                "wms_development_box", "handle_development_request",
+                payload, TaskRunStore("/tmp/_sr_sub.jsonl"),
+            )
+        assert "set_id" in str(exc.value), (
+            f"报错没点名缺的是哪个键：{exc.value}"
+        )
+
+    def test_the_subfield_value_must_be_a_string(self, lax_dev_box):
+        """子字段的值必须是 id 字符串——不是又一份对象"""
+        schema = lax_dev_box.get_schema("schema_dev_task_input")
+        payload = _minimal_payload(schema)
+        payload["design_package_ref"] = {
+            "package_id": "p1",
+            "set_id": {"nested": "object"},
+        }
+        with pytest.raises(TriggerError) as exc:
+            trigger_task(
+                "wms_development_box", "handle_development_request",
+                payload, TaskRunStore("/tmp/_sr_sub3.jsonl"),
+            )
+        assert "set_id" in str(exc.value) or "id string" in str(exc.value)
+
+    def test_a_declared_subfield_requires_an_object(self):
+        """声明了 subfield，值却不是对象 → 拒绝
+
+        那是「该给整份对象却给了个 id」——或者反过来，是投料形状不对。
+        两种都不该悄悄放过。
+
+        拦在哪一层不重要：结构契约（`ref:` 深校验）会先拦下
+        「这不是个对象」，trigger 里的 subfield 检查是第二道。
+        断言的是**结果**（被拒 + 报错点名了哪个字段）。
+        """
+        schema = _schema_of("wms_development_box", "handle_development_request")
+        payload = _minimal_payload(schema)
+        payload["design_package_ref"] = "REQ-2026-003"  # 是 id，不是对象
+        with pytest.raises(TriggerError) as exc:
+            trigger_task(
+                "wms_development_box", "handle_development_request",
+                payload, TaskRunStore("/tmp/_sr_sub2.jsonl"),
+            )
+        assert "design_package_ref" in str(exc.value), (
+            f"报错没点名是哪个字段的形状不对：{exc.value}"
+        )
+
+    def test_the_id_is_taken_from_the_object(self, tmp_path):
+        """真的取到了——取到的是对象里那个 id，不是整个对象"""
+        store = TaskRunStore(tmp_path / "runs.jsonl")
+        schema = _schema_of("wms_development_box", "handle_development_request")
+        payload = _minimal_payload(schema)
+        payload["design_package_ref"] = {
+            "package_id": "p1",
+            "set_id": "REQ-2026-007",
+            "model_elements": {},
+        }
+        result = trigger_task(
+            "wms_development_box", "handle_development_request", payload, store,
+        )
+        run = store.get_run(result["task_run_id"])
+        assert run["subject_ref"] == "REQ-2026-007", (
+            f"取到的标识是 {run['subject_ref']!r}，应该是对象里的 set_id"
+        )
+
+
+# ============================================================
+# 业务对象的种类（subject_kind）
+# ============================================================
+
+
+class TestTheKindIsDeclared:
+    """「它关于哪一类业务对象」要显式声明，不许运行时猜"""
+
+    def test_declaring_the_field_without_the_kind_is_rejected(self, monkeypatch):
+        """声明了 subject_ref_field 却没声明 subject_kind → 拒绝这次履约
+
+        不声明就等于让运行时去猜「这是需求还是运维事件」。
+        猜错了**没人会发现**——归档里两类记录混在一起，
+        看板上还是「一切正常」。
+        """
+        import kanban.trigger as trigger_mod
+
+        definition = BOX_REGISTRY["wms_design_box"][0]()
+        broken_task = definition.task[0].model_copy(update={"subject_kind": None})
+        broken = definition.model_copy(update={"task": [broken_task]})
+
+        monkeypatch.setitem(
+            trigger_mod.BOX_REGISTRY, "wms_design_box",
+            (lambda: broken, BOX_REGISTRY["wms_design_box"][1]),
+        )
+        schema = broken.get_schema(broken.task[0].task_schema)
+        with pytest.raises(TriggerError) as exc:
+            trigger_task(
+                "wms_design_box", broken.task[0].type,
+                _minimal_payload(schema) | {"set_id": "REQ-1"},
+                TaskRunStore("/tmp/_sr_kind.jsonl"),
+            )
+        assert "subject_kind" in str(exc.value)
+
+    def test_the_kind_lands_in_the_record(self, tmp_path):
+        store = TaskRunStore(tmp_path / "runs.jsonl")
+        schema = _schema_of("wms_design_box", "handle_modeling_request")
+        result = trigger_task(
+            "wms_design_box", "handle_modeling_request",
+            _minimal_payload(schema) | {"set_id": "REQ-1"}, store,
+        )
+        run = store.get_run(result["task_run_id"])
+        assert run["subject_kind"] == "requirement", (
+            f"记录里的 subject_kind 是 {run['subject_kind']!r}"
+        )
+
+    def test_the_ops_box_declares_its_own_kind(self):
+        """运维盒的 subject 是**运维事件**，不是需求
+
+        需求号和运维事件号可能撞号。不区分种类，归档里就分不出
+        「这条需求的一次运维」和「一个运维事件」。
+        """
+        ops = BOX_REGISTRY["wms_ops_box"][0]()
+        kinds = {t.subject_kind for t in ops.task if t.subject_ref_field}
+        assert kinds == {"ops_event"}, (
+            f"运维盒声明的种类是 {kinds}，应该是 ops_event"
+        )
+
+    def test_same_ref_different_kinds_can_be_told_apart(self, tmp_path):
+        store = TaskRunStore(tmp_path / "runs.jsonl")
+        schema = _schema_of("wms_design_box", "handle_modeling_request")
+        trigger_task(
+            "wms_design_box", "handle_modeling_request",
+            _minimal_payload(schema) | {"set_id": "OPS-1"}, store,
+        )
+        assert len(store.list_by_subject("OPS-1")) == 1
+        assert len(store.list_by_subject("OPS-1", subject_kind="requirement")) == 1
+        assert len(store.list_by_subject("OPS-1", subject_kind="ops_event")) == 0
 
 
 # ============================================================

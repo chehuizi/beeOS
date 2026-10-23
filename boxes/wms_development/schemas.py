@@ -13,12 +13,72 @@ from __future__ import annotations
 
 from core.models import FieldDef, SchemaDef
 
+# ---- 消费方自己声明的形状 ----
+#
+# 以前这里是 `type="ref:schema_business_model_package"`——**指向别的盒子的
+# schema id**。文档（docs/beebox-definition-schema.md §4）写得很清楚：
+# 「schema 内 ref: 引用必须指向本 definition schemas 块内真实存在的 schema id」。
+#
+# 悬空引用的后果不是报错，是**没人校验**：那个 id 在本盒里根本不存在，
+# 于是「设计包该长什么样」这件事谁都没定义，投料里塞什么都行。
+# 它跟之前那 4 条永不触发的 exception 是同一族病：**声明了约束，但没人执行**。
+#
+# 现在由**消费者自己声明**它要收的形状——schema 归消费者所有。
+# 交接时 runtime/handoff.py 拿这份声明去校验上游产出，
+# 「接过来的根本不是那回事」当场就被拒。
+DESIGN_PACKAGE_INPUT_SCHEMA = SchemaDef(
+    id="schema_design_package_input",
+    description="开发盒要消费的设计包（形状由开发盒自己声明）",
+    fields=[
+        FieldDef(name="package_id", type="string", required=True),
+        # set_id 是「这份设计对应哪条需求」——开发盒的 subject_ref 从这儿取
+        FieldDef(name="set_id", type="string", required=True),
+        FieldDef(name="business_goal", type="string", required=False),
+        FieldDef(name="requirement_count", type="integer", required=False),
+        # 模型元素本体：开发盒只当它是「要改哪些东西」的依据。
+        # 声明的是**分组结构 + 每个元素开发盒真会读的那几个键**——
+        # 多余字段不报错（模型可扩展），但少一个分组就是形状不对。
+        FieldDef(name="model_elements", type="object", required=True, properties=[
+            FieldDef(name="entities", type="array", required=False, items=FieldDef(
+                name="entity", type="object", properties=[
+                    FieldDef(name="entity_id", type="string"),
+                    FieldDef(name="name", type="string"),
+                    FieldDef(name="trace_to", type="string"),
+                ])),
+            FieldDef(name="specifications", type="array", required=False, items=FieldDef(
+                name="specification", type="object", properties=[
+                    FieldDef(name="rule_id", type="string"),
+                    FieldDef(name="name", type="string"),
+                    FieldDef(name="trace_to", type="string"),
+                ])),
+            FieldDef(name="domain_services", type="array", required=False, items=FieldDef(
+                name="domain_service", type="object", properties=[
+                    FieldDef(name="process_id", type="string"),
+                    FieldDef(name="name", type="string"),
+                    FieldDef(name="trace_to", type="string"),
+                ])),
+            FieldDef(name="domain_events", type="array", required=False, items=FieldDef(
+                name="domain_event", type="object", properties=[
+                    FieldDef(name="event_id", type="string"),
+                    FieldDef(name="name", type="string"),
+                    FieldDef(name="trace_to", type="string"),
+                ])),
+            FieldDef(name="domain_metrics", type="array", required=False, items=FieldDef(
+                name="domain_metric", type="object", properties=[
+                    FieldDef(name="metric_id", type="string"),
+                    FieldDef(name="name", type="string"),
+                    FieldDef(name="trace_to", type="string"),
+                ])),
+        ]),
+    ],
+)
+
 DEV_TASK_INPUT_SCHEMA = SchemaDef(
     id="schema_dev_task_input",
     description="开发任务（设计包 + 目标提交范围）（一次开发任务的投料）",
     fields=[
         FieldDef(name="dev_task_id", type="string", required=True),
-        FieldDef(name="design_package_ref", type="ref:schema_business_model_package", required=True),
+        FieldDef(name="design_package_ref", type="ref:schema_design_package_input", required=True),
         FieldDef(name="commit_range", type="string", required=True),
         FieldDef(name="target_env", type="string", required=True),
     ],
@@ -62,6 +122,7 @@ BUILD_ARTIFACT_SCHEMA = SchemaDef(
 
 
 ALL_SCHEMAS = [
+    DESIGN_PACKAGE_INPUT_SCHEMA,
     DEV_TASK_INPUT_SCHEMA,
     BUILD_TREE_SCHEMA,
     BUILD_CHECK_SCHEMA,

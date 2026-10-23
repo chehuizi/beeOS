@@ -59,6 +59,7 @@ from core.beeline_models import Beeline
 from core.models import BeeBoxDefinition, FieldDef
 from runtime import BeelineExecutor, create_task_run, evaluate_acceptance
 from runtime.contract import validate_payload
+from runtime.handoff import HandoffError, assemble_handoff
 from runtime.models import TaskRunStatus
 from runtime.runner import HandlerRunner
 from runtime.store import TaskRunStore
@@ -837,6 +838,7 @@ def trigger_task(
     payload: dict[str, Any],
     store: TaskRunStore,
     originator: str = "kanban.web",
+    handoff: Optional[dict[str, str]] = None,
 ) -> dict[str, Any]:
     """触发 1 次履约：校验 → 执行 → 验收 → 落盘
 
@@ -846,6 +848,8 @@ def trigger_task(
         payload: task 输入（按 task_schema 形状）
         store: TaskRunStore（追加履约记录）
         originator: 触发源标识
+        handoff: {投料字段名: 上游 task_run_id}——把上游盒子的产出接到
+            投料的 `ref:` 字段上（盒间接力）。见 runtime/handoff.py。
 
     Returns:
         {task_run_id, box_id, task_type, status, acceptance_status, result}
@@ -892,7 +896,23 @@ def trigger_task(
             f"task {task_type!r} pins task_schema {task.task_schema!r} "
             f"which is not declared in definition.schemas"
         )
-    contract_errors = validate_payload(payload, schema)
+
+    # ===== 盒间接力：先把上游盒子的产出接到投料上 =====
+    #
+    # 放在契约校验**之前**：handoff 填的字段（`ref:` 类型）通常是必填的，
+    # 不先接上就会被判成「缺字段」，而那不是投料错，是还没接。
+    try:
+        payload = assemble_handoff(
+            payload,
+            handoff,
+            task_schema=schema,
+            schemas=definition.schemas,
+            get_run=store.get_run,
+        )
+    except HandoffError as e:
+        raise TriggerError(str(e)) from e
+
+    contract_errors = validate_payload(payload, schema, schemas=definition.schemas)
     if contract_errors:
         raise TriggerError(
             f"payload violates task_schema {task.task_schema!r}: "
@@ -904,6 +924,7 @@ def trigger_task(
     # 不静默降级成空：一条「归不到任何工作单元」的履约在归档里等于凭空消失，
     # 而没人会注意到少了一条——那正是「算了却看不见」那一族病。
     subject_ref = None
+    subject_kind = None
     if task.subject_ref_field:
         if task.subject_ref_field not in {f.name for f in schema.fields}:
             raise TriggerError(
@@ -913,24 +934,61 @@ def trigger_task(
                 f"(fields: {[f.name for f in schema.fields]})"
             )
         raw = payload.get(task.subject_ref_field)
-        if raw is None or not str(raw).strip():
+        if raw is None or (not isinstance(raw, str) and not isinstance(raw, dict)):
             raise TriggerError(
                 f"box {box_id!r} task {task_type!r} requires "
                 f"{task.subject_ref_field!r} in the payload — it identifies "
                 f"which business object this fulfillment is about. "
                 f"Got: {raw!r}. 缺它，这次履约在归档里就归不到任何工作单元"
             )
-        # 值必须是 **id 字符串**，不能是整份对象。
-        # `ref:` 类型在 runtime/contract.py 里不做深校验，所以传什么都能过——
-        # 那就把「必须是 id」这条要求放在这里显式拦住，
-        # 否则 subject_ref 会变成一份对象的 repr，归档里出现 `{'package_id': ...}` 这种东西。
-        if not isinstance(raw, str):
+
+        # 标识可能**藏在对象里面**：`ref:` 字段装的是整份上游产出，
+        # 「这次履约关于哪个需求」的答案在对象的某个键上（dev 盒看设计包的
+        # set_id）。这时用 subject_ref_subfield 声明从哪儿取。
+        #
+        # 声明了就必须是对象：值不是 dict → 拒；对象里没这个键 → 拒。
+        # 不静默降级——「算了却看不见」。
+        if task.subject_ref_subfield:
+            if not isinstance(raw, dict):
+                raise TriggerError(
+                    f"box {box_id!r} task {task_type!r}: "
+                    f"{task.subject_ref_field!r} 声明了 "
+                    f"subject_ref_subfield={task.subject_ref_subfield!r}，"
+                    f"说明它装的是整份对象，但拿到的是 "
+                    f"{type(raw).__name__}"
+                )
+            if task.subject_ref_subfield not in raw:
+                raise TriggerError(
+                    f"box {box_id!r} task {task_type!r}: "
+                    f"{task.subject_ref_field!r} 里没有 "
+                    f"{task.subject_ref_subfield!r} 这个键——"
+                    f"标识取不到，这次履约在归档里就归不到任何工作单元。"
+                    f"Got keys: {sorted(raw)}"
+                )
+            raw = raw[task.subject_ref_subfield]
+
+        # 取出来的值必须是 **id 字符串**，不能是整份对象。
+        # `ref:` 字段装整份对象是对的（那是它该装的），但**标识**是对象里
+        # 那个 id 字符串；把整份对象当标识塞进归档，会出现
+        # `{'package_id': ...}` 这种东西。
+        if not isinstance(raw, str) or not raw.strip():
             raise TriggerError(
                 f"box {box_id!r} task {task_type!r}: {task.subject_ref_field!r} "
-                f"must be an id string, got {type(raw).__name__}. "
+                f"must yield an id string, got {type(raw).__name__}. "
                 f"它标的是「这次履约关于哪个业务对象」，不是那份对象本身"
             )
         subject_ref = raw.strip()
+
+        # 业务对象的**种类**同样由盒子声明。
+        # 不声明就等于让运行时猜——猜错了没人会发现（归档里两类记录混在一起，
+        # 看板上还是「一切正常」）。
+        if not task.subject_kind:
+            raise TriggerError(
+                f"box {box_id!r} task {task_type!r} 声明了 "
+                f"subject_ref_field={task.subject_ref_field!r}，"
+                f"却没声明 subject_kind——「它关于哪一类业务对象」不能靠猜"
+            )
+        subject_kind = task.subject_kind
 
     task_run = create_task_run(
         originator=originator,
@@ -942,6 +1000,7 @@ def trigger_task(
         runtime_id="runtime_kanban",
         instance_id="instance_kanban",
         subject_ref=subject_ref,
+        subject_kind=subject_kind,
     )
     runner = RUNNER_REGISTRY.get(box_id)
     if runner is None:

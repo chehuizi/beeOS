@@ -182,6 +182,15 @@ class TaskRunIdentity(BaseModel):
     # 事实，不是事后补的标签。归档按它分组。
     subject_ref: Optional[str] = None
 
+    # 业务对象的**种类**（requirement / ops_event …）。
+    #
+    # 它跟 subject_ref 一起构成归档分组键：只有 (kind, ref) 相同，
+    # 才算「同一条需求」或「同一个运维事件」。只有 ref 的话，
+    # 需求号和运维事件号撞了就分不开——而撞号在真实系统里迟早发生。
+    #
+    # 同样是创建瞬间固化的：跟「这次履约关于谁」是同一个事实。
+    subject_kind: Optional[str] = None
+
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
@@ -279,6 +288,7 @@ def create_task_run(
     runtime_id: str,
     instance_id: str,
     subject_ref: Optional[str] = None,
+    subject_kind: Optional[str] = None,
 ) -> TaskRun:
     """工厂函数：创建一个 task run（status=triggered）"""
     identity = TaskRunIdentity(
@@ -291,5 +301,6 @@ def create_task_run(
         runtime_id=runtime_id,
         instance_id=instance_id,
         subject_ref=subject_ref,
+        subject_kind=subject_kind,
     )
     return TaskRun(identity=identity)

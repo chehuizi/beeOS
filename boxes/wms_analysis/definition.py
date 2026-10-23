@@ -76,7 +76,10 @@ WMS_ANALYSIS_BOX = BeeBoxDefinition(
             beeline_id="beeline_wms_analysis_v1",
             beeline_version=1,
             # 本次履约处理的业务对象标识（归档按它分组）
+            # 分析盒的 subject 是一条**需求**：它问的就是「当初那条需求
+            # 线上满没满足」，所以 id 就是需求号本身。
             subject_ref_field="requirement_ref",
+            subject_kind="requirement",
             trigger=(
                 "需求上线满一个观察窗口\n"
                 "OR 某条需求的关键指标连续偏离预期\n"

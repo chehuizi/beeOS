@@ -17,7 +17,7 @@ acceptance 被业务判据拦下。两个闸各管一段，不互相替代。
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from core.models import FieldDef, SchemaDef, is_not_applicable
 
@@ -65,12 +65,49 @@ def _check_scalar(field: FieldDef, value: Any, path: str, errors: list[str]) -> 
         )
 
 
+def _resolve_ref(schema_id: str, schemas: Any) -> Optional[SchemaDef]:
+    """按 id 找 `ref:` 指向的 schema
+
+    `schemas` 可以是 SchemaDef 列表，也可以是 id → SchemaDef 的映射。
+    """
+    if not schemas:
+        return None
+    if isinstance(schemas, dict):
+        found = schemas.get(schema_id)
+        return found if isinstance(found, SchemaDef) else None
+    for s in schemas:
+        if isinstance(s, SchemaDef) and s.id == schema_id:
+            return s
+    return None
+
+
 def _check_field(
-    field: FieldDef, value: Any, path: str, errors: list[str]
+    field: FieldDef, value: Any, path: str, errors: list[str], schemas: Any = None
 ) -> None:
-    """校验单个字段（含 object / array 递归）"""
+    """校验单个字段（含 object / array / ref 递归）"""
     if value is None:
         # required=True 时显式 None 视同缺失；缺字段由上层 required 检查兜
+        return
+
+    # ---- ref: 引用类型 ----
+    #
+    # 以前这里是「ref:<schema_id> 等暂不做深校验，放行」——
+    # **声明了约束但没人执行**。后果是：投料里那个字段装什么都过，
+    # 交接时传一份完全不相干的对象也能跑完整条链。
+    #
+    # 现在深校验：值必须真的符合被引用 schema 的形状。
+    # 引用解析不到 → **报错，不放行**：一条校验不了的约束等于没有约束，
+    # 而「没有约束」比「约束错了」更难发现。
+    if field.type.startswith("ref:"):
+        target_id = field.type[len("ref:"):]
+        target = _resolve_ref(target_id, schemas)
+        if target is None:
+            errors.append(
+                f"{path}: ref:{target_id} 无法解析——"
+                f"校验方没有提供可解析的 schemas，或该 id 不在其中"
+            )
+            return
+        _check_schema(value, target, path, errors, schemas)
         return
 
     if field.type == "object":
@@ -84,7 +121,7 @@ def _check_field(
                 if sub.required:
                     errors.append(f"{path}.{sub.name}: required field missing")
                 continue
-            _check_field(sub, value[sub.name], f"{path}.{sub.name}", errors)
+            _check_field(sub, value[sub.name], f"{path}.{sub.name}", errors, schemas)
         # 未声明的多余字段不报错（模型可扩展）
         return
 
@@ -96,10 +133,28 @@ def _check_field(
             return
         if field.items is not None:
             for i, item in enumerate(value):
-                _check_field(field.items, item, f"{path}[{i}]", errors)
+                _check_field(field.items, item, f"{path}[{i}]", errors, schemas)
         return
 
     _check_scalar(field, value, path, errors)
+
+
+def _check_schema(
+    value: Any, schema: SchemaDef, path: str, errors: list[str], schemas: Any = None
+) -> None:
+    """按一个 SchemaDef 校验一份值（ref: 深校验的落点）"""
+    if not isinstance(value, dict):
+        errors.append(
+            f"{path}: expected object matching {schema.id}, "
+            f"got {type(value).__name__}"
+        )
+        return
+    for field in schema.fields:
+        if field.name not in value:
+            if field.required:
+                errors.append(f"{path}.{field.name}: required field missing")
+            continue
+        _check_field(field, value[field.name], f"{path}.{field.name}", errors, schemas)
 
 
 # ============================================================
@@ -107,12 +162,16 @@ def _check_field(
 # ============================================================
 
 
-def validate_payload(payload: Any, schema: SchemaDef) -> list[str]:
+def validate_payload(payload: Any, schema: SchemaDef, *, schemas: Any = None) -> list[str]:
     """按业务 schema 校验投料 payload
 
     Args:
         payload: 投料内容（dict）
         schema: definition.schemas 里的 schema 定义
+        schemas: **本 definition 的全部 schemas**（列表或 id→SchemaDef 映射）。
+            用来解析 `ref:<schema_id>`。
+            **不传就等于放弃校验 ref 字段**——所以本模块选择
+            「ref 解析不到就报错」，逼调用方把它交出来。
 
     Returns:
         错误描述列表；空列表 = 通过结构契约
@@ -127,6 +186,6 @@ def validate_payload(payload: Any, schema: SchemaDef) -> list[str]:
             if field.required:
                 errors.append(f"{field.name}: required field missing")
             continue
-        _check_field(field, payload[field.name], field.name, errors)
+        _check_field(field, payload[field.name], field.name, errors, schemas)
 
     return errors

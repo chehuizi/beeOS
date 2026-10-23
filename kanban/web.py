@@ -3470,8 +3470,23 @@ class KanbanRequestHandler(BaseHTTPRequestHandler):
             })
             return
 
+        # 盒间接力：{投料字段名: 上游 task_run_id}
+        #
+        # 以前 6 只盒子之间**没有数据通道**——feeds_into 只是看板上的箭头，
+        # 投料要人手工把上游产出 copy 进下游的 payload。
+        # 现在它是一个声明：目标字段必须是 `ref:` 类型，
+        # 交接通道按**目标盒自己声明的形状**校验上游产出再接上。
+        handoff = body.get("handoff")
+        if handoff is not None and not isinstance(handoff, dict):
+            self._send_json(400, {
+                "error": "handoff must be an object mapping payload field -> upstream task_run_id",
+                "stage": "intake",
+                "task_run_created": False,
+            })
+            return
+
         try:
-            result = trigger_task(box_id, task_type, payload, self.store)
+            result = trigger_task(box_id, task_type, payload, self.store, handoff=handoff)
         except TriggerError as e:
             # TriggerError = 投料被拒（box/task/beeline 未注册，或结构契约没过）。
             # 这些都发生在 create_task_run 之前——本次投料不产生 TaskRun，

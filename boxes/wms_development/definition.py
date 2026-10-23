@@ -58,7 +58,14 @@ WMS_DEVELOPMENT_BOX = BeeBoxDefinition(
             beeline_id="beeline_wms_development_v1",
             beeline_version=1,
             # 本次履约处理的业务对象标识（归档按它分组）
+            #
+            # 标识**藏在设计包对象里**——设计包是整份上游产出（`ref:` 字段
+            # 装的就是一份对象），而「这份设计对应哪条需求」的答案在它的
+            # set_id 上。所以要指明从对象的哪个键取。
             subject_ref_field="design_package_ref",
+            subject_ref_subfield="set_id",
+            # 这只盒子的业务对象是**需求**（隔着设计包一跳，需求仍是同一个）。
+            subject_kind="requirement",
             trigger=(
                 "设计包评审通过要落代码\nOR 线上缺陷要打补丁\nOR 发版前要出可复现的构建产物"
             ),

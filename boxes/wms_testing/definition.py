@@ -58,7 +58,12 @@ WMS_TESTING_BOX = BeeBoxDefinition(
             beeline_id="beeline_wms_testing_v1",
             beeline_version=1,
             # 本次履约处理的业务对象标识（归档按它分组）
+            #
+            # 需求集是整份上游产出（`ref:` 字段装的是一份对象），
+            # 「这批用例服务哪条需求」的答案在它的 set_id 上。
             subject_ref_field="requirement_ref",
+            subject_ref_subfield="set_id",
+            subject_kind="requirement",
             trigger=(
                 "开发盒出制品要验收\nOR 发版前跑全量回归\nOR 生产出了单据异常要复现"
             ),

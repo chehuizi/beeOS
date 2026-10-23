@@ -58,7 +58,12 @@ WMS_OPS_BOX = BeeBoxDefinition(
             beeline_id="beeline_wms_ops_v1",
             beeline_version=1,
             # 本次履约处理的业务对象标识（归档按它分组）
+            #
+            # 运维盒的 subject 是**运维事件**（一次变更 / 一次故障处置），
+            # 不是需求。它的 id 是自己给的（ops_task_id），跟需求号可能撞号
+            # ——所以种类要显式声明，不能只靠字符串分。
             subject_ref_field="ops_task_id",
+            subject_kind="ops_event",
             trigger=(
                 "要发版走变更审批\nOR 生产告警要处置\nOR 要回滚上一版\nOR 线上拓扑变了要回写系统档案"
             ),

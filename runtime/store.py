@@ -112,6 +112,9 @@ def task_run_to_record(
         # 业务对象标识：归档按它把履约归到工作单元（需求 / 运维任务）。
         # 索引字段——它在 payload 里刨不出来，所以必须是记录的一等公民。
         "subject_ref": task_run.identity.subject_ref,
+        # 业务对象的种类：只有 ref 不够——需求号和运维事件号可能撞号，
+        # 撞了分不出「这条需求的一次运维」和「一个运维事件」。
+        "subject_kind": task_run.identity.subject_kind,
         "status": task_run.status.value,
         "acceptance_status": acceptance_status,
         "rejection_class": rejection_class,
@@ -202,6 +205,7 @@ class TaskRunStore:
         *,
         box_id: Optional[str] = None,
         accepted_only: bool = False,
+        subject_kind: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         """某个业务对象关联的所有履约（倒序）
 
@@ -211,11 +215,17 @@ class TaskRunStore:
         `accepted_only=True` 是归档写回的门槛：**只有验过的才进档案**。
         不验就写回去，等于把「说过的东西」当成「事实」记下来——
         档案是下一个需求的地面，地面上的错会一路传下去。
+
+        `subject_kind` 用来把「同号不同类」分开：ops 盒子的运维事件号
+        和其它盒子的需求号可能撞上，只按 ref 过滤会把两类记录混在一起。
+        不传 = 不按种类过滤（老记录没有这个字段时也走这条路）。
         """
         records = [
             r for r in self._cache
             if r.get("subject_ref") == subject_ref
         ]
+        if subject_kind is not None:
+            records = [r for r in records if r.get("subject_kind") == subject_kind]
         if box_id is not None:
             records = [r for r in records if r["box_id"] == box_id]
         if accepted_only:

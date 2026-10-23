@@ -113,30 +113,57 @@ cd /tmp/wms-src2/server && mvn -o test
 
 ## 3. 六只盒子的腿
 
-### 3.1 requirement —— 补「可判定的预期」
+### 3.1 预期载体 —— 「可判定的预期」长什么样
 
 **现状**：LLM 抽流程图 → 平铺需求集，4 条判据全绿。**但没有「期望」这个东西。**
 
-**补法**：抽取时多产一组 `expectations[]`，每条带 `trace_to`：
+没有期望，「验证业务价值」就退化成「验这个名字存不存在」——
+需求描述是散文，下游拿着它只能猜「算不算被满足」。
+
+**这一节改造过一次**（原方案：需求盒抽取时多产一组 `expectations[]`，
+每条带 `subject` / `by` / `metric` / `comparator` / `target`）。
+改的原因是**「可判定」需要一个 WMS 概念**：
+
+| | 原方案（需求盒产出） | 现在的实现（设计盒产出） |
+|---|---|---|
+| 产出方 | 需求盒（只有业务原话） | 设计盒（知道 WMS 概念绑定） |
+| 形状 | kind + subject/by/metric/comparator/target | requirement_id + wms_kind + statement + evidence |
+| 口径（怎么测） | 塞进预期里 | **测试盒的探针**（测的人声明口径） |
+| 数值目标 | 从原文抠数字 | 概念词表的定义里（例：临期 = 30 天内到期） |
+
+需求盒那边只有业务原话，做不出**可判定**的预期——只能做出一句复述。
+而 `comparator` / `target` 这类「怎么测」是**测的人**的知识，
+塞进设计盒的产出里等于让设计盒替测试盒决定口径。
+
+现在的形状：
 
 ```jsonc
-{"expectation_id": "exp_1",
- "kind": "fifo_order",          // 或 "metric_target"
- "subject": "batch", "by": "expire_date",
- "metric": "allocation_expire_date",
- "comparator": "min",            // metric_target 时是 gt/gte/eq
- "target": null,
- "trace_to": "sent_2"}           // 指回原文句子
+{"expectation_id": "exp_req_proc_1_fefo",
+ "requirement_id": "req_proc_1",     // 可追溯到哪条需求
+ "wms_kind": "fefo",                 // 落在哪个 WMS 概念上（可判定的根据）
+ "statement": "出库按批次失效日期升序取货",   // 概念的正式表述（机械取自词表）
+ "evidence": "必须先出快过期的批次"}          // 业务原话的逐字片段
 ```
 
-**机械校验**（沿用需求盒已有的手法）：
-- `trace_to` 必须指向真实句子（跟 `trace_integrity` 同一套）
-- `metric_target` 的 `target` 必须在原文里找得到（数字/子串）→ 找不到算幻觉，判红
-- 原文里没有期望的需求 → **不产 expectation**（不是产一条空的）→ analysis 判 n/a，不判红
+**机械派生，不新开一处模型发挥**：`statement` 取自概念词表，
+`evidence` 取自绑定时已校验过的原文片段。所以这一步既不引入新的
+LLM 调用点，也不引入新的幻觉面。
 
-**新增第 5 条判据** `expectation_traceability`（保持 0 主观）。
+**判据**：设计盒加第 8 条 `expectation_completeness`
+（模型认出来的每个 WMS 概念，都变成了一条预期）。
 
-**载体**：`schema_requirement_set_package` 加 `expectations` 字段。
+> **为什么判据放在设计盒，而不是像原方案那样放需求盒**：
+> 需求盒那边做不出可判定的预期，放过去只能判「每条需求有没有复述」——
+> 那是判一个我们自己造的字段，不是判业务价值。
+>
+> **为什么判据不在产出预期的那一跳里算**：
+> 载体在 `generate_model_elements` 产出，判据在 `check_consistency` 核，
+> **隔了两跳**。同一跳里既产出又核 = 自己判自己，永远绿。
+> 两边各自算：绑定集合现场重算，预期集合从上一跳传下来——
+> 少一条就是中间某一跳把载体吃了（「吃了不传」的第四例）。
+
+**载体**：`schema_business_model_package` 加 `expectations` 字段
+（下游两只盒各自声明它要消费的形状，见 3.4 / 3.5）。
 
 ### 3.2 design —— 从「套模板」改成「落到 WMS 代码位置」
 
@@ -315,11 +342,12 @@ curl -X POST localhost:8765/api/trigger -d '{
 
 **17 条守卫，每条都做过回退验证（17/17 因正确理由变红）**。
 
-### 阶段 1：需求侧的预期载体 + 测试盒 + 分析盒（**业务价值闭环**）
-- requirement 加 `expectations` + 第 5 条判据
-- analysis 的 `expected_metrics` 升级
-- testing 真腿（起验证实例 / 跑单据流 / 采实测指标）
-- analysis 真腿（比对 / 归因 / 播种）
+### 阶段 1：预期载体 + 测试盒 + 分析盒（**业务价值闭环**）
+- ✅ 设计盒产出 `expectations`（可判定的预期）+ 第 8 条判据 `expectation_completeness`
+- ✅ testing 盒声明它要消费的预期形状（`expectation_ref` 必填）
+- ✅ analysis 的 `expected_metrics` 从字符串数组升级成结构化
+- ⬜ testing 真腿（起验证实例 / 跑单据流 / 采实测指标）
+- ⬜ analysis 真腿（比对 / 归因 / 播种）
 - **验收**：§1.3 那个需求走完 → analysis 判红，证据里能指到
   「分配批次 expire_date 晚于候选批次最小值」——**红灯带定位，不是布尔**
 

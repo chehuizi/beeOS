@@ -258,7 +258,58 @@ def _simulate_generate_model_elements(input_data: dict[str, Any]) -> dict[str, A
         # 绑定作废的原因——**要能说清「为什么没绑上」**，
         # 而不是只给一个「没绑上」的布尔值。
         "binding_errors": binding_errors,
+        # ---- 可判定的预期 ----
+        #
+        # **这一步产出，判据在下一跳之外核**（见 check_consistency）：
+        # 载体和判据放在同一处，就成了自己判自己——
+        # 算出来一致，然后判它一致，永远绿。
+        "expectations": _expectations_from_elements(
+            entities, rules, processes, metrics, events),
     }
+
+
+def _expectations_from_elements(
+    entities: list[dict[str, Any]],
+    rules: list[dict[str, Any]],
+    processes: list[dict[str, Any]],
+    metrics: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """把每个 WMS 绑定变成一条**可判定的预期**
+
+    为什么在这里产出（而不是需求盒）：
+    「可判定」要求预期挂在一个 WMS 概念上——测试盒的探针是按概念找的。
+    只有建模盒知道哪个需求绑到了哪个概念；需求盒那边只有业务原话，
+    做不出可判定的预期，只能做出一句复述。
+
+    **机械派生，不新开一处模型发挥**：
+      statement ← 概念词表里的正式表述（不是编的）
+      evidence  ← 绑定时已校验过的原文片段（逐字）
+    所以这一步既不引入新的 LLM 调用点，也不引入新的幻觉面。
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for elist in (entities, rules, processes, metrics, events):
+        for el in elist:
+            rid = el.get("trace_to")
+            if not rid:
+                continue
+            for b in el.get("wms_bindings") or []:
+                kind = b.get("kind")
+                if not kind:
+                    continue
+                key = (rid, kind)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append({
+                    "expectation_id": f"exp_{rid}_{kind}",
+                    "requirement_id": rid,
+                    "wms_kind": kind,
+                    "statement": statement_for_kind(kind),
+                    "evidence": b.get("evidence", ""),
+                })
+    return out
 
 
 def _simulate_verify_coverage(input_data: dict[str, Any]) -> dict[str, Any]:
@@ -293,6 +344,10 @@ def _simulate_verify_coverage(input_data: dict[str, Any]) -> dict[str, Any]:
         # 绑定作废的原因要一路带下去（下面三跳都得显式传，
         # 漏一跳下游就拿到 0 而不是 None——「吃了不传」的同族病）
         "binding_errors": input_data.get("binding_errors", []),
+        # **预期载体也得一路带下去**。漏了这一跳，
+        # 下一跳的完整性判据会判红（这是设计好的），
+        # 但如果判据也在同一跳，就算不出问题——所以这里必须显式传。
+        "expectations": input_data.get("expectations", []),
         "__coverage__": coverage,
         "__uncovered__": uncovered,
     }
@@ -404,6 +459,28 @@ def _simulate_check_consistency(input_data: dict[str, Any]) -> dict[str, Any]:
     # 同理：可建模需求为 0（整批都是 goal）时，无从谈绑定。
     wms_binding = not unbound if modelable_ids else NOT_APPLICABLE
 
+    # ---- 预期载体的完整性 ----
+    #
+    # 「模型认出来的每个 WMS 概念，都要变成一条可判定的预期」。
+    #
+    # **这一跳在载体产出（generate_model_elements）的下游**——
+    # 如果在同一步里既产出又核，那就是自己判自己，永远绿。
+    # 现在两边是**各自算出来的**：
+    #   绑定集合 ← 元素的 wms_bindings（现场重算）
+    #   预期集合 ← 上一跳传下来的 expectations（路上可能丢）
+    # 少一条，就是中间某一跳把载体吃了——「吃了不传」的第四例。
+    binding_keys = {
+        (el.get("trace_to"), b.get("kind"))
+        for el in all_elements for b in (el.get("wms_bindings") or [])
+        if el.get("trace_to") and b.get("kind")
+    }
+    expectation_keys = {
+        (e.get("requirement_id"), e.get("wms_kind"))
+        for e in input_data.get("expectations", [])
+        if e.get("requirement_id") and e.get("wms_kind")
+    }
+    expectation_completeness = binding_keys == expectation_keys
+
     return {
         # 同一条链上第三个「吃了不传」的腿（coverage / consistency / evidence）。
         # 每一处单看都跑得通，接起来分母就成 0，然后安安静静判出一个
@@ -428,6 +505,10 @@ def _simulate_check_consistency(input_data: dict[str, Any]) -> dict[str, Any]:
         # 拿到的是空列表：读者只看到「没绑上」，看不到「模型认错了」。
         # 「吃了不传」的同族病，第四例。
         "binding_errors": input_data.get("binding_errors", []),
+        # **预期载体继续往下带**（evidence 那跳漏过好几次东西了，
+        # 每次都是「本地算对了就以为整条链都对了」）
+        "expectations": input_data.get("expectations", []),
+        "__expectation_completeness__": expectation_completeness,
         "__coverage__": input_data.get("__coverage__", 0.0),
         "__uncovered__": input_data.get("__uncovered__", []),
         "__rule_consistency__": True,
@@ -463,6 +544,10 @@ def _simulate_generate_evidence(input_data: dict[str, Any]) -> dict[str, Any]:
         "metrics_defined": input_data.get("__metrics_defined__", False),
         "wms_binding": input_data.get("__wms_binding__", False),
         "wms_rule_binding": input_data.get("__wms_rule_binding__", False),
+        # ---- 可判定的预期 ----
+        "expectations": input_data.get("expectations", []),
+        "expectation_completeness": input_data.get(
+            "__expectation_completeness__", False),
         # 分母和计数得一路带到打包腿，否则 wms_domain 里那个
         # 「绑定 0/0」是分母没传下去，不是真的没绑定。
         "modelable_ids": input_data.get("modelable_ids", []),
@@ -594,8 +679,22 @@ def _simulate_package_model(input_data: dict[str, Any]) -> dict[str, Any]:
             "metrics_defined": input_data.get("metrics_defined", False),
             "wms_binding": input_data.get("wms_binding", False),
             "wms_rule_binding": input_data.get("wms_rule_binding", False),
+            # 预期载体也要进 evidence——schema_model_evidence 声明了它，
+            # 不带就是「产出的包不满足它自己声明的 result schema」。
+            "expectations": input_data.get("expectations", []),
+            "expectation_completeness": input_data.get(
+                "expectation_completeness", False),
             "evidence_detail": input_data.get("evidence_detail", {}),
         },
+        # ---- 可判定的预期（需求侧的预期载体）----
+        #
+        # 下游（测试盒 / 分析盒）要靠它知道**该验什么**：
+        # 每条 WMS 绑定 = 一条预期 = 「这条需求怎样才算被满足」。
+        # 不带出来，下游就只能拿需求描述去猜 —— 那不是验证业务价值，
+        # 是验证「模型里有没有这个词」。
+        "expectations": input_data.get("expectations", []),
+        "expectation_completeness": input_data.get(
+            "expectation_completeness", False),
         "business_owner_assigned": True,  # PoC：业务方必填
     }
 

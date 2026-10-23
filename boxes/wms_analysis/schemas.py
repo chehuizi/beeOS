@@ -18,7 +18,35 @@ ANALYSIS_INPUT_SCHEMA = SchemaDef(
     fields=[
         FieldDef(name="analysis_id", type="string", required=True),
         FieldDef(name="requirement_ref", type="string", required=True),
-        FieldDef(name="expected_metrics", type="array", required=True, items=FieldDef(name="item", type="string")),
+        # **expected_metrics 从「字符串数组」升级成结构化**。
+        #
+        # 以前是 `array of string`——一串指标名。拿着它只能做
+        # 「这个名字在实测结果里存不存在」的检查：
+        # 名字在 → 通过。**那不是验证业务价值，是验证词汇表。**
+        #
+        # 现在每条预期带：
+        #   expectation_id —— 对上哪一条预期
+        #   requirement_id —— 来自哪条需求（可追溯）
+        #   wms_kind       —— 落在哪个 WMS 概念上
+        #   statement      —— 该概念的正式表述（**这条需求该怎样才算被满足**）
+        #
+        # 有了 statement，落差才能归因到「哪个要求没达成」，
+        # 而不是「哪个名字没对上」。
+        FieldDef(
+            name="expected_metrics",
+            type="array",
+            required=True,
+            items=FieldDef(
+                name="expected_metric",
+                type="object",
+                properties=[
+                    FieldDef(name="expectation_id", type="string"),
+                    FieldDef(name="requirement_id", type="string"),
+                    FieldDef(name="wms_kind", type="string"),
+                    FieldDef(name="statement", type="string"),
+                ],
+            ),
+        ),
         FieldDef(name="observed_window", type="string", required=True),
     ],
 )

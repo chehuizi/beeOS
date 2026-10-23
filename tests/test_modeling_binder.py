@@ -233,6 +233,35 @@ class TestTheCatalogIsReal:
             assert not errors, f"{metric['name']} 绑不上：{errors}"
             assert bindings["r_met"][0]["kind"] == metric["name"]
 
+    def test_every_concept_says_what_it_is(self):
+        """词表里每个概念都要有**正式表述**
+
+        预期（expectation）靠 statement 说清「这条需求该怎样才算被满足」。
+        概念没有表述 → 预期带着一句空话 → 下游拿着它对不上任何东西，
+        而看板上只看到一条空字符串，**看不出来**。
+
+        实体类以前就没有 statement（词表只给了 label 和 keywords），
+        于是实体类预期全是空的——真 LLM 跑出来 14 条预期里 7 条是空的。
+
+        隔离：这条只查词表本身。
+        """
+        from boxes.modeling.domain import (
+            WMS_CONSTRAINTS,
+            WMS_ENTITIES,
+            WMS_METRICS,
+            WMS_REPORTS,
+            statement_for_kind,
+        )
+
+        every = (
+            list(WMS_ENTITIES) + list(WMS_CONSTRAINTS)
+            + [m["name"] for m in WMS_METRICS] + list(WMS_REPORTS)
+        )
+        for kind in every:
+            assert statement_for_kind(kind), (
+                f"概念 {kind} 没有正式表述——它带出来的预期是一句空话"
+            )
+
 
 # ============================================================
 # Runner 层：绑不上也要有元素

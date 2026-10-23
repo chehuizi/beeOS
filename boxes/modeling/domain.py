@@ -30,42 +30,52 @@ WMS_ENTITIES: dict[str, dict[str, Any]] = {
     "sku": {
         "label": "商品",
         "keywords": ["sku", "商品", "货品", "品项", "物料", "编码", "条码", "规格"],
+        "statement": "库存记账的最小商品单位（库存按 SKU 分别记）",
     },
     "owner": {
         "label": "货主",
         "keywords": ["货主", "owner", "供应商", "客户", "委托方", "商家"],
+        "statement": "货主（货权归属方，库存归它所有）",
     },
     "warehouse": {
         "label": "仓库",
         "keywords": ["仓库", "仓", "园区", "warehouse", "库区"],
+        "statement": "仓库（存货的物理归属场所）",
     },
     "location": {
         "label": "库位",
         "keywords": ["库位", "货位", "储位", "location", "巷道", "货架", "地堆"],
+        "statement": "库位（仓内具体的存放位置，库存记在库位上）",
     },
     "inventory": {
         "label": "库存",
         "keywords": ["库存", "存量", "inventory", "现货", "可用量", "在库"],
+        "statement": "库存（货主 × SKU × 库位 上的在库数量）",
     },
     "inbound": {
         "label": "入库",
         "keywords": ["入库", "收货", "上架", "inbound", "卸货", "验收", "入库单"],
+        "statement": "入库（收货验收与上架的单据流）",
     },
     "outbound": {
         "label": "出库",
         "keywords": ["出库", "发货", "拣货", "复核", "打包", "outbound", "发运", "拣选"],
+        "statement": "出库（拣货复核与发货的单据流）",
     },
     "wave": {
         "label": "波次",
         "keywords": ["波次", "wave", "作业组", "批次作业", "任务合并"],
+        "statement": "波次（合并作业的一组出库任务）",
     },
     "lot": {
         "label": "批次",
         "keywords": ["批次", "批号", "效期", "保质期", "生产日期", "lot", "先进先出"],
+        "statement": "批次（同 SKU 下按生产日期/失效日期区分的一批货）",
     },
     "count": {
         "label": "盘点",
         "keywords": ["盘点", "盘盈", "盘亏", "盘点单", "循环盘点", "count"],
+        "statement": "盘点（对账与盈亏处理）",
     },
 }
 
@@ -319,9 +329,15 @@ def label_for_kind(kind: str | None) -> str:
 
 
 def statement_for_kind(kind: str | None) -> str:
-    """WMS 概念的正式表述（报表/约束/指标有，实体没有）"""
+    """WMS 概念的正式表述（报表/约束/指标/实体都有）
+
+    **四类词表全都要查**——漏掉一类，那一类的预期就带着一句空表述，
+    下游拿着它对不上任何东西（而看板上看不出来，只是一句空话）。
+    """
     if not kind:
         return ""
+    if kind in WMS_ENTITIES:
+        return str(WMS_ENTITIES[kind].get("statement", ""))
     if kind in WMS_CONSTRAINTS:
         return str(WMS_CONSTRAINTS[kind].get("statement", ""))
     if kind in WMS_REPORTS:

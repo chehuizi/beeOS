@@ -133,6 +133,21 @@ WMS_DESIGN_BOX = BeeBoxDefinition(
                 op="eq",
                 value=True,
             ),
+            # ---- 预期载体 ----
+            #
+            # 「模型认出来的每个 WMS 概念，都要变成一条可判定的预期」。
+            #
+            # 这条不是重复 `wms_binding`：wms_binding 问的是
+            # 「每条可建模需求都绑上了吗」，这条问的是
+            # 「绑定有没有被带成预期」——中间隔了两跳，
+            # 载体在中间被吃掉的话，wms_binding 照样绿，
+            # 而下游（测试盒 / 分析盒）拿到的是**空的预期集**，
+            # 于是「验证业务价值」静悄悄地退化成「什么都没验」。
+            AcceptanceRule(
+                metric="expectation_completeness",
+                op="eq",
+                value=True,
+            ),
         ],
         exceptions=[
             ExceptionRule(

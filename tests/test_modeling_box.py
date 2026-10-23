@@ -124,11 +124,16 @@ class TestModelingBoxDefinition:
         assert t.beeline_version == 1
 
     def test_acceptance_all_machine_verifiable(self):
-        """7 条 acceptance 必须是机器可验字段（无主观项）
+        """8 条 acceptance 必须是机器可验字段（无主观项）
 
-        **后两条是 WMS 专属的**。前 5 条验「模型自洽」，后 2 条验
+        **第 6、7 条是 WMS 专属的**：前 5 条验「模型自洽」，它们验
         「**这是不是一个 WMS 模型**」——盒子挂着 WMS 的招牌，
         就不能只验自洽性。
+
+        **第 8 条验「预期载体有没有被带出来」**：
+        模型认出来的每个 WMS 概念，都要变成一条可判定的预期。
+        少了它，下游（测试盒 / 分析盒）拿到空的预期集，
+        「验证业务价值」就静悄悄地退化成「什么都没验」。
         """
         d = get_definition()
         metrics = [a.metric for a in d.result.acceptance]
@@ -140,6 +145,7 @@ class TestModelingBoxDefinition:
             "metrics_defined",
             "wms_binding",
             "wms_rule_binding",
+            "expectation_completeness",
         }
         for a in d.result.acceptance:
             assert a.value in (True, 100, 100.0) or (isinstance(a.value, (int, float)) and a.value >= 100)
@@ -280,6 +286,7 @@ class TestModelingEndToEnd:
             "metrics_defined",
             "wms_binding",
             "wms_rule_binding",
+            "expectation_completeness",
         ]
         assert eval_result.failed_rules == []
 

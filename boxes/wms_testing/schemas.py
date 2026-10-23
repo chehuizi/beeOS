@@ -61,13 +61,44 @@ REQUIREMENT_SET_INPUT_SCHEMA = SchemaDef(
     ],
 )
 
+# ---- 可判定的预期（测试盒要消费的形状）----
+#
+# 测试盒要回答的是「**这条需求被满足了没有**」。要能回答这个，
+# 它得先知道每条需求**怎样才算被满足**——那就是预期。
+#
+# 预期由建模盒产出（只有它知道哪个需求绑到了哪个 WMS 概念，
+# 而探针是按概念找的），测试盒**自己声明**它要的形状——
+# schema 归消费者所有。
+EXPECTATION_SET_INPUT_SCHEMA = SchemaDef(
+    id="schema_expectation_set_input",
+    description="测试盒要消费的可判定预期（每条 WMS 绑定一条）",
+    fields=[
+        FieldDef(name="expectations", type="array", required=True, items=FieldDef(
+            name="expectation", type="object", properties=[
+                FieldDef(name="expectation_id", type="string"),
+                FieldDef(name="requirement_id", type="string"),
+                FieldDef(name="wms_kind", type="string"),
+                FieldDef(name="statement", type="string"),
+                FieldDef(name="evidence", type="string"),
+            ],
+        )),
+    ],
+)
+
 TEST_TASK_INPUT_SCHEMA = SchemaDef(
     id="schema_test_task_input",
-    description="测试任务（制品 + 需求集 + 场景集）（一次测试任务的投料）",
+    description="测试任务（制品 + 需求集 + 预期 + 场景集）（一次测试任务的投料）",
     fields=[
         FieldDef(name="test_task_id", type="string", required=True),
         FieldDef(name="artifact_ref", type="ref:schema_build_artifact_input", required=True),
         FieldDef(name="requirement_ref", type="ref:schema_requirement_set_input", required=True),
+        # **预期是必填的**：没有它，测试盒就不知道该验什么，
+        # 跑出来的「全绿」等于「什么也没验」。
+        #
+        # 它从**建模盒**接力过来（不是开发盒）——预期是建模盒产出的，
+        # 开发盒只是往下游递东西。让测试盒等开发盒转发，
+        # 等于把「这条需求该怎样算被满足」的责任压给一个造制品的盒子。
+        FieldDef(name="expectation_ref", type="ref:schema_expectation_set_input", required=True),
         FieldDef(name="scenarios", type="array", required=True, items=FieldDef(name="item", type="string")),
     ],
 )
@@ -110,6 +141,7 @@ TEST_REPORT_SCHEMA = SchemaDef(
 ALL_SCHEMAS = [
     BUILD_ARTIFACT_INPUT_SCHEMA,
     REQUIREMENT_SET_INPUT_SCHEMA,
+    EXPECTATION_SET_INPUT_SCHEMA,
     TEST_TASK_INPUT_SCHEMA,
     TEST_EXECUTION_SCHEMA,
     TEST_VERDICT_SCHEMA,

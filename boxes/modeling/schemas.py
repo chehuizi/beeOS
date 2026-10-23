@@ -365,6 +365,48 @@ MODEL_PACKAGE_ELEMENTS = SchemaDef(
 
 
 # ============================================================
+# 可判定的预期（需求侧的预期载体）
+# ============================================================
+#
+# 一条需求「被模型覆盖了」不等于「这条需求被满足了」。
+# 以前需求集里只有需求描述（散文），没有任何东西说得出
+# **这条需求怎么算被满足**——于是「验证业务价值」会退化成
+# 「验这个名字存不存在」。
+#
+# 预期就是那个「怎么算被满足」：
+#   requirement_id —— 它来自哪条需求（可追溯）
+#   wms_kind       —— 它落在哪个 WMS 概念上（**可判定**的根据）
+#   statement      —— 该概念的正式表述（**机械取自词表**，不编）
+#   evidence       —— 业务原话里的逐字片段（**机械取自绑定**）
+#
+# 为什么由建模盒产出（而不是需求盒）：
+# 「可判定」要求预期挂在一个 WMS 概念上——测试盒的探针是按概念找的。
+# 只有建模盒知道哪个需求绑到了哪个概念；需求盒那边只有业务原话，
+# 做不出可判定的预期，只能做出一句复述。
+
+MODEL_EXPECTATION = FieldDef(
+    name="expectation",
+    type="object",
+    properties=[
+        FieldDef(name="expectation_id", type="string"),
+        FieldDef(name="requirement_id", type="string"),
+        FieldDef(name="wms_kind", type="string"),
+        FieldDef(name="statement", type="string"),
+        FieldDef(name="evidence", type="string"),
+    ],
+)
+
+
+MODEL_EXPECTATIONS = SchemaDef(
+    id="schema_model_expectations",
+    description="可判定的预期（每条 WMS 绑定一条：这条需求该怎样才算被满足）",
+    fields=[
+        FieldDef(name="expectations", type="array", items=MODEL_EXPECTATION),
+    ],
+)
+
+
+# ============================================================
 # 输出层：业务模型包（含证据）
 # ============================================================
 
@@ -381,6 +423,11 @@ MODEL_EVIDENCE = SchemaDef(
         FieldDef(name="reference_integrity", type="boolean"),
         FieldDef(name="structural_compliance", type="boolean"),
         FieldDef(name="metrics_defined", type="boolean"),
+        # ---- 可判定的预期 ----
+        # 「判了就要带出来」：判据读的就是这份载体，
+        # 不带出来的话，下游（测试盒 / 分析盒）根本不知道该验什么。
+        FieldDef(name="expectations", type="array", items=MODEL_EXPECTATION),
+        FieldDef(name="expectation_completeness", type="boolean"),
         FieldDef(
             name="evidence_detail",
             type="object",
@@ -432,6 +479,14 @@ BUSINESS_MODEL_PACKAGE = SchemaDef(
         FieldDef(name="reference_integrity", type="boolean"),
         FieldDef(name="structural_compliance", type="boolean"),
         FieldDef(name="metrics_defined", type="boolean"),
+        # ---- 可判定的预期（需求侧的预期载体）----
+        #
+        # 「验证业务价值」得先有**可判定的东西**：
+        # 每条 WMS 绑定 → 一条预期（这条需求该怎样才算被满足）。
+        # 少了它，下游只能拿需求描述去猜「算不算满足」——
+        # 那就退化成「验名字存不存在」。
+        FieldDef(name="expectations", type="array", items=MODEL_EXPECTATION),
+        FieldDef(name="expectation_completeness", type="boolean"),
         # ---- exception 条件读到的量 ----
         # 这三个以前**产出里一直有、schema 里一直没写**。
         # 后果不是产出缺东西，是三条 exception 规则各自指向一个
@@ -566,6 +621,7 @@ ALL_SCHEMAS = [
     CLASSIFIED_REQUIREMENTS,
     MODEL_ELEMENTS,
     MODEL_PACKAGE_ELEMENTS,
+    MODEL_EXPECTATIONS,
     MODEL_EVIDENCE,
     BUSINESS_MODEL_PACKAGE,
 ]

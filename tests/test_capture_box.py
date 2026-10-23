@@ -38,12 +38,20 @@ def store() -> TaskRunStore:
 
 @pytest.fixture(autouse=True)
 def no_llm(monkeypatch):
-    """默认禁掉 LLM——除非用例显式 stub 成某个返回值"""
+    """默认禁掉**抽取腿**的 LLM——除非用例显式 stub 成某个返回值
+
+    WMS 概念绑定腿（建模盒）不在此列：它有独立的桩，
+    而且有几条用例会连着把产出投给建模盒（见 test_产出可直接投建模盒）。
+    """
     from runtime import llm
-    monkeypatch.setattr(
-        llm, "complete_json",
-        lambda *a, **kw: (_ for _ in ()).throw(llm.LLMError("test: no llm")),
-    )
+    from tests.conftest import stub_wms_binder
+
+    def guard(prompt, **kw):
+        if "需求列表：" in prompt:
+            return stub_wms_binder(prompt, **kw)
+        raise llm.LLMError("test: no llm")
+
+    monkeypatch.setattr(llm, "complete_json", guard)
 
 
 # ============================================================
@@ -498,10 +506,15 @@ def _stub_compliant_llm(prompt: str, **kw) -> dict:
 
 @pytest.fixture
 def stub_llm(monkeypatch):
-    """把 LLM 换成按输入现造的合规产出（见 _stub_compliant_llm 的理由）"""
+    """把 LLM 换成按输入现造的合规产出（见 _stub_compliant_llm 的理由）
+
+    走**分流桩**：抽取腿用合规图桩，绑定腿用 WMS 词表桩——
+    两条腿在同一个用例里都会被打到。
+    """
     from runtime import llm
-    monkeypatch.setattr(llm, "complete_json", _stub_compliant_llm)
-    return _stub_compliant_llm
+    from tests.conftest import stub_llm_dispatch
+    monkeypatch.setattr(llm, "complete_json", stub_llm_dispatch)
+    return stub_llm_dispatch
 
 
 def _run_capture(store, narrative, llm_result=None):

@@ -554,7 +554,8 @@ class TestTriggerApi:
         conn.close()
         return resp.status, data
 
-    def test_trigger_modeling_box_accepted(self, server_url: tuple[str, TaskRunStore]):
+    def test_trigger_modeling_box_accepted(self, server_url: tuple[str, TaskRunStore],
+                                           stub_llm):
         """有效触发：建模盒走完整履约链 → completed + accepted，并落盘"""
         url, store = server_url
         before = len(store._cache)
@@ -595,7 +596,8 @@ class TestTriggerApi:
         assert store._cache[-1]["task_run_id"] == data["task_run_id"]
         assert store._cache[-1]["acceptance_status"] == "accepted"
 
-    def test_trigger_rejected_flow(self, server_url: tuple[str, TaskRunStore]):
+    def test_trigger_rejected_flow(self, server_url: tuple[str, TaskRunStore],
+                                   stub_llm):
         """履约完成但验收失败（无 metric 需求）→ completed + rejected"""
         url, _ = server_url
         status, data = self._post(url, {

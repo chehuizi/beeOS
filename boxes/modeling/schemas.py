@@ -380,6 +380,23 @@ BUSINESS_MODEL_PACKAGE = SchemaDef(
         # 「当库存 > 0 时……」模型照样全绿，而盒子挂着 WMS 的招牌。
         FieldDef(name="wms_binding", type="boolean"),
         FieldDef(name="wms_rule_binding", type="boolean"),
+        # 绑定作废的原因（自造概念 / 证据不是原文 / 类别不匹配）。
+        # **判了就要看得见**：只给一个「没绑上」的布尔值的话，
+        # 读者分不清是「模型没认出来」还是「模型认错了」——
+        # 这两种要修的地方完全不同。
+        FieldDef(
+            name="binding_errors",
+            type="array",
+            required=False,
+            items=FieldDef(
+                name="binding_error",
+                type="object",
+                properties=[
+                    FieldDef(name="requirement_id", type="string"),
+                    FieldDef(name="reason", type="string"),
+                ],
+            ),
+        ),
         # WMS 域摘要：模型里出现了哪些 WMS 概念、各自绑到哪些需求。
         # 不带出来的后果是「算了却看不见」——judge 判了红，读者看不到红在哪。
         FieldDef(

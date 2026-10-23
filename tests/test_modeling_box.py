@@ -29,6 +29,9 @@ from runtime import (
 )
 from runtime.contract import validate_payload
 
+# 建模盒的 WMS 绑定走 LLM → 这组测试要桩（分流桩：抽取腿 / 绑定腿都认）
+pytestmark = pytest.mark.usefixtures("stub_llm")
+
 
 # ============================================================
 # 测试 fixture

@@ -387,9 +387,9 @@ class TestOneRequirementWalksTheChain:
     @pytest.fixture(autouse=True)
     def stub_llm(self, monkeypatch):
         from runtime import llm
-        from tests.conftest import stub_compliant_llm
+        from tests.conftest import stub_llm_dispatch
 
-        monkeypatch.setattr(llm, "complete_json", stub_compliant_llm)
+        monkeypatch.setattr(llm, "complete_json", stub_llm_dispatch)
 
     def test_three_boxes_one_subject_ref(self, tmp_path):
         store = TaskRunStore(Path(tmp_path) / "runs.jsonl")

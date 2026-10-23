@@ -19,11 +19,7 @@ from typing import Any
 from boxes.modeling.domain import (
     WMS_CONSTRAINTS,
     WMS_ENTITIES,
-    bind_constraint,
-    bind_entity_kind,
-    bind_metric,
     label_of,
-    requirement_sentences,
 )
 from core.models import NOT_APPLICABLE
 from runtime.runner import HandlerRunner
@@ -105,95 +101,117 @@ DDD_PATTERNS = {
 
 
 def _simulate_generate_model_elements(input_data: dict[str, Any]) -> dict[str, Any]:
-    """按分类生成 DDD 战术设计元素（名称取自需求描述，pattern 标注战术模式，trace_to 回指需求）"""
+    """按分类生成 DDD 战术设计元素（名称取自需求描述，pattern 标注战术模式，trace_to 回指需求）
+
+    **WMS 绑定这一段换成了 LLM**（见 boxes/modeling/binder.py）：
+    原来的纯关键词匹配认不出「同一 SKU 出库按效期升序分配」这种最普通的说法，
+    连 fefo 自己的 statement 都绑不上——主线需求因此在第 2 只盒子就断了。
+
+    现在：**LLM 归概念，机械层校验**（概念得在词表里、证据得是原文子串），
+    认不出就是认不出（不绑），落到 `wms_binding` 的红里，不猜。
+
+    作废的绑定（自造概念 / 证据不是原文）记进 `binding_errors`，
+    一路带到 evidence_detail——**红要能定位到具体是哪条需求、为什么**。
+    """
+    from boxes.modeling.binder import bind_requirements
+
     by_type = input_data.get("by_type", {})
-    req_by_id = {r.get("requirement_id"): r for r in input_data.get("requirements", [])}
+    requirements = input_data.get("requirements", [])
+    req_by_id = {r.get("requirement_id"): r for r in requirements}
+
+    # ---- LLM 绑定（一次调用，批量）----
+    bindings, binding_errors = bind_requirements(requirements)
+
+    def kinds_of(rid: str) -> list[dict[str, str]]:
+        """这条需求绑到的 WMS 概念
+
+        **绑不上也要产出模型元素**（wms_kind=None）——
+        「模型没覆盖这条需求」（覆盖率）和「这条需求不是 WMS 概念」（WMS 绑定）
+        是两件不同的事，混成一件的话，一条绑不上的需求会把两条判据一起拖下水，
+        而覆盖率那个数从此不再表示覆盖率。
+        """
+        return bindings.get(rid, [])
 
     def name_of(rid: str, prefix: str) -> str:
         desc = (req_by_id.get(rid) or {}).get("description", "").strip()
         return desc or f"{prefix}_{rid}"
 
-    # WMS 绑定是**机械的**（关键词词表，见 boxes/modeling/domain.py）：
-    # 认不出就填 None，让 wms_binding 判红。**不猜**——猜一个看起来
-    # 像对的 wms_kind，比老老实实说「认不出」坏得多。
-    #
-    # 绑定认的是**需求的 description**。实体名以前就是需求描述抄一遍，
-    # 拿实体名去匹配等于自己匹配自己，等于恒真。
-    def bind_entity(rid: str) -> str | None:
-        return bind_entity_kind((req_by_id.get(rid) or {}).get("description", ""))
+    def _ids(prefix: str, rid: str, index: int) -> str:
+        """同一个需求绑到多个概念时，元素 id 要唯一"""
+        return f"{prefix}_{rid}" if index == 0 else f"{prefix}_{rid}_{index}"
 
-    entities = [
-        {
-            "entity_id": f"ent_{rid}",
-            "name": name_of(rid, "Entity"),
-            "pattern": DDD_PATTERNS["object"][0],
-            "wms_kind": bind_entity(rid),
-            "trace_to": rid,
-        }
-        for rid in by_type.get("object", [])
-    ]
+    def _kinds_or_placeholder(rid: str) -> list[dict[str, str] | None]:
+        ks = kinds_of(rid)
+        return list(ks) if ks else [None]
 
-    # 一条需求常常藏不止一条 WMS 规则：
-    #   「同一 SKU 在同一库位不可重复占用；库存低于 5 时触发补货」
-    # 整句匹配只认得出其中一个，另一条就悄悄漏了。按句读符切一刀，
-    # 只为了**不漏**，不是为了切得更聪明。
-    def bind_rules_for(rid: str) -> list[str]:
-        kinds: list[str] = []
-        for sentence in requirement_sentences((req_by_id.get(rid) or {}).get("description", "")):
-            kind = bind_constraint(sentence)
-            if kind and kind not in kinds:
-                kinds.append(kind)
-        return kinds
+    # 实体：一条需求可能同时提到几个 WMS 概念（库存要按 SKU 和库位分别记账）
+    # → 每个概念一个模型元素，wms_kind 指明是哪个。
+    entities = []
+    for rid in by_type.get("object", []):
+        for i, k in enumerate(_kinds_or_placeholder(rid)):
+            entities.append({
+                "entity_id": _ids("ent", rid, i),
+                "name": name_of(rid, "Entity"),
+                "pattern": DDD_PATTERNS["object"][0],
+                "wms_kind": k["kind"] if k else None,
+                "trace_to": rid,
+            })
 
+    # 规则：一条需求常常藏不止一条 WMS 规则。
+    # LLM 直接给出这条需求约束了哪几个 WMS 约束——比按句读符切一刀更准，
+    # 而且**有据可查**（每条绑定都带原文证据）。
     rules = []
     for rid in by_type.get("rule", []):
-        kinds = bind_rules_for(rid)
-        for idx, kind in enumerate(kinds):
+        for i, k in enumerate(_kinds_or_placeholder(rid)):
             rules.append({
-                "rule_id": f"rule_{rid}" if idx == 0 else f"rule_{rid}_{idx}",
+                "rule_id": _ids("rule", rid, i),
                 "name": name_of(rid, "Rule"),
                 "condition": f"<condition for {rid}>",
                 "action": f"<action for {rid}>",
                 "pattern": DDD_PATTERNS["rule"][0],
-                "wms_constraint": kind,
+                "wms_constraint": k["kind"] if k else None,
                 "trace_to": rid,
             })
+
     # process / event 同样要能绑。「收货后按库位策略上架」清清楚楚是
     # WMS 流程，只因为类型不是 object 就判它没绑上——判据在假设需求的形状。
-    processes = [
-        {
-            "process_id": f"proc_{rid}",
-            "name": name_of(rid, "Process"),
-            "pattern": DDD_PATTERNS["process"][0],
-            "wms_kind": bind_entity_kind((req_by_id.get(rid) or {}).get("description", "")),
-            "trace_to": rid,
-        }
-        for rid in by_type.get("process", [])
-    ]
+    processes = []
+    for rid in by_type.get("process", []):
+        for i, k in enumerate(_kinds_or_placeholder(rid)):
+            processes.append({
+                "process_id": _ids("proc", rid, i),
+                "name": name_of(rid, "Process"),
+                "pattern": DDD_PATTERNS["process"][0],
+                "wms_kind": k["kind"] if k else None,
+                "trace_to": rid,
+            })
+
     # 指标也要能绑 WMS：wms_kind 放 WMS 指标名（wms_pick_accuracy…），
     # 跟实体 kinds 同一列。schema 里 values 是实体 kinds + [None]，
     # 这里得把指标名也列进去，否则契约跟产出对不上。
-    metrics = [
-        {
-            "metric_id": f"met_{rid}",
-            "name": name_of(rid, "Metric"),
-            "target": 0.85,
-            "pattern": DDD_PATTERNS["metric"][0],
-            "wms_kind": bind_metric((req_by_id.get(rid) or {}).get("description", "")),
-            "trace_to": rid,
-        }
-        for rid in by_type.get("metric", [])
-    ]
-    events = [
-        {
-            "event_id": f"evt_{rid}",
-            "name": name_of(rid, "Event"),
-            "pattern": DDD_PATTERNS["event"][0],
-            "wms_kind": bind_entity_kind((req_by_id.get(rid) or {}).get("description", "")),
-            "trace_to": rid,
-        }
-        for rid in by_type.get("event", [])
-    ]
+    metrics = []
+    for rid in by_type.get("metric", []):
+        for i, k in enumerate(_kinds_or_placeholder(rid)):
+            metrics.append({
+                "metric_id": _ids("met", rid, i),
+                "name": name_of(rid, "Metric"),
+                "target": 0.85,
+                "pattern": DDD_PATTERNS["metric"][0],
+                "wms_kind": k["kind"] if k else None,
+                "trace_to": rid,
+            })
+
+    events = []
+    for rid in by_type.get("event", []):
+        for i, k in enumerate(_kinds_or_placeholder(rid)):
+            events.append({
+                "event_id": _ids("evt", rid, i),
+                "name": name_of(rid, "Event"),
+                "pattern": DDD_PATTERNS["event"][0],
+                "wms_kind": k["kind"] if k else None,
+                "trace_to": rid,
+            })
+
     return {
         "set_id": input_data.get("set_id", ""),
         "business_goal": input_data.get("business_goal", ""),
@@ -205,6 +223,9 @@ def _simulate_generate_model_elements(input_data: dict[str, Any]) -> dict[str, A
         "processes": processes,
         "metrics": metrics,
         "events": events,
+        # 绑定作废的原因——**要能说清「为什么没绑上」**，
+        # 而不是只给一个「没绑上」的布尔值。
+        "binding_errors": binding_errors,
     }
 
 
@@ -237,6 +258,9 @@ def _simulate_verify_coverage(input_data: dict[str, Any]) -> dict[str, Any]:
         "processes": input_data.get("processes", []),
         "metrics": input_data.get("metrics", []),
         "events": input_data.get("events", []),
+        # 绑定作废的原因要一路带下去（下面三跳都得显式传，
+        # 漏一跳下游就拿到 0 而不是 None——「吃了不传」的同族病）
+        "binding_errors": input_data.get("binding_errors", []),
         "__coverage__": coverage,
         "__uncovered__": uncovered,
     }
@@ -355,6 +379,10 @@ def _simulate_check_consistency(input_data: dict[str, Any]) -> dict[str, Any]:
         "processes": processes,
         "metrics": metrics,
         "events": events,
+        # 绑定作废的原因——**这一跳曾经漏了**，于是下游的 evidence_detail
+        # 拿到的是空列表：读者只看到「没绑上」，看不到「模型认错了」。
+        # 「吃了不传」的同族病，第四例。
+        "binding_errors": input_data.get("binding_errors", []),
         "__coverage__": input_data.get("__coverage__", 0.0),
         "__uncovered__": input_data.get("__uncovered__", []),
         "__rule_consistency__": True,
@@ -389,6 +417,7 @@ def _simulate_generate_evidence(input_data: dict[str, Any]) -> dict[str, Any]:
         # 分母和计数得一路带到打包腿，否则 wms_domain 里那个
         # 「绑定 0/0」是分母没传下去，不是真的没绑定。
         "modelable_ids": input_data.get("modelable_ids", []),
+        "binding_errors": input_data.get("binding_errors", []),
         "wms_entity_count": input_data.get("__wms_entity_count__", 0),
         "wms_rule_count": input_data.get("__wms_rule_count__", 0),
         "bound_modelable_count": input_data.get("__bound_modelable_count__", 0),
@@ -403,6 +432,10 @@ def _simulate_generate_evidence(input_data: dict[str, Any]) -> dict[str, Any]:
             "requirements_without_wms_binding": input_data.get(
                 "__requirements_without_wms_binding__", []),
             "unbound_requirements": input_data.get("__uncovered__", []),
+            # 绑定作废的原因（自造概念 / 证据不是原文 / 类别不匹配）。
+            # **没有它，读者只看到「没绑上」，不知道是模型没认出来
+            # 还是模型认错了**——这两种要修的地方完全不同。
+            "binding_errors": input_data.get("binding_errors", []),
         },
     }
 
@@ -467,6 +500,9 @@ def _simulate_package_model(input_data: dict[str, Any]) -> dict[str, Any]:
             - input_data.get("bound_modelable_count", 0),
         ),
         "requirement_count": input_data.get("requirement_count", 0),
+        # 绑定作废的原因，摆在顶层——判据/看板/消费方都读得到，
+        # 不用去挖 evidence_detail。
+        "binding_errors": input_data.get("binding_errors", []),
         # **这块以前一直缺**：`schema_business_model_package` 从头就声明了
         # `evidence: ref:schema_model_evidence`，而打包腿从来没产出过它。
         # 「声明了却拿不到」——schema 里写着有，产出里没有，按 schema 生成的

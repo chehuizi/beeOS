@@ -527,6 +527,7 @@ def _check_expiring_sku_count(ctx: ProbeContext, facts: dict[str, Any]) -> Probe
                 {
                     "batch_no": row.get("batchNo"),
                     "expire_date": row.get("expireDate"),
+                    "produced_date": row.get("producedDate"),
                     "location_code": row.get("locationCode"),
                     "on_hand_qty": row.get("onHandQty"),
                 }

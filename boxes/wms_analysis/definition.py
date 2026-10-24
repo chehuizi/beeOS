@@ -11,12 +11,11 @@ WMS 线上效果分析盒——上线之后拿真实运行数据回头看：**�
 - 履约政策 Policy（queen）
 - 履约度量 Metrics
 
-**成熟度：skeleton**。4 条判据都是它**将来**要验的东西，现在
-还没实现。`maturity="skeleton"` 让看板显式标「未实现」且不把它算进
-验收率——「未实现」和「实现了但不达标」必须分得开。
+**成熟度：live**。4 条判据现在真的在验：预期 vs 实测逐项比、
+落差归因到「哪条需求、哪个概念、证据在哪」、并播下下一轮需求的种子。
 
-**不声明任何指标**：骨架盒没有产出，就没有可测的量。声明了指标却
-没有采集器，那正是「声明了却拿不到」。
+**不声明任何指标**：没有基线就不声明「线上该是多少」，
+凭空写一个数字只会让看板上出现一个没人解释过的指标。
 
 ## 接线上为什么是 feedback_into 而不是 feeds_into
 
@@ -92,7 +91,13 @@ WMS_ANALYSIS_BOX = BeeBoxDefinition(
     result=ResultDef(
         type="wms_effect_analyzed",
         result_schema="schema_analysis_record",
-        maturity="skeleton",
+        # **live**：腿是真的了——它读测试盒跑出来的实测观测，
+        # 跟设计盒声明的预期逐项比，落差归因 + 播种下一轮需求。
+        #
+        # 以前是 skeleton：产出是桩，刻意不产出判据要的 metric，
+        # 让看板显式标「未实现」。腿真了徽章就得摘掉——
+        # **「未实现」和「实现了但不达标」必须分得开**。
+        maturity="live",
         acceptance=[
             AcceptanceRule(
                 metric="convergence_rate", op="eq", value=True,

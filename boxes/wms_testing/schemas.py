@@ -137,19 +137,24 @@ OBSERVATION_DETAIL_PROPERTIES = [
     FieldDef(name="allocated_expire_date", type="string", required=False),
     FieldDef(name="expected_batch_no", type="string", required=False),
     FieldDef(name="expected_expire_date", type="string", required=False),
+    # **诊断字段一律 required=False**：
+    # 定位证据是「有就报、没有也不该拦住交接」的东西。
+    # 以前把 produced_date 声明成必填，而两个探针产出的键集不一样
+    # （一个带 produced_date、一个不带）→ 交接直接被拒，
+    # 表现是「分析盒收不到测试盒的产出」。
     FieldDef(name="candidates", type="array", required=False, items=FieldDef(
         name="candidate", type="object", properties=[
-            FieldDef(name="batch_no", type="string"),
-            FieldDef(name="expire_date", type="string"),
-            FieldDef(name="qty", type="number"),
+            FieldDef(name="batch_no", type="string", required=True),
+            FieldDef(name="expire_date", type="string", required=False),
+            FieldDef(name="qty", type="number", required=False),
         ])),
     FieldDef(name="stored_inventory", type="array", required=False, items=FieldDef(
         name="stored", type="object", properties=[
-            FieldDef(name="batch_no", type="string"),
-            FieldDef(name="expire_date", type="string"),
-            FieldDef(name="produced_date", type="string"),
-            FieldDef(name="location_code", type="string"),
-            FieldDef(name="on_hand_qty", type="number"),
+            FieldDef(name="batch_no", type="string", required=True),
+            FieldDef(name="expire_date", type="string", required=False),
+            FieldDef(name="produced_date", type="string", required=False),
+            FieldDef(name="location_code", type="string", required=False),
+            FieldDef(name="on_hand_qty", type="number", required=False),
         ])),
     FieldDef(name="expiringSoonSkuCount", type="number", required=False),
     FieldDef(name="near_batch", type="string", required=False),

@@ -347,7 +347,7 @@ curl -X POST localhost:8765/api/trigger -d '{
 - ✅ testing 盒声明它要消费的预期形状（`expectation_ref` 必填）
 - ✅ analysis 的 `expected_metrics` 从字符串数组升级成结构化
 - ✅ testing 真腿（真 WMS 实例 / 真单据流 / 真实测值；四种结论分开）
-- ⬜ analysis 真腿（比对 / 归因 / 播种）
+- ✅ analysis 真腿（比对 / 归因 / 播种）
 - **验收**：§1.3 那个需求走完 → analysis 判红，证据里能指到
   「分配批次 expire_date 晚于候选批次最小值」——**红灯带定位，不是布尔**
 

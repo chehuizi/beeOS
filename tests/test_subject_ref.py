@@ -73,7 +73,7 @@ class TestTheDeclarationIsReal:
                 if not task.subject_ref_field:
                     continue
                 schema = definition.get_schema(task.task_schema)
-                payload = _minimal_payload(schema)
+                payload = _minimal_payload(schema, definition.schemas)
                 payload[task.subject_ref_field] = ""  # 空串 = 没给
                 with pytest.raises(TriggerError) as exc:
                     trigger_task(bid, task.type, payload, TaskRunStore("/tmp/_sr.jsonl"))
@@ -100,7 +100,7 @@ class TestTheDeclarationIsReal:
                 if not task.subject_ref_field:
                     continue
                 schema = definition.get_schema(task.task_schema)
-                payload = _minimal_payload(schema)
+                payload = _minimal_payload(schema, definition.schemas)
                 payload[task.subject_ref_field] = {"id": "x", "whole": "object"}
                 store = TaskRunStore("/tmp/_sr_obj.jsonl")
                 before = len(store.list_recent(limit=1000))
@@ -209,13 +209,13 @@ class TestTheRefIsRecordedAndFindable:
             trigger_task(
                 "wms_design_box",
                 "handle_modeling_request",
-                _minimal_payload(schema) | {"set_id": "REQ-2026-003"},
+                _minimal_payload(schema, _schemas_of("wms_design_box")) | {"set_id": "REQ-2026-003"},
                 store,
             )
         trigger_task(
             "wms_design_box",
             "handle_modeling_request",
-            _minimal_payload(schema) | {"set_id": "REQ-2026-999"},
+            _minimal_payload(schema, _schemas_of("wms_design_box")) | {"set_id": "REQ-2026-999"},
             store,
         )
 
@@ -240,7 +240,7 @@ class TestTheRefIsRecordedAndFindable:
         schema = _schema_of("wms_design_box", "handle_modeling_request")
         trigger_task(
             "wms_design_box", "handle_modeling_request",
-            _minimal_payload(schema) | {"set_id": "REQ-X"}, store,
+            _minimal_payload(schema, _schemas_of("wms_design_box")) | {"set_id": "REQ-X"}, store,
         )
 
         everything = store.list_by_subject("REQ-X")
@@ -310,7 +310,7 @@ class TestTheRefCanLiveInsideAnObject:
         契约闸不知道 subfield 的存在（见 lax_dev_box 的说明）。
         """
         schema = lax_dev_box.get_schema("schema_dev_task_input")
-        payload = _minimal_payload(schema)
+        payload = _minimal_payload(schema, lax_dev_box.schemas)
         payload["design_package_ref"] = {"package_id": "p1"}  # 缺 set_id
         with pytest.raises(TriggerError) as exc:
             trigger_task(
@@ -324,7 +324,7 @@ class TestTheRefCanLiveInsideAnObject:
     def test_the_subfield_value_must_be_a_string(self, lax_dev_box):
         """子字段的值必须是 id 字符串——不是又一份对象"""
         schema = lax_dev_box.get_schema("schema_dev_task_input")
-        payload = _minimal_payload(schema)
+        payload = _minimal_payload(schema, lax_dev_box.schemas)
         payload["design_package_ref"] = {
             "package_id": "p1",
             "set_id": {"nested": "object"},
@@ -347,7 +347,7 @@ class TestTheRefCanLiveInsideAnObject:
         断言的是**结果**（被拒 + 报错点名了哪个字段）。
         """
         schema = _schema_of("wms_development_box", "handle_development_request")
-        payload = _minimal_payload(schema)
+        payload = _minimal_payload(schema, _schemas_of("wms_development_box"))
         payload["design_package_ref"] = "REQ-2026-003"  # 是 id，不是对象
         with pytest.raises(TriggerError) as exc:
             trigger_task(
@@ -362,7 +362,7 @@ class TestTheRefCanLiveInsideAnObject:
         """真的取到了——取到的是对象里那个 id，不是整个对象"""
         store = TaskRunStore(tmp_path / "runs.jsonl")
         schema = _schema_of("wms_development_box", "handle_development_request")
-        payload = _minimal_payload(schema)
+        payload = _minimal_payload(schema, _schemas_of("wms_development_box"))
         payload["design_package_ref"] = {
             "package_id": "p1",
             "set_id": "REQ-2026-007",
@@ -406,7 +406,7 @@ class TestTheKindIsDeclared:
         with pytest.raises(TriggerError) as exc:
             trigger_task(
                 "wms_design_box", broken.task[0].type,
-                _minimal_payload(schema) | {"set_id": "REQ-1"},
+                _minimal_payload(schema, _schemas_of("wms_design_box")) | {"set_id": "REQ-1"},
                 TaskRunStore("/tmp/_sr_kind.jsonl"),
             )
         assert "subject_kind" in str(exc.value)
@@ -416,7 +416,7 @@ class TestTheKindIsDeclared:
         schema = _schema_of("wms_design_box", "handle_modeling_request")
         result = trigger_task(
             "wms_design_box", "handle_modeling_request",
-            _minimal_payload(schema) | {"set_id": "REQ-1"}, store,
+            _minimal_payload(schema, _schemas_of("wms_design_box")) | {"set_id": "REQ-1"}, store,
         )
         run = store.get_run(result["task_run_id"])
         assert run["subject_kind"] == "requirement", (
@@ -440,7 +440,7 @@ class TestTheKindIsDeclared:
         schema = _schema_of("wms_design_box", "handle_modeling_request")
         trigger_task(
             "wms_design_box", "handle_modeling_request",
-            _minimal_payload(schema) | {"set_id": "OPS-1"}, store,
+            _minimal_payload(schema, _schemas_of("wms_design_box")) | {"set_id": "OPS-1"}, store,
         )
         assert len(store.list_by_subject("OPS-1")) == 1
         assert len(store.list_by_subject("OPS-1", subject_kind="requirement")) == 1
@@ -452,19 +452,44 @@ class TestTheKindIsDeclared:
 # ============================================================
 
 
+def _schemas_of(box_id: str):
+    """这只盒子声明的全部 schema（用来解析 ref:）"""
+    return BOX_REGISTRY[box_id][0]().schemas
+
+
 def _schema_of(box_id: str, task_type: str):
     definition = BOX_REGISTRY[box_id][0]()
     task = next(t for t in definition.task if t.type == task_type)
     return definition.get_schema(task.task_schema)
 
 
-def _minimal_payload(schema) -> dict:
-    """按 schema 造一份最小合法投料（required 字段都给标量占位）"""
+def _resolve_schema(schema_id: str, schemas) -> object | None:
+    """按 id 找 schema（schemas 是 list 或 dict 都行）"""
+    if isinstance(schemas, dict):
+        found = schemas.get(schema_id)
+        return found if found is not None else None
+    for s in schemas or []:
+        if getattr(s, "id", None) == schema_id:
+            return s
+    return None
+
+
+def _minimal_payload(schema, schemas=None) -> dict:
+    """按 schema 造一份最小合法投料（required 字段都给标量占位）
+
+    **ref: 字段要递归造一份合法对象**：
+    以前一律给字符串 "x"，于是契约校验先报「expected object, got str」，
+    把「缺 subject_ref」这条**真正要测的**错误盖住了——
+    守卫看到的是另一个字段的名字，测的就不是它要测的东西。
+    """
     payload: dict = {}
     for f in schema.fields:
         if not f.required:
             continue
-        if f.type == "array":
+        if f.type.startswith("ref:"):
+            target = _resolve_schema(f.type[len("ref:"):], schemas)
+            payload[f.name] = _minimal_payload(target, schemas) if target else {}
+        elif f.type == "array":
             payload[f.name] = []
         elif f.type == "object":
             payload[f.name] = {}

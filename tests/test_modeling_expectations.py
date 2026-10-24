@@ -348,6 +348,7 @@ class TestTheDownstreamBoxesDeclareWhatTheyConsume:
         """
         from runtime.contract import validate_payload
 
+        from boxes.wms_analysis.schemas import ALL_SCHEMAS as ANALYSIS_SCHEMAS
         from boxes.wms_analysis.schemas import ANALYSIS_INPUT_SCHEMA
 
         _, _, package = _chain(monkeypatch, [
@@ -358,7 +359,10 @@ class TestTheDownstreamBoxesDeclareWhatTheyConsume:
             "analysis_id": "an_1",
             "requirement_ref": "req_set_1",
             "expected_metrics": package["expectations"],
+            # 实测观测从测试盒接力过来（分析盒不自己跑探针）
+            "observation_ref": {"observations": []},
             "observed_window": "2026-10",
         }
-        errors = validate_payload(payload, ANALYSIS_INPUT_SCHEMA)
+        errors = validate_payload(payload, ANALYSIS_INPUT_SCHEMA,
+                                  schemas=ANALYSIS_SCHEMAS)
         assert not errors, f"建模盒的预期装不进分析盒声明的形状：{errors}"

@@ -73,7 +73,13 @@ WMS_TESTING_BOX = BeeBoxDefinition(
     result=ResultDef(
         type="wms_verified",
         result_schema="schema_test_report",
-        maturity="skeleton",
+        # **live**：这条腿是真的了——连真的 WMS 实例、造真的单据、
+        # 采真的实测值（见 boxes/wms_testing/probes.py）。
+        #
+        # 以前是 skeleton：产出是桩，刻意不产出判据要的 metric，
+        # 让看板显式标「未实现」。现在腿在了，徽章就得摘掉——
+        # **「未实现」和「实现了但不达标」必须分得开**。
+        maturity="live",
         acceptance=[
             AcceptanceRule(
                 metric="requirement_case_coverage", op="eq", value=True,
@@ -84,8 +90,23 @@ WMS_TESTING_BOX = BeeBoxDefinition(
             AcceptanceRule(
                 metric="no_blocking_defect", op="eq", value=True,
             ),
+            # **阈值是 99，不是 0.99**。
+            #
+            # `case_pass_rate` 是**百分数**（0-100），跟建模盒的
+            # `requirement_coverage` 同一个量纲。写成 `gte 0.99` 的话，
+            # **33.33% 也算通过**——判据在假设指标的形状，
+            # 而实际跑出来「6 条里过了 2 条」被判成 passed。
+            # 这不是理论问题：真跑一次就看见了。
             AcceptanceRule(
-                metric="case_pass_rate", op="gte", value=0.99,
+                metric="case_pass_rate", op="gte", value=99,
+            ),
+            # **「这次验出了点东西」**
+            #
+            # 少了它，一次什么都没验出来的运行会显示成
+            # 「4 条通过 + 1 条用不上」——读起来像「基本没问题」。
+            # 那是假信号：真相比「全都没问题」难看得多。
+            AcceptanceRule(
+                metric="verification_determined", op="eq", value=True,
             ),
         ],
         exceptions=[

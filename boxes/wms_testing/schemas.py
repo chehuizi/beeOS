@@ -123,9 +123,93 @@ TEST_VERDICT_SCHEMA = SchemaDef(
     ],
 )
 
+# 观测明细的**固定词表**。
+#
+# 探针的细节千差万别，但不能让它是自由形状的 object——
+# **object 字段必须声明 properties**（core.models 的校验就是这么定的），
+# 而且自由形状的字段消费方读不了：「里面有什么键」没人知道。
+#
+# 所以定一份**所有探针共用**的键表。探针写了表外的键也不会报错
+# （契约校验容忍多余字段），但表内的键是**承诺过的**——
+# 看板和分析盒可以照着这组键渲染。
+OBSERVATION_DETAIL_PROPERTIES = [
+    FieldDef(name="allocated", type="string", required=False),
+    FieldDef(name="allocated_expire_date", type="string", required=False),
+    FieldDef(name="expected_batch_no", type="string", required=False),
+    FieldDef(name="expected_expire_date", type="string", required=False),
+    FieldDef(name="candidates", type="array", required=False, items=FieldDef(
+        name="candidate", type="object", properties=[
+            FieldDef(name="batch_no", type="string"),
+            FieldDef(name="expire_date", type="string"),
+            FieldDef(name="qty", type="number"),
+        ])),
+    FieldDef(name="stored_inventory", type="array", required=False, items=FieldDef(
+        name="stored", type="object", properties=[
+            FieldDef(name="batch_no", type="string"),
+            FieldDef(name="expire_date", type="string"),
+            FieldDef(name="produced_date", type="string"),
+            FieldDef(name="location_code", type="string"),
+            FieldDef(name="on_hand_qty", type="number"),
+        ])),
+    FieldDef(name="expiringSoonSkuCount", type="number", required=False),
+    FieldDef(name="near_batch", type="string", required=False),
+    FieldDef(name="near_batch_still_has_expiry", type="boolean", required=False),
+    FieldDef(name="expiring_window_days", type="integer", required=False),
+    FieldDef(name="dashboard_keys", type="array", required=False,
+             items=FieldDef(name="k", type="string")),
+    FieldDef(name="concept", type="string", required=False),
+    FieldDef(name="scenario_id", type="string", required=False),
+    FieldDef(name="mode", type="string", required=False),
+    FieldDef(name="outbound_id", type="integer", required=False),
+]
+
+
+# 一条观测：一条预期 ↔ 一次实测
+TEST_OBSERVATION_SCHEMA = SchemaDef(
+    id="schema_test_observation",
+    description="一条预期的实测结果（pass / fail / not_applicable / indeterminate）",
+    fields=[
+        FieldDef(name="expectation_id", type="string", required=True),
+        FieldDef(name="requirement_id", type="string", required=True),
+        FieldDef(name="wms_kind", type="string", required=True),
+        FieldDef(name="statement", type="string", required=False),
+        FieldDef(name="evidence", type="string", required=False),
+        FieldDef(
+            name="outcome",
+            type="enum",
+            values=["pass", "fail", "not_applicable", "indeterminate"],
+            required=True,
+            description="pass=实测满足预期；fail=不满足；"
+                        "not_applicable=没有探针；indeterminate=现场判不了",
+        ),
+        FieldDef(name="summary", type="string", required=True),
+        FieldDef(name="details", type="object", required=False,
+                 properties=OBSERVATION_DETAIL_PROPERTIES),
+    ],
+)
+
+# 场景事实：这次造了什么数（供看板 / 分析盒看）
+SCENARIO_FACT_SCHEMA = SchemaDef(
+    id="schema_test_scenario_fact",
+    description="一个场景造出来的数据（批次与分配结果）",
+    fields=[
+        FieldDef(name="scenario_id", type="string", required=True),
+        FieldDef(name="sku_code", type="string", required=False),
+        FieldDef(name="batches", type="array", required=False, items=FieldDef(
+            name="batch", type="object", properties=[
+                FieldDef(name="batch_no", type="string"),
+                FieldDef(name="expire_date", type="string"),
+                FieldDef(name="produced_date", type="string"),
+                FieldDef(name="qty", type="number"),
+            ])),
+        FieldDef(name="allocated_batch_no", type="string", required=False),
+        FieldDef(name="allocated_qty", type="number", required=False),
+    ],
+)
+
 TEST_REPORT_SCHEMA = SchemaDef(
     id="schema_test_report",
-    description="测试报告（场景 / 用例 / 缺陷）",
+    description="测试报告（场景 / 用例 / 缺陷 / 逐条观测）",
     fields=[
         FieldDef(name="scenario_count", type="integer", required=True),
         FieldDef(name="case_count", type="integer", required=True),
@@ -134,6 +218,68 @@ TEST_REPORT_SCHEMA = SchemaDef(
         FieldDef(name="requirement_case_coverage", type="boolean", required=True),
         FieldDef(name="scenario_coverage", type="boolean", required=True),
         FieldDef(name="no_blocking_defect", type="boolean", required=True),
+        # **「这次验出了点东西」**——
+        # 没有它，「一条都没验出来」会显示成「几条通过 + 几条用不上」，
+        # 读起来像「基本没问题」。那是假信号。
+        FieldDef(name="verification_determined", type="boolean", required=True),
+        # ---- 证据 ----
+        FieldDef(name="observations", type="array", required=True,
+                 items=FieldDef(name="observation", type="object", properties=[
+                     FieldDef(name="expectation_id", type="string"),
+                     FieldDef(name="requirement_id", type="string"),
+                     FieldDef(name="wms_kind", type="string"),
+                     FieldDef(name="statement", type="string", required=False),
+                     FieldDef(name="evidence", type="string", required=False),
+                     FieldDef(name="outcome", type="string"),
+                     FieldDef(name="summary", type="string"),
+                     FieldDef(name="details", type="object", required=False,
+                              properties=OBSERVATION_DETAIL_PROPERTIES),
+                 ])),
+        FieldDef(name="passed_count", type="integer", required=False),
+        FieldDef(name="failed_count", type="integer", required=False),
+        FieldDef(name="not_applicable_count", type="integer", required=False),
+        FieldDef(name="indeterminate_count", type="integer", required=False),
+        FieldDef(name="failed_expectations", type="array", required=False,
+                 items=FieldDef(name="failed", type="object", properties=[
+                     FieldDef(name="expectation_id", type="string"),
+                     FieldDef(name="requirement_id", type="string"),
+                     FieldDef(name="wms_kind", type="string"),
+                     FieldDef(name="summary", type="string"),
+                     FieldDef(name="details", type="object", required=False,
+                              properties=OBSERVATION_DETAIL_PROPERTIES),
+                 ])),
+        FieldDef(name="not_applicable_expectations", type="array", required=False,
+                 items=FieldDef(name="na", type="object", properties=[
+                     FieldDef(name="expectation_id", type="string"),
+                     FieldDef(name="requirement_id", type="string"),
+                     FieldDef(name="wms_kind", type="string"),
+                     FieldDef(name="summary", type="string"),
+                 ])),
+        FieldDef(name="indeterminate_expectations", type="array", required=False,
+                 items=FieldDef(name="ind", type="object", properties=[
+                     FieldDef(name="expectation_id", type="string"),
+                     FieldDef(name="requirement_id", type="string"),
+                     FieldDef(name="wms_kind", type="string"),
+                     FieldDef(name="summary", type="string"),
+                 ])),
+        FieldDef(name="uncovered_requirements", type="array", required=False,
+                 items=FieldDef(name="r", type="string")),
+        FieldDef(name="unknown_scenarios", type="array", required=False,
+                 items=FieldDef(name="s", type="string")),
+        FieldDef(name="scenario_facts", type="array", required=False,
+                 items=FieldDef(name="fact", type="object", properties=[
+                     FieldDef(name="scenario_id", type="string"),
+                     FieldDef(name="sku_code", type="string", required=False),
+                     FieldDef(name="batches", type="array", required=False,
+                              items=FieldDef(name="batch", type="object", properties=[
+                                  FieldDef(name="batch_no", type="string"),
+                                  FieldDef(name="expire_date", type="string"),
+                                  FieldDef(name="produced_date", type="string"),
+                                  FieldDef(name="qty", type="number"),
+                              ])),
+                     FieldDef(name="allocated_batch_no", type="string", required=False),
+                     FieldDef(name="allocated_qty", type="number", required=False),
+                 ])),
     ],
 )
 
@@ -145,5 +291,7 @@ ALL_SCHEMAS = [
     TEST_TASK_INPUT_SCHEMA,
     TEST_EXECUTION_SCHEMA,
     TEST_VERDICT_SCHEMA,
+    TEST_OBSERVATION_SCHEMA,
+    SCENARIO_FACT_SCHEMA,
     TEST_REPORT_SCHEMA,
 ]

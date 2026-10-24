@@ -241,6 +241,21 @@ def test_execute_handler(input_data: dict[str, Any]) -> dict[str, Any]:
             exp, result.outcome, result.summary, result.details,
         ))
 
+    # ---- 每条观测都带上「这次测的是哪个实例」----
+    #
+    # 没有这一句，报告上只写着「临期 SKU 数是 0」，读者分不清
+    # 「我在验证实例上量的」和「我在生产上量的」——
+    # 而运维盒（把线上真实状态回写档案）没实现时，
+    # 这个信息在链上就没有别的地方可去了。
+    #
+    # 尤其在 mode=production 上：观测会判 indeterminate
+    # （造数场景只许在验证实例上跑），**这时候必须让人看见
+    # 「我是去生产量的、所以量不了」**，而不是只看到一个空结论。
+    for obs in observations:
+        details = obs.setdefault("details", {})
+        details["measured_base_url"] = base_url
+        details["measured_mode"] = mode
+
     return {
         "test_task_id": input_data.get("test_task_id", ""),
         "requirements": input_data.get("requirements", []),

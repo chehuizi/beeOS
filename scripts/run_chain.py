@@ -176,8 +176,13 @@ def _print_report(p: dict) -> None:
 
     print("\n-- 实测观测 --")
     for obs in p["observations"]:
+        d = obs.get("details") or {}
+        where = d.get("measured_base_url") or ""
+        mode = d.get("measured_mode") or ""
         print(f"  [{obs.get('outcome'):15}] {obs.get('wms_kind'):28} "
               f"{obs.get('summary')}")
+        if where:
+            print(f"      ↳ 测的是：{where}（mode={mode}）")
 
     print(f"\n-- 落差（{p['gap_count']} 条，比了 {p['compared_metric_count']} 条）--")
     for gap in p["gaps"]:

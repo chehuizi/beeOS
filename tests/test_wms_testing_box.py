@@ -276,6 +276,46 @@ class TestTheThreeKindsOfNotVerified:
             f"没说明为什么判不了：{fefo[0]['summary']}"
         )
 
+    def test_every_observation_says_which_instance_it_measured(self, monkeypatch):
+        """每条观测都要说清「我测的是哪个实例」
+
+        没有这一句，报告上只写着「临期 SKU 数是 0」——
+        读者分不清「我在验证实例上量的」和「我在生产上量的」。
+
+        运维盒（把线上真实状态回写档案）没实现时，这个信息在链上
+        没有别的地方可去 → 「生产上满没满足」连「答不了」都看不见。
+        """
+        monkeypatch.setenv("BEEOS_WMS_BASE_URL", "http://127.0.0.1:8081/api/v1")
+        monkeypatch.setenv("BEEOS_WMS_MODE", "verification")
+        intake = intake_handler(_payload())
+        executed = execute_handler(intake)
+        assert executed["observations"]
+        for o in executed["observations"]:
+            d = o.get("details") or {}
+            assert d.get("measured_base_url") == "http://127.0.0.1:8081/api/v1", (
+                f"这条观测没说自己测的是哪个实例：{o.get('summary')}"
+            )
+            assert d.get("measured_mode") == "verification", (
+                f"这条观测没说自己测的是哪个环境：{o.get('summary')}"
+            )
+
+    def test_an_indeterminate_observation_also_says_where_it_tried(self, monkeypatch):
+        """判不了的时候更要说明「我去哪了、为什么判不了」
+
+        生产实例上，造数场景被拒 → 观测是 indeterminate。
+        这时候读者最需要知道的就是「我去的是生产，所以量不了」，
+        而不是只看到一个空结论。
+        """
+        monkeypatch.setenv("BEEOS_WMS_BASE_URL", "http://prod.example/wms/api/v1")
+        monkeypatch.setenv("BEEOS_WMS_MODE", "production")
+        intake = intake_handler(_payload())
+        executed = execute_handler(intake)
+        fefo = [o for o in executed["observations"] if o["wms_kind"] == "fefo"]
+        assert fefo and fefo[0]["outcome"] == OUTCOME_INDETERMINATE
+        d = fefo[0].get("details") or {}
+        assert d.get("measured_mode") == "production"
+        assert d.get("measured_base_url") == "http://prod.example/wms/api/v1"
+
     def test_a_wms_outage_aborts_the_run(self, monkeypatch):
         """WMS 连不上 → **中止履约**，不是记一句跳过
 

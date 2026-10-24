@@ -163,6 +163,14 @@ OBSERVATION_DETAIL_PROPERTIES = [
     FieldDef(name="dashboard_keys", type="array", required=False,
              items=FieldDef(name="k", type="string")),
     FieldDef(name="concept", type="string", required=False),
+    # ---- 「这次测的是哪个实例」----
+    #
+    # **没有这两个字段，报告就分不清「我在验证实例上量的」
+    # 和「我在生产上量的」**。运维盒没实现时，这条信息无处可去——
+    # 于是「生产上满没满足」这件事在链上根本答不了，
+    # 连「答不了」这件事都看不见（只看到一句「临期 SKU 数是 0」）。
+    FieldDef(name="measured_base_url", type="string", required=False),
+    FieldDef(name="measured_mode", type="string", required=False),
     FieldDef(name="scenario_id", type="string", required=False),
     FieldDef(name="mode", type="string", required=False),
     FieldDef(name="outbound_id", type="integer", required=False),

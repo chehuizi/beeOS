@@ -700,7 +700,7 @@ class TestStructureApi:
         conn.close()
         return resp.status, data
 
-    def test_structure_llm_failure_is_explicit(self, server_url: tuple[str, TaskRunStore]):
+    def test_structure_llm_failure_is_explicit(self, server_url: tuple[str, TaskRunStore], monkeypatch):
         """LLM 不可用 → 履约中止，调用方能一眼看出"没成"。
 
         这里原先断言降级路径能产出合规投料（extractor == "rule"）。
@@ -713,8 +713,13 @@ class TestStructureApi:
         而 error 必须跟着 op_trace 带出来，否则等于什么都没说。
         """
         from runtime import llm
-        llm.complete_json = lambda *a, **kw: (_ for _ in ()).throw(
-            llm.LLMError("stubbed in web-layer test")
+        # **用 monkeypatch 装桩**：直接赋值会漏到下一个测试文件去——
+        # 那边以为自己调的是真 LLM，其实调的是这里留下的桩。
+        monkeypatch.setattr(
+            llm, "complete_json",
+            lambda *a, **kw: (_ for _ in ()).throw(
+                llm.LLMError("stubbed in web-layer test")
+            ),
         )
         url, _ = server_url
         status, data = self._post(url, {
@@ -736,7 +741,7 @@ class TestStructureApi:
         assert status == 400
         assert "text" in data["error"]
 
-    def test_structured_payload_fulfills_end_to_end(self, server_url: tuple[str, TaskRunStore]):
+    def test_structured_payload_fulfills_end_to_end(self, server_url: tuple[str, TaskRunStore], monkeypatch):
         """结构化产物可以直接履约：structure → trigger 全链路
 
         LLM 路径被 stub 掉——web 层只测编排，LLM 行为在 test_llm_structurer 覆盖。
@@ -745,9 +750,15 @@ class TestStructureApi:
         建模盒同样没有降级——它没参与就是履约中止，不会产出粗糙模型。
         """
         from runtime import llm
-        llm.complete_json = lambda *a, **kw: {
+        # **用 monkeypatch 装桩**（直接赋值会漏到下一个测试文件）
+        monkeypatch.setattr(llm, "complete_json", lambda *a, **kw: {
             "goal": "建模订单退款流程",
             "nodes": [
+                # **首句也是内容句**：它本身就是那句需求，必须有节点指向它。
+                # （旧契约把首句当「不计入覆盖率分母」的目标，
+                #   于是「需求写在第一句」整条需求都不见了。）
+                {"action": "建模订单退款流程", "writes": [],
+                 "reads": [], "measures": [], "trace_to": "sent_1"},
                 {"action": "退款申请走审批流程", "writes": ["退款单"],
                  "reads": [], "measures": [], "trace_to": "sent_3"},
                 {"action": "通知财务", "writes": [], "reads": ["退款单"],
@@ -757,7 +768,7 @@ class TestStructureApi:
                 {"from": "node_1", "to": "node_2", "guard": "退款必须在 7 天内完成",
                  "trace_to": "sent_2"},
             ],
-        }
+        })
         url, _ = server_url
         _, structured = self._post(url, {
             "text": "建模订单退款流程。退款必须在 7 天内完成。退款申请走审批流程。"

@@ -96,12 +96,17 @@ def _catalog_for(category: str) -> list[dict[str, Any]]:
             for kind, spec in WMS_REPORTS.items()
         ]
     if category == "metric":
+        # **例词来自词表里的 keywords**，不是只有标签和 id。
+        # 业务方说的是「临期 30 天内 SKU」，标签是「临期 SKU 数」——
+        # 不是同一串字。目录里没有例词，LLM 就看不见这个指标，
+        # 绑不上 → `metrics_defined` 判红（真 LLM 实测：同一批需求，
+        # 一次绑上指标一次没绑上——波动来自目录信息不全，不是模型时好时坏）。
         return [
             {
                 "kind": m["name"],
                 "label": m["label"],
                 "statement": m["definition"],
-                "examples": [m["label"], m["name"]],
+                "examples": [*m["keywords"], m["label"], m["name"]],
             }
             for m in WMS_METRICS
         ]
@@ -194,6 +199,55 @@ class BindingError(ValueError):
     """绑定这一步本身没法做（LLM 不可用 / 返回的不是 JSON）→ 履约中止"""
 
 
+def _metric_examples(kind: str) -> list[str]:
+    """一个 WMS 指标在业务方嘴里怎么说（词表里的例词）"""
+    for m in WMS_METRICS:
+        if m["name"] == kind:
+            return list(m["keywords"])
+    return []
+
+
+def _complete_report_metrics(
+    bindings: dict[str, list[dict[str, str]]],
+    requirements: list[dict[str, Any]],
+) -> dict[str, list[dict[str, str]]]:
+    """报表绑定 → 补上「这张看板承载的那个被点名的数」
+
+    **为什么需要这一步**：LLM 认得出「库存看板」，但有时认不出
+    看板上报的那个被点名的量（「临期 30 天内 SKU」）——真 LLM 实测
+    同一批需求连跑 4 次，漏了 1 次。漏了的后果不是好不好看的问题：
+    那条指标不会变成**可判定的预期**，测试盒就不会去验它，
+    **业务价值根本没被验证**。
+
+    **这不是「机械猜概念」**：补的方向来自词表里声明的关系
+    （报表承载哪些指标——WMS 的事实，线上 dashboard 真的报这个数），
+    而且补上的证据仍然必须**逐字**出现在需求描述里，
+    跟 LLM 绑定的证据规则完全一样。原文没提那个数，就补不上——
+    证据这道闸是机械的，补出来的绑定不可能是幻觉。
+    """
+    by_id = {r.get("requirement_id"): r for r in requirements}
+    out = {rid: list(bs) for rid, bs in bindings.items()}
+    for rid, bs in list(out.items()):
+        req = by_id.get(rid) or {}
+        description = str(req.get("description") or "")
+        if not description:
+            continue
+        for b in bs:
+            report = WMS_REPORTS.get(b.get("kind", ""))
+            if not report:
+                continue
+            for metric_kind in report.get("carries_metrics", []):
+                if any(x["kind"] == metric_kind for x in bs):
+                    continue
+                # 证据 = 指标例词里**最长**的那个出现在需求描述里的
+                # （「临期 30 天」比「临期」更像证据）
+                hits = [kw for kw in _metric_examples(metric_kind) if kw in description]
+                if not hits:
+                    continue
+                bs.append({"kind": metric_kind, "evidence": max(hits, key=len)})
+    return out
+
+
 def bind_requirements(
     requirements: list[dict[str, Any]],
 ) -> tuple[dict[str, list[dict[str, str]]], list[dict[str, str]]]:
@@ -277,4 +331,5 @@ def bind_requirements(
         if kept:
             bindings.setdefault(rid, []).extend(kept)
 
-    return bindings, errors
+    # 报表 → 它承载的那个数（域事实驱动，证据仍要在原文里）
+    return _complete_report_metrics(bindings, requirements), errors

@@ -382,10 +382,26 @@ class TestBoxFlowOrder:
 
 class TestSentenceSplitting:
     def test_enum_sentence(self):
+        """存在性枚举 → 名字部分 = title，枚举项 = fact
+
+        为什么名字是 title 而不是 goal：「wms的流程」是这次要建模的东西的
+        **名字**，不是一条需求。把它当需求抽一遍，抽出来的就是碎片
+        （「库存看板」单独成条就是这种碎片的来源）。
+        """
         s = _split_sentences("wms的流程有入库流程、出库流程、盘点流程、库内作业流程")
         assert [x["text"] for x in s] == ["wms的流程", "入库流程", "出库流程", "盘点流程", "库内作业流程"]
-        assert s[0]["role"] == "goal"
+        assert s[0]["role"] == "title"
         assert all(x["role"] == "fact" for x in s[1:])
+
+    def test_存在性词找不到时首句仍是内容句(self):
+        """没有「有/包含/分为」这类词 → 首句不能当标题丢掉
+
+        「库存管理要支持入库、出库」里「入库」就藏在首句里，
+        当标题丢掉就是丢信息——所以首句仍然是内容句（goal）。
+        """
+        s = _split_sentences("库存管理要支持入库、出库、盘点")
+        assert s[0]["role"] == "goal"
+        assert [x["role"] for x in s[1:]] == ["fact", "fact"]
 
     def test_sentence_ids_are_sequential(self):
         s = _split_sentences("第一句。第二句。第三句。")
@@ -519,13 +535,21 @@ def stub_llm(monkeypatch):
 
 def _run_capture(store, narrative, llm_result=None):
     """跑一次捕获盒；llm_result 不为 None 时假装 LLM 返回它"""
-    if llm_result is not None:
-        from runtime import llm
-        llm.complete_json = lambda *a, **kw: llm_result
-    return trigger_task(
-        "wms_requirement_box", "capture_business_requirement",
-        {"narrative": narrative}, store,
-    )
+    if llm_result is None:
+        return trigger_task(
+            "wms_requirement_box", "capture_business_requirement",
+            {"narrative": narrative}, store,
+        )
+    # **桩用上下文装、用完就还原**——直接赋值 llm.complete_json
+    # 会漏到下一个测试文件去：那边以为自己调的是真 LLM，
+    # 其实调的是上一个文件留下的桩，失败原因离现场隔着两个文件。
+    from runtime import llm
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(llm, "complete_json", lambda *a, **kw: llm_result)
+        return trigger_task(
+            "wms_requirement_box", "capture_business_requirement",
+            {"narrative": narrative}, store,
+        )
 
 
 class TestMechanicalGates:
@@ -664,10 +688,13 @@ class TestMechanicalGates:
         assert r["result"]["requirements"][0]["requirement_id"] == "req_proc_1"
 
     def test_partial_extraction_lowers_coverage(self, store):
-        """LLM 只抽到部分事实句 → source_coverage 掉下来 → rejected
+        """LLM 只抽到部分内容句 → source_coverage 掉下来 → rejected
 
-        首句是 business_goal，不计入覆盖率分母——所以这里要 1 goal + 2 fact，
-        只抽到其中 1 个 fact，coverage = 50%
+        **分母是内容句（goal + fact）**：1 goal + 2 fact = 3 句，
+        只抽到其中 1 句 → coverage = 33.33%
+
+        以前首句（goal）不进分母，于是「业务方真正的需求写在第一句」
+        这件事既不算覆盖也不算漏——那条需求整个消失了。
         """
         r = _run_capture(
             store, "建模退款流程。订单是核心实体。退款必须在 7 天内完成。",
@@ -676,23 +703,69 @@ class TestMechanicalGates:
             ]},
         )
         res = r["result"]
-        assert res["source_coverage"] == 50.0
-        assert res["evidence_detail"]["uncovered_sentences"] == ["sent_3"]
+        assert res["source_coverage"] == 33.33
+        assert res["evidence_detail"]["uncovered_sentences"] == ["sent_1", "sent_3"]
         assert r["acceptance_status"] == "rejected"
 
-    def test_goal_sentence_not_counted_in_coverage_denominator(self, store):
-        """只被 goal 覆盖的句子不算漏——目标本身就是它"""
+    def test_goal_sentence_is_counted_in_the_coverage_denominator(self, store):
+        """只有一句业务目标时，它**就是**那句需求——必须被抽出来
+
+        以前这里断言的是「首句是 business_goal，不计入覆盖率分母，
+        所以一句需求抽不出任何东西是正常的」。那条规则的实际后果是：
+        业务方只写一句话（最常见的写法）→ 需求盒产出 0 条需求 →
+        整条链在第一只盒子就断了。
+
+        现在：内容句 = goal + fact，一句 goal 也是内容句。
+        抽到了 → coverage 100，需求集非空。
+        """
+        r = _run_capture(
+            store, "建模退款流程。",
+            llm_result={"nodes": [
+                {"action": "建模退款流程", "trace_to": "sent_1"},
+            ]},
+        )
+        res = r["result"]
+        assert res["source_sentences"][0]["role"] == "goal"
+        assert res["requirement_count"] == 1
+        assert res["source_coverage"] == 100.0
+        assert r["acceptance_status"] == "accepted"
+
+    def test_title_sentence_is_not_in_the_coverage_denominator(self, store):
+        """[title] 是名字，不是需求——不进分母
+
+        「wms的流程」没被任何节点指向，但它是**标题**：
+        覆盖率的分母只有那 4 个枚举项（fact），所以照样 100%。
+        把标题算进分母，就是逼模型给标题编一条需求出来。
+        """
+        r = _run_capture(
+            store, "wms的流程有入库流程、出库流程、盘点流程、库内作业流程",
+            llm_result={"nodes": [
+                {"action": "入库流程", "trace_to": "sent_2"},
+                {"action": "出库流程", "trace_to": "sent_3"},
+                {"action": "盘点流程", "trace_to": "sent_4"},
+                {"action": "库内作业流程", "trace_to": "sent_5"},
+            ]},
+        )
+        res = r["result"]
+        assert res["source_sentences"][0]["role"] == "title"
+        assert res["source_coverage"] == 100.0
+        assert r["acceptance_status"] == "accepted"
+
+    def test_content_sentence_without_any_node_aborts(self, store):
+        """原文有内容句、模型却什么都没抽出来 → **中止**，不是 no_deliver
+
+        「业务方什么也没说」（空表述）和「模型没干活」是两件事。
+        混成一件，模型一失手就变成一句好听的「没识别出业务事实」——
+        那是把系统的问题说成业务的问题。
+        """
         r = _run_capture(
             store, "建模退款流程。",
             llm_result={"goal": "建模退款流程", "nodes": [], "edges": []},
         )
-        # 只有业务目标、没有可抽取的事实 → 这是正常业务结果，不是模型失职：
-        # 盒子声明了 no_deliver 例外，产出零需求，交给判据拒。
-        # （降级删掉时这条一度失效——空图和"模型没抽出来"曾经被混成中止）
-        assert r["result"]["source_sentences"][0]["role"] == "goal"
-        assert r["result"]["requirement_count"] == 0
-        assert r["status"] == "completed"
-        assert r["acceptance_status"] == "rejected"
+        assert r["status"] == "failed"
+        assert r["result"] is None
+        bad = [s for s in r["op_trace"] if s["status"] == "failed"]
+        assert bad and "no traceable node" in bad[0]["error"]
 
     def test_llm_outage_aborts_with_reason(self, store, monkeypatch):
         """LLM 不可用 → 中止，且原因随 op_trace 带出来。
@@ -749,7 +822,12 @@ class TestAcceptanceGate:
 
     def test_rejected_points_at_the_failing_rule(self, store):
         """拒时要能说出是哪条判据没过 + 期望多少 + 实际多少"""
-        r = self._run(store, "建模退款流程。")
+        r = _run_capture(
+            store, "建模退款流程。订单是核心实体。退款必须在 7 天内完成。",
+            llm_result={"nodes": [
+                {"action": "订单是核心实体", "trace_to": "sent_2"},
+            ]},
+        )
         assert r["acceptance_status"] == "rejected"
         failed = [d for d in r["acceptance_detail"] if not d["passed"]]
         assert failed, "rejected 却没有失败的判据行——看板会显示成全绿"
@@ -771,7 +849,12 @@ class TestAcceptanceGate:
         verify_graph_fidelity 产出的是 result 里的数；
         acceptance_status 是拿着这些数跟判据比出来的结论。
         """
-        r = self._run(store, "建模退款流程。")
+        r = _run_capture(
+            store, "建模退款流程。订单是核心实体。退款必须在 7 天内完成。",
+            llm_result={"nodes": [
+                {"action": "订单是核心实体", "trace_to": "sent_2"},
+            ]},
+        )
         assert r["status"] == "completed"
         assert "verify_graph_fidelity" in [s["op_id"] for s in r["op_trace"]]
         # beeline 里没有 acceptance op——判定是 execute() 之后单独调的

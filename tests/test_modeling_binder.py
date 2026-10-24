@@ -550,3 +550,114 @@ class TestTheReportConceptIsWiredEndToEnd:
                 f"wms_domain 没声明 {group}——产出里带出来了但消费方按 schema 取不到"
             )
 
+
+
+# ============================================================
+# 报表 → 它承载的那个数（域事实驱动的补全）
+# ============================================================
+
+
+class TestTheReportCarriesItsMetric:
+    """「临期 30 天内 SKU 要能在库存看板看到」点了两样东西：
+    一个量（临期 SKU 数）和承载它的面（库存看板）。
+
+    LLM 认得出「看板」，有时认不出那个量——真 LLM 实测同一批需求连跑
+    4 次漏了 1 次。漏了的后果不是好看不好看：**那条指标不会变成
+    可判定的预期，测试盒就不会去验它，业务价值根本没被验证。**
+
+    所以补一步：方向来自词表里声明的「报表承载哪些指标」（WMS 的事实），
+    证据仍然必须逐字出现在需求原文里——跟 LLM 绑定的证据规则完全一样。
+    """
+
+    DASH = {"requirement_id": "r_proc", "requirement_type": "process",
+            "description": "临期 30 天内 SKU 要能在库存看板看到"}
+    NO_METRIC = {"requirement_id": "r_proc2", "requirement_type": "process",
+                 "description": "库存看板要能看到所有库存"}
+
+    def test_报表绑上了_就补上它承载的数(self, monkeypatch):
+        """模型只认出看板 → 补出那个被点名的量"""
+        monkeypatch.setattr(llm, "complete_json", _stub({"bindings": [
+            {"requirement_id": "r_proc",
+             "kinds": [{"kind": "inventory_dashboard", "evidence": "库存看板"}]},
+        ]}))
+        bindings, errors = bind_requirements([self.DASH])
+        kinds = [b["kind"] for b in bindings["r_proc"]]
+        assert "inventory_dashboard" in kinds
+        assert "wms_expiring_soon_sku_count" in kinds
+        assert errors == []
+
+    def test_原文没提那个量_就不补(self, monkeypatch):
+        """「库存看板要能看到所有库存」没提临期 → 不补指标
+
+        补的方向是「这张看板上的这个数」，而**原文没点名那个数**，
+        补上去就是模型说了需求里没有的话。
+        """
+        monkeypatch.setattr(llm, "complete_json", _stub({"bindings": [
+            {"requirement_id": "r_proc2",
+             "kinds": [{"kind": "inventory_dashboard", "evidence": "库存看板"}]},
+        ]}))
+        bindings, _ = bind_requirements([self.NO_METRIC])
+        kinds = [b["kind"] for b in bindings["r_proc2"]]
+        assert kinds == ["inventory_dashboard"]
+
+    def test_补出来的证据必须是原文子串(self, monkeypatch):
+        """机械闸：补出来的证据逐字在需求描述里"""
+        monkeypatch.setattr(llm, "complete_json", _stub({"bindings": [
+            {"requirement_id": "r_proc",
+             "kinds": [{"kind": "inventory_dashboard", "evidence": "库存看板"}]},
+        ]}))
+        bindings, _ = bind_requirements([self.DASH])
+        desc = self.DASH["description"]
+        for b in bindings["r_proc"]:
+            assert b["evidence"] in desc, f"证据 {b['evidence']!r} 不是原文"
+
+    def test_已经绑上的指标不会被补第二遍(self, monkeypatch):
+        monkeypatch.setattr(llm, "complete_json", _stub({"bindings": [
+            {"requirement_id": "r_proc", "kinds": [
+                {"kind": "inventory_dashboard", "evidence": "库存看板"},
+                {"kind": "wms_expiring_soon_sku_count", "evidence": "临期 30 天内 SKU"},
+            ]},
+        ]}))
+        bindings, _ = bind_requirements([self.DASH])
+        kinds = [b["kind"] for b in bindings["r_proc"]]
+        assert kinds.count("wms_expiring_soon_sku_count") == 1
+
+
+class TestTheMetricVocabularyIsNotCopiedTwice:
+    """「同一份形状抄两遍就会漂」——指标词表这里抄过两遍"""
+
+    def test_指标词表与指标表是同一份(self):
+        """WMS_METRIC_KEYWORDS 必须覆盖 WMS_METRICS 的每一个指标
+
+        以前它是独立抄的一份：指标表加了新指标、这张表没跟上 →
+        绑定腿的目录里就没有那个指标的说法 → 绑不上 → 判红，
+        而红的原因离现场隔着两层。
+        """
+        from boxes.modeling.domain import WMS_METRIC_KEYWORDS, WMS_METRICS
+
+        assert set(WMS_METRIC_KEYWORDS) == {m["name"] for m in WMS_METRICS}
+
+    def test_每个指标都有例词(self):
+        """例词是给绑定腿看的——没有例词，LLM 看不见这个指标
+
+        实体 / 约束 / 报表都有例词，只有指标没有的时候，
+        LLM 读目录看到的是「临期 SKU 数」，而业务方说的是「临期 30 天内 SKU」，
+        不是同一串字 → 指标绑不上（真 LLM 实测：同一批需求一次绑上一次没绑上）。
+        """
+        from boxes.modeling.domain import WMS_METRICS
+
+        for m in WMS_METRICS:
+            assert m.get("keywords"), f"{m['name']} 没有例词"
+            assert m["label"] in m["keywords"], f"{m['name']} 的例词里没有自己的标签"
+
+    def test_绑定目录里的指标带例词(self):
+        """目录里必须真的把例词给出去（不是只存在词表里）"""
+        from boxes.modeling.binder import _catalog_for
+        from boxes.modeling.domain import WMS_METRICS
+
+        cat = {c["kind"]: c for c in _catalog_for("metric")}
+        for m in WMS_METRICS:
+            entry = cat[m["name"]]
+            assert len(entry["examples"]) > 2, f"{m['name']} 的目录条目没有例词"
+            assert "临期" in " ".join(
+                entry["examples"]) or m["name"] != "wms_expiring_soon_sku_count"

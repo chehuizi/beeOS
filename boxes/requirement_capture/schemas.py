@@ -73,7 +73,13 @@ _SOURCE_SENTENCE = FieldDef(
     properties=[
         FieldDef(name="sentence_id", type="string"),
         FieldDef(name="text", type="string"),
-        FieldDef(name="role", type="enum", values=["goal", "fact"]),
+        # 三种角色——**角色是句子的性质，不是它的位置**：
+        #   title 这次要建模的东西的名字（"库存管理"）——只是名字，不抽节点
+        #   goal  业务目标句——**它本身就是那句要满足的要求**，要抽节点
+        #   fact  业务事实句——抽节点
+        # 以前只有 goal / fact，规则是「首句 = goal」。
+        # 那条规则让「需求写在第一句」的情况整条需求都不见了。
+        FieldDef(name="role", type="enum", values=["title", "goal", "fact"]),
     ],
 )
 

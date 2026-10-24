@@ -145,6 +145,15 @@ WMS_REPORTS: dict[str, dict[str, Any]] = {
         "label": "库存看板",
         "statement": "仓储现场的看板/报表（库存、库位、单据、临期预警）",
         "keywords": ["看板", "报表", "dashboard", "面板", "预警看板"],
+        # **这张看板真的报哪些数**（线上 `/api/v1/reports/dashboard` 的字段：
+        # expiringSoonSkuCount / totalOnHandQty / totalAvailableQty …）。
+        #
+        # 这条关系是 WMS 的事实，不是猜的：业务方说
+        # 「临期 30 天内 SKU 要能在库存看板看到」，这句话点了两样东西——
+        # 一个量（临期 SKU 数）和承载它的面（看板）。
+        # 绑定腿只认出「看板」而漏掉那个量时，那条指标就不会变成
+        # **可判定的预期**，测试盒就不会去验它——业务价值根本没被验证。
+        "carries_metrics": ["wms_expiring_soon_sku_count"],
     },
 }
 
@@ -156,13 +165,14 @@ WMS_REPORT_KINDS: tuple[str, ...] = tuple(WMS_REPORTS)
 #
 # 指标名 + 方向。这四个是仓储现场真的每天看的数，
 # 不是「模型里定义了指标」这种自证。
-WMS_METRICS: tuple[dict[str, str], ...] = (
+WMS_METRICS: tuple[dict[str, Any], ...] = (
     {
         "name": "wms_pick_accuracy",
         "label": "拣货准确率",
         "definition": "一次拣对的数量 ÷ 拣货总数量",
         "target": 99.5,
         "direction": "higher_is_better",
+        "keywords": ["拣货准确率", "拣货准确", "拣货错误", "错拣", "拣错", "一次拣对", "pick accuracy"],
     },
     {
         "name": "wms_inventory_turnover_days",
@@ -170,6 +180,7 @@ WMS_METRICS: tuple[dict[str, str], ...] = (
         "definition": "平均在库天数（越低越健康）",
         "target": 30.0,
         "direction": "lower_is_better",
+        "keywords": ["库存周转天数", "周转天数", "库存周转", "平均在库天数", "呆滞", "滞销", "turnover"],
     },
     {
         "name": "wms_stockout_rate",
@@ -177,6 +188,7 @@ WMS_METRICS: tuple[dict[str, str], ...] = (
         "definition": "发生缺货的 SKU 数 ÷ 在售 SKU 数",
         "target": 1.0,
         "direction": "lower_is_better",
+        "keywords": ["缺货率", "缺货", "断货率", "断货", "stockout"],
     },
     {
         "name": "wms_space_utilization",
@@ -184,6 +196,7 @@ WMS_METRICS: tuple[dict[str, str], ...] = (
         "definition": "已占用库位 ÷ 可用库位",
         "target": 85.0,
         "direction": "higher_is_better",
+        "keywords": ["库容利用率", "库容", "库位利用率", "空间利用率", "利用率"],
     },
     {
         # **这是词表里本来就该有的一条**——线上 WMS 的 dashboard 真的报这个数
@@ -198,6 +211,7 @@ WMS_METRICS: tuple[dict[str, str], ...] = (
         "definition": "在库且 30 天内到期的 SKU 数（临期预警口径）",
         "target": 0.0,
         "direction": "lower_is_better",
+        "keywords": ["临期 SKU 数", "临期 SKU", "临期商品", "临期 30 天", "30 天内到期的 SKU", "临期数", "临期预警", "效期预警", "即将过期", "快过期", "临期"],
     },
 )
 
@@ -236,14 +250,15 @@ def bind_entity_kind(*parts: Any) -> str | None:
 # WMS 指标的匹配词。**指标需求也得能绑**——「拣货准确率要达到 99.5%」
 # 显然是 WMS 需求，只因为它是一条 metric 类型就不绑，是判据自己
 # 假定了「需求只有实体和规则两种形状」。同一个病第七次。
+# WMS 指标的匹配词。**从 WMS_METRICS 派生，不再抄一份**——
+#
+# 以前这里是独立抄的一份：指标表里加了新指标、这张表没跟上，
+# 绑定腿的目录里就没有那个指标的说法，LLM 看不见它 → 绑不上 →
+# `metrics_defined` 判红，而红的原因离现场隔着两层。
+#
+# 「同一份形状抄两遍就会漂」——这里让它没法漂。
 WMS_METRIC_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "wms_pick_accuracy": ("拣货准确", "拣货错误", "错拣", "拣错", "pick accuracy"),
-    "wms_inventory_turnover_days": ("周转天数", "库存周转", "呆滞", "滞销", "turnover"),
-    "wms_stockout_rate": ("缺货", "断货", "stockout", "缺货率"),
-    "wms_space_utilization": ("库容利用率", "库容", "空间利用率", "利用率"),
-    "wms_expiring_soon_sku_count": (
-        "临期", "效期预警", "快过期", "临期预警", "即将过期", "到期",
-    ),
+    m["name"]: tuple(m["keywords"]) for m in WMS_METRICS
 }
 
 

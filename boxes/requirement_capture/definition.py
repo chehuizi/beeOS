@@ -11,7 +11,9 @@ boxes.requirement_capture.definition - 需求捕获履约盒 Definition 数据
 
 为什么这 4 条 acceptance 能做到 0 主观：
 1. contract_compliance —— 复用 runtime.contract.validate_payload，形状校验是纯机械的
-2. source_coverage     —— 原文切句后，每句要么是 goal、要么被至少一条需求覆盖（集合运算）
+2. source_coverage     —— 原文切句后，每句**内容句**（goal / fact）都要被至少一条需求覆盖
+                            （集合运算）。[title] 句是「这次要建模的东西的名字」，
+                            不是需求，不进分母——进分母就是逼模型编碎片。
 3. trace_integrity     —— 每条需求的 trace_to 必须指向真实存在的 sentence_id
 4. no_hallucination    —— 每条需求的 description 必须在原文里找得到（子串匹配）
 
@@ -104,11 +106,15 @@ trigger=(
         ],
 
         exceptions=[
-            # 抽不出任何需求 = 业务方表述太笼统，别硬编
+            # 原文里一句内容都没有 = 业务方什么也没说，别硬编
+            #
+            # **只在这一个情形下成立**：原文有内容句、但模型没抽出可追溯的节点，
+            # 那是模型没履约，中止，不走这条例外——
+            # 「没说话」和「没听清」是两件事，混成一件就是假信号。
             ExceptionRule(
                 condition="requirement_count == 0",
                 action="no_deliver",
-                reason="原文里没识别出可建模的业务事实",
+                reason="原文里没有内容句（空表述），业务方什么也没说",
             ),
             # 大段原文没被任何需求覆盖 = 抽取漏了
             ExceptionRule(

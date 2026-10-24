@@ -246,11 +246,15 @@ class TestEndToEnd:
         assert r["actual"] == pytest.approx(100.0)
         assert r["sample_size"] == 1
 
-    def test_llm_failure_is_attributed_and_counted(self, store):
+    def test_llm_failure_is_attributed_and_counted(self, store, monkeypatch):
         """LLM 挂了就该被记成 llm_call，不能混进 op_error 里稀释掉"""
         from runtime import llm
 
-        llm.complete_json = lambda *a, **kw: (_ for _ in ()).throw(llm.LLMError("boom"))
+        # **用 monkeypatch 装桩**：直接赋值会漏到下一个测试文件去
+        monkeypatch.setattr(
+            llm, "complete_json",
+            lambda *a, **kw: (_ for _ in ()).throw(llm.LLMError("boom")),
+        )
         try:
             trigger_task(CAPTURE, "capture_business_requirement", {"narrative": NARRATIVE}, store)
         except Exception:

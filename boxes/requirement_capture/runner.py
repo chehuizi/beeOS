@@ -48,11 +48,59 @@ _ENUM_MIN_LEN = 2
 # ============================================================
 
 
+# 句子的三种角色
+#
+# **角色是句子的性质，不是它在原文里的位置。**
+#
+# 以前只有 goal / fact 两种，规则是「首句 = goal，其余 = fact」。
+# 那条规则有个致命后果：**业务方真正的需求通常就在首句里**。
+#
+#   「同一 SKU 出库必须先出快过期的批次；临期 30 天内 SKU 要能在库存看板看到」
+#    └ 首句 = goal ─────────────────────────────┘  └ fact ──────────────┘
+#
+# 首句是 goal → 不抽节点 → **「必须先出快过期的批次」这条需求整个丢了**，
+# 只剩一句 business_goal 文本躺在那儿。设计盒的绑定腿只读 requirements，
+# 于是这个 WMS 概念从头到尾没进过链——测试盒的探针也就无从谈起。
+#
+# 三种角色：
+#   title —— 这次要建模的东西的**名字**（"库存管理"）。只是名字，不是需求。
+#   goal  —— 业务目标句，**它本身就是那句要满足的要求**，要抽节点。
+#   fact  —— 业务事实句，抽节点。
+#
+# title 只在一种情况下出现：首句是「X 有/包含/分为 A、B、C」这种
+# 存在性枚举，且存在性词左边确实只剩一个名字。
+# 找不到存在性词时（「库存管理要支持入库、出库」），首句**仍是内容句**——
+# 「入库」就藏在它里面，当标题丢掉是丢信息。
+_CONTENT_ROLES = ("goal", "fact")
+
+
+def _content_sentences(sentences: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """可抽内容的句子：goal + fact（title 只是名字，不是需求）
+
+    覆盖率的分母 = 这批句子的数量。title 不进分母——
+    「库存管理」这种名字抽不出需求，让它进分母就是逼模型编碎片。
+    """
+    return [
+        s for s in sentences
+        if s.get("role") in _CONTENT_ROLES and (s.get("text") or "").strip()
+    ]
+
+
+def _goal_text(sentences: list[dict[str, Any]]) -> str:
+    """业务目标：优先 [goal] 句，没有就取 [title] 句（它就是这次要建模的东西的名字）"""
+    for role in ("goal", "title"):
+        for s in sentences:
+            if s.get("role") == role and (s.get("text") or "").strip():
+                return s["text"]
+    return ""
+
+
 def _split_sentences(narrative: str) -> list[dict[str, Any]]:
-    """自然语言 → 带 id 的句子列表（role: goal / fact）
+    """自然语言 → 带 id 的句子列表（role: title / goal / fact）
 
     只做切分和角色标注，不做语义判断：
-    - 首句（或首句顿号枚举的左半）= goal
+    - 首句是存在性枚举（「X 有 A、B、C」）→ 名字部分 = title，枚举项 = fact
+    - 首句是完整的一句话 → goal（**它就是那句需求本身**）
     - 其余 = fact
     """
     raw = [s.strip() for s in _SENT_SPLIT.split(narrative) if s.strip()]
@@ -71,20 +119,24 @@ def _split_sentences(narrative: str) -> list[dict[str, Any]]:
 
     head, rest = raw[0], raw[1:]
 
-    # 首句内含顿号枚举时，目标取枚举词左侧，枚举项各自成句
+    # 首句内含顿号枚举时，名字取存在性词左侧，枚举项各自成句
     parts = [p.strip() for p in _ENUM_SEP.split(head) if p.strip()]
     parts = [p for p in parts if len(p) >= _ENUM_MIN_LEN] or parts[:1]
     if len(parts) >= 2:
         first, enum_items = parts[0], parts[1:]
-        goal_text = first
+        head_text = first
+        is_title = False
         for w in _EXIST_WORDS:
             if w in first:
-                goal_text = first.split(w)[0].strip() or first
+                head_text = first.split(w)[0].strip() or first
                 lead = first.split(w, 1)[1].strip()
                 if lead:
                     enum_items = [lead, *enum_items]
+                is_title = True
                 break
-        _add(goal_text, "goal")
+        # 存在性词左边确实只剩一个名字 → title（不抽节点）
+        # 找不到存在性词 → 首句仍可能是内容（「库存管理要支持入库」里就有「入库」）
+        _add(head_text, "title" if is_title else "goal")
         for item in enum_items:
             _add(item, "fact")
     else:
@@ -118,18 +170,26 @@ _EXTRACT_PROMPT = """从下面这份中文业务表述里抽出一张**流程图
 业务方描述一件事，说的是流程图：节点（做什么）+ 边（走到哪）+ 守卫（什么条件下才走）。
 不要把它摊平成一串需求——摊平会把"哪个约束挂在哪个动作上"这个信息弄丢。
 
-原文已按句子切分，每句有 sentence_id。你要做的：
+原文已按句子切分，每句有 sentence_id 和角色：
+- [title] 是这次要建模的东西的**名字**（例如"库存管理"）。它只是标题，**不要**为它抽节点。
+- [goal] 是业务目标。**它本身就是这次要满足的要求**——必须至少抽一个节点指向它。
+- [fact] 是业务事实。每个动作 / 约束各自成节点。
+
+你要做的：
 1. 只用原文中真实存在的内容，绝对不要补充、推断或编造
 2. nodes：每个业务动作一个节点。action 写原文里出现的片段，不要改写
-3. edges：把节点按原文的先后顺序串起来，from/to 用 node_id
-4. 同一句里如果既有动作又有约束，动作进 nodes，约束写进**那一步之后那条边的 guard**
-5. 动作产出或读入的实体写进 writes / reads；说要量的指标写进 measures
-6. 每个节点和边都填 trace_to，指向它依据的那一句的 sentence_id
-7. role=goal 的句子是业务目标，写进 goal，不产出节点
+3. **每一条 [goal] / [fact] 句子都至少要有一个节点 trace_to 指向它**——
+   漏掉一句，那句原文就没人认领，覆盖率判据会红
+4. edges：把节点按原文的先后顺序串起来，from/to 用 node_id
+5. 同一句里如果既有动作又有约束，动作进 nodes，约束写进**那一步之后那条边的 guard**；
+   **整张图只有一个节点的时候没有边可挂**，约束就写进这个节点自己的 guard 字段
+6. 动作产出或读入的实体写进 writes / reads；说要量的指标写进 measures
+7. 每个节点和边都填 trace_to，指向它依据的那一句的 sentence_id
+8. goal 字段写 [goal] 句的原文；没有 [goal] 句就写 [title] 句的原文
 
 输出格式：
 {{"goal": "首句原文片段",
- "nodes": [{{"action": "原文片段", "writes": [], "reads": [], "measures": [],
+ "nodes": [{{"action": "原文片段", "guard": "", "writes": [], "reads": [], "measures": [],
               "trace_to": "sent_2"}}],
  "edges": [{{"from": "node_1", "to": "node_2", "guard": "", "trace_to": "sent_3"}}]}}
 
@@ -137,7 +197,6 @@ _EXTRACT_PROMPT = """从下面这份中文业务表述里抽出一张**流程图
 - 没有守卫时 guard 留空字符串，不要编一个
 - 没有产出实体时 writes / reads 留空数组
 - measures 只在原文明确说要度量什么时才填
-- 如果原文没有可抽取的业务事实，返回 {{"goal": "", "nodes": [], "edges": []}}
 
 直接输出这段 JSON 就好，不要在 JSON 前后加任何文字。
 原文句子：
@@ -152,11 +211,15 @@ def _attach_sources(
     覆盖率按「每句都有图上元素指向它」算。节点 action 之外的实体 / 指标
     可能来自别的句子，不归位就会被误判成"这句没被覆盖"。
     归不到任何一句 → 是编的，返回空丢掉。
+
+    **只认内容句（goal / fact）**：实体 / 指标写在标题句里，
+    那还是编的——标题是名字，"库存管理"里读不出一个实体。
     """
     out: list[tuple[str, str]] = []
+    content_ids = {s["sentence_id"] for s in _content_sentences(sentences)}
     for frag in fragments:
         for s in sentences:
-            if s["role"] == "fact" and frag in s["text"]:
+            if s["sentence_id"] in content_ids and frag in s["text"]:
                 out.append((frag, s["sentence_id"]))
                 break
     return out
@@ -171,13 +234,19 @@ def _clean_graph(raw: Any, sentences: list[dict[str, Any]]) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError(f"llm returned {type(raw).__name__}, want dict")
     sent_by_id = {s["sentence_id"]: s for s in sentences}
-    goal = next((s["text"] for s in sentences if s["role"] == "goal"), "")
+    content_ids = {s["sentence_id"] for s in _content_sentences(sentences)}
+    goal = _goal_text(sentences)
 
     def ok_fragment(sid: Any, text: Any) -> bool:
-        """文本必须是它所溯源那一句的原文子串"""
+        """文本必须是它所溯源那一句的原文子串，且那一句得有内容"""
         src = sent_by_id.get(str(sid or ""))
         frag = (text or "").strip() if isinstance(text, str) else ""
-        return bool(src and frag and frag in src["text"])
+        return bool(
+            src
+            and src["sentence_id"] in content_ids
+            and frag
+            and frag in src["text"]
+        )
 
     def str_list(v: Any) -> list[str]:
         if not isinstance(v, list):
@@ -191,25 +260,32 @@ def _clean_graph(raw: Any, sentences: list[dict[str, Any]]) -> dict[str, Any]:
         writes = _attach_sources(str_list(c.get("writes")), sentences)
         measures = _attach_sources(str_list(c.get("measures")), sentences)
         reads = _attach_sources(str_list(c.get("reads")), sentences)
+        # **节点自己的 guard**：整张图只有一个节点的时候没有边可挂，
+        # 约束只能挂在节点上。以前这里永远是空的——于是单节点需求的
+        # 约束（"出库必须先出快过期的批次"里的"必须先出…"）整个丢掉，
+        # 后面谁也看不见这条规则。
+        guard = (c.get("guard") or "").strip() if isinstance(c.get("guard"), str) else ""
+        if guard and not ok_fragment(c.get("trace_to"), guard):
+            guard = ""
         nodes.append({
             "node_id": f"node_{len(nodes) + 1}",
             "action": (c["action"] or "").strip(),
+            "guard": guard,
             "writes": [t for t, _ in writes],
             "reads": [t for t, _ in reads],
             "measures": [t for t, _ in measures],
-            "guard_sources": [],
+            "guard_sources": [str(c["trace_to"])] if guard else [],
             "measure_sources": [sid for _, sid in measures if sid],
             "trace_to": str(c["trace_to"]),
         })
 
     if not nodes:
         # 区分两件都表现为"抽不出东西"的事：
-        #   原文压根没有业务事实（只有一句业务目标）→ 盒子声明了
-        #     no_deliver 例外，产出空需求集，交给判据拒。这是正常的业务结果。
-        #   原文有事实、但模型产出全被幻觉校验剔掉 → 模型没履约，中止。
+        #   原文压根没有内容句（空表述）→ 盒子声明了 no_deliver 例外，
+        #     产出空需求集，交给判据拒。这是正常的业务结果。
+        #   原文有内容句、但模型产出全被幻觉校验剔掉 → 模型没履约，中止。
         # 降级删掉之前这两种都被 except 吞成规则版，no_deliver 也就跟着失效了。
-        has_facts = any(s["role"] == "fact" and s["text"].strip() for s in sentences)
-        if not has_facts:
+        if not content_ids:
             return {"goal": goal, "nodes": [], "edges": []}
         raise ValueError("llm produced no traceable node")
 
@@ -309,7 +385,22 @@ def _simulate_requirement_extractor(input_data: dict[str, Any]) -> dict[str, Any
     from runtime import llm
 
     sentences = input_data.get("source_sentences", [])
-    goal = next((s["text"] for s in sentences if s["role"] == "goal"), "")
+    goal = _goal_text(sentences)
+
+    # 原文里一句内容都没有（空表述 / 只有标题）→ 没有可抽的东西。
+    # **不调 LLM**：让它对着空句子编东西，只会把幻觉引进来，
+    # 然后被机械层剔光，最后以「模型失职」的面目中止——
+    # 而真相是「业务方什么也没说」。这两件事必须分开。
+    if not _content_sentences(sentences):
+        result = dict(input_data)
+        result.update({
+            "business_goal": goal,
+            "nodes": [],
+            "edges": [],
+            "requirements": [],
+            "requirement_count": 0,
+        })
+        return result
 
     rendered = "\n".join(
         f'{s["sentence_id"]} [{s["role"]}] {s["text"]}' for s in sentences
@@ -442,11 +533,15 @@ def _simulate_graph_fidelity_verifier(input_data: dict[str, Any]) -> dict[str, A
     if hallucinated:
         details["hallucinated"] = hallucinated
 
-    # ④ 覆盖：每句 fact 都要在图上留下痕迹
+    # ④ 覆盖：每句内容句都要在图上留下痕迹
     #    节点 action / 节点 guard / 节点 measures / 边 guard / 边 trigger
     #    都被原文的某一句支撑——挂在节点身上的也要单独记账，
     #    否则「一句约束 + 一个动作」这种写法会被误判成没覆盖
-    fact_ids = {s["sentence_id"] for s in sentences if s["role"] == "fact"}
+    #
+    #    分母是**内容句**（goal + fact），不是「除首句外的句子」。
+    #    以前把首句（goal）排除在分母外，于是「业务方真正的需求写在
+    #    第一句」这件事既不算覆盖也不算漏——需求整个消失了。
+    content_ids = {s["sentence_id"] for s in _content_sentences(sentences)}
     traced: set[Any] = set()
     for n in nodes:
         traced.add(n.get("trace_to"))
@@ -454,10 +549,10 @@ def _simulate_graph_fidelity_verifier(input_data: dict[str, Any]) -> dict[str, A
         traced |= set(n.get("measure_sources", []))
     for e in edges:
         traced.add(e.get("trace_to"))
-    uncovered = sorted(fact_ids - traced)
+    uncovered = sorted(content_ids - traced)
     result["source_coverage"] = (
-        round(100.0 * (len(fact_ids) - len(uncovered)) / len(fact_ids), 2)
-        if fact_ids else 0.0
+        round(100.0 * (len(content_ids) - len(uncovered)) / len(content_ids), 2)
+        if content_ids else 0.0
     )
     if uncovered:
         details["uncovered_sentences"] = uncovered

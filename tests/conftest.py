@@ -21,8 +21,11 @@ def stub_compliant_llm(prompt: str, **kw) -> dict:
     edges 留空——_clean_graph 会按原文明写顺序自动补成链。
     node_id / trace_to / writes / reads / measures 这些字段名跟抽取腿的
     产物契约一一对应，写错就会被 _clean_graph 判成幻觉剔光。
+
+    **每条内容句（[goal] / [fact]）都要有节点指向它**——
+    覆盖率的分母就是这批句子，漏一句就判红。[title] 是名字，不抽节点。
     """
-    nodes, goal = [], ""
+    nodes, goal, title = [], "", ""
     tail = prompt.split("原文句子：")[-1]
     for line in tail.strip().split("\n"):
         m = re.match(r"(\S+)\s+\[(\w+)\]\s+(.*)", line.strip())
@@ -31,12 +34,16 @@ def stub_compliant_llm(prompt: str, **kw) -> dict:
         sid, role, text = m.group(1), m.group(2), m.group(3)
         if role == "goal":
             goal = text
+        elif role == "title":
+            # [title] 是「这次要建模的东西的名字」，不是需求，不抽节点
+            title = text
             continue
         nodes.append({
             "node_id": f"node_{len(nodes) + 1}", "action": text,
-            "writes": [], "reads": [], "measures": [], "trace_to": sid,
+            "guard": "", "writes": [], "reads": [], "measures": [],
+            "trace_to": sid,
         })
-    return {"goal": goal, "nodes": nodes, "edges": []}
+    return {"goal": goal or title, "nodes": nodes, "edges": []}
 
 
 # ============================================================

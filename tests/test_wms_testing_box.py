@@ -140,6 +140,8 @@ class TestTheCriteriaMeanWhatTheySay:
             "scenario_coverage": True,
             "no_blocking_defect": True,
             "verification_determined": True,
+            # 每条观测都得说得出「测的是哪份构建」
+            "artifact_identified": True,
         }
         report.update(overrides)
         return report
@@ -215,6 +217,44 @@ class TestTheCriteriaMeanWhatTheySay:
             report, box.get_schema(box.result.result_schema),
             schemas=box.schemas)
         assert not errors, f"测试报告不满足它自己声明的 result schema：{errors}"
+
+    def test_observations_without_a_build_digest_are_not_an_identified_run(self):
+        """观测没带「测的是哪份构建」→ 判红
+
+        「临期 SKU 数是 1」这句话若无主（不知道测的是哪份代码），
+        这次验证就有一截不知道在验什么——它不该显示成「验过了」。
+        """
+        report = packager_handler({
+            "test_task_id": "tt_1",
+            "requirements": _requirements(),
+            "observations": [
+                {"expectation_id": "exp_1", "requirement_id": "r1",
+                 "wms_kind": "fefo", "outcome": OUTCOME_PASS, "summary": "ok",
+                 "details": {}},   # ← 没有 artifact_digest
+            ],
+            "artifact_ref": {"artifact_digest": "sha256:abc"},
+            "unknown_scenarios": [],
+            "scenario_facts": [],
+        })
+        assert report["artifact_identified"] is False
+        result = self._acceptance(report)
+        assert result.status == AcceptanceStatus.REJECTED
+
+    def test_observations_carrying_the_build_digest_are_identified(self):
+        """带上了制品摘要 → 这次验算有主"""
+        report = packager_handler({
+            "test_task_id": "tt_1",
+            "requirements": _requirements(),
+            "observations": [
+                {"expectation_id": "exp_1", "requirement_id": "r1",
+                 "wms_kind": "fefo", "outcome": OUTCOME_PASS, "summary": "ok",
+                 "details": {"artifact_digest": "sha256:abc"}},
+            ],
+            "artifact_ref": {"artifact_digest": "sha256:abc"},
+            "unknown_scenarios": [],
+            "scenario_facts": [],
+        })
+        assert report["artifact_identified"] is True
 
 
 # ============================================================

@@ -235,6 +235,12 @@ TEST_REPORT_SCHEMA = SchemaDef(
         # 没有它，「一条都没验出来」会显示成「几条通过 + 几条用不上」，
         # 读起来像「基本没问题」。那是假信号。
         FieldDef(name="verification_determined", type="boolean", required=True),
+        # **「这次验的是哪份构建」**
+        #
+        # 观测里必须带着制品摘要（开发盒交付的那份构建）。
+        # 没有它，「临期 SKU 数是 1」这句话是无主的——
+        # 不知道测的是哪份代码，就没法说这次验算不算数。
+        FieldDef(name="artifact_identified", type="boolean", required=True),
         # ---- 证据 ----
         FieldDef(name="observations", type="array", required=True,
                  items=FieldDef(name="observation", type="object", properties=[

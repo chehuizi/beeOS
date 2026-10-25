@@ -1,14 +1,20 @@
 """boxes.wms_development - WMS Development Box 的作业路线
 
-WMS 开发盒——把设计包变成**能构建、能跑起来**的代码：提交 → 构建 → 自动化测试 → 制品。
+WMS 开发盒——**按设计包改代码**：读方案 → 定位源码 → 改 → 构建 → 制品。
 
 op 链：
-  1. `dev_intake` — 接收开发任务（设计包 + 目标提交范围）（schema_dev_task_input → schema_build_tree）
-  2. `dev_build` — 构建 + 跑单测 + 复现性校验（schema_build_tree → schema_build_check）
-  3. `build_packager` — 打包成构建产物 + 构建记录（schema_build_check → schema_build_artifact）
+  1. `dev_intake`      —— 设计包 + 目标提交范围 → 开发计划（哪些预期 + 哪些源码位置）
+                         （schema_dev_task_input → schema_dev_plan）
+  2. `dev_code`        —— 在隔离工作区里按方案改代码、提交
+                         （schema_dev_plan → schema_code_change）
+  3. `dev_build`       —— 编译 + 仓库自带测试套件 + 构建两遍比摘要
+                         （schema_code_change → schema_build_check）
+  4. `build_packager`  —— 打包成制品 + 给出评审覆盖 / 可追溯判定
+                         （schema_build_check → schema_build_artifact）
 
-**这三个 op 现在还没有实现**（runner 里是桩）。beeline 是声明：它先把
-要走的路线和每一步的数据形状钉住，腿才跟着路走。
+**为什么是四跳而不是一跳**：每一跳的答案来自**不同的外部神谕**——
+模型（改动）、编译器（编译）、测试套件（单测）、git（评审覆盖与可追溯）。
+把它们压成一跳，就没法说清「红在哪一步」。
 
 beeline 跟盒子是 **1:1 且不可分割** 的：它引用的 schema id 全部来自本盒的
 `schemas.py`，每个 op 的 handler 都在本盒的 `runner.py` 里。所以它住在盒子
@@ -35,7 +41,8 @@ WMS_DEVELOPMENT_BEELINE = Beeline(
     id="beeline_wms_development_v1",
     version=1,
     description=(
-        "WMS Development Box 履约作业路线：dev_intake → dev_build → build_packager"
+        "WMS Development Box 履约作业路线："
+        "dev_intake → dev_code → dev_build → build_packager"
     ),
 
     operations=[
@@ -44,17 +51,28 @@ WMS_DEVELOPMENT_BEELINE = Beeline(
             type="dev_intake",
             input_from="external",
             input="schema_dev_task_input",
-            output="schema_build_tree",
-            next=[NextRef(op_id="dev_build")],
+            output="schema_dev_plan",
+            next=[NextRef(op_id="dev_code")],
             bee=Bee(type="dev_intake_handler"),
+            idempotency=IDEMPOTENT_BY_TASK,
+        ),
+
+        Operation(
+            op_id="dev_code",
+            type="dev_code",
+            input_from="dev_intake",
+            input="schema_dev_plan",
+            output="schema_code_change",
+            next=[NextRef(op_id="dev_build")],
+            bee=Bee(type="dev_code_handler"),
             idempotency=IDEMPOTENT_BY_TASK,
         ),
 
         Operation(
             op_id="dev_build",
             type="dev_build",
-            input_from="dev_intake",
-            input="schema_build_tree",
+            input_from="dev_code",
+            input="schema_code_change",
             output="schema_build_check",
             next=[NextRef(op_id="build_packager")],
             bee=Bee(type="dev_build_handler"),

@@ -255,6 +255,16 @@ def test_execute_handler(input_data: dict[str, Any]) -> dict[str, Any]:
         details = obs.setdefault("details", {})
         details["measured_base_url"] = base_url
         details["measured_mode"] = mode
+        # **这次测的是哪份构建**——
+        # 制品摘要来自开发盒的产出（它自己说是从哪个提交编出来的）。
+        # 不写这一句，读者看到「临期 SKU 数是 1」时，
+        # 分不清测的是哪份代码——而「测的是哪份代码」恰恰是
+        # 「这次交付到底算不算数」的前一半。
+        artifact = input_data.get("artifact_ref") or {}
+        if isinstance(artifact, dict) and artifact.get("artifact_digest"):
+            details["artifact_digest"] = artifact.get("artifact_digest")
+            details["artifact_commit_count"] = artifact.get("commit_count")
+        details["artifact_present"] = bool(isinstance(artifact, dict) and artifact)
 
     return {
         "test_task_id": input_data.get("test_task_id", ""),
@@ -322,6 +332,19 @@ def test_packager_handler(input_data: dict[str, Any]) -> dict[str, Any]:
         if not disposition_by_req.get(r.get("requirement_id", ""))
     ]
 
+    # **每条观测都得说得出「测的是哪份构建」**——
+    # 制品摘要是开发盒交付的那份构建的标识。
+    # 少一条无主的观测，这次验证就有一截不知道在验什么。
+    artifact = input_data.get("artifact_ref") or {}
+    artifact_digest = (
+        artifact.get("artifact_digest") if isinstance(artifact, dict) else ""
+    ) or ""
+    observations_all_identified = bool(observations) and all(
+        (o.get("details") or {}).get("artifact_digest") == artifact_digest
+        and bool((o.get("details") or {}).get("artifact_digest"))
+        for o in observations
+    )
+
     return {
         "package_id": f"test_report_{input_data.get('test_task_id', 'unknown')}",
         "box_id": "wms_testing_box",
@@ -337,6 +360,8 @@ def test_packager_handler(input_data: dict[str, Any]) -> dict[str, Any]:
         # **至少验出了点东西**——
         # 否则「一条都没验出来」会显示成「3 条通过 + 1 条用不上」。
         "verification_determined": determined > 0,
+        # 每条观测都带着「测的是哪份构建」
+        "artifact_identified": observations_all_identified,
         # ---- 证据 ----
         "observations": observations,
         "passed_count": len(passed),

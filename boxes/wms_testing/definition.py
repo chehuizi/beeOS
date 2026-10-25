@@ -108,6 +108,14 @@ WMS_TESTING_BOX = BeeBoxDefinition(
             AcceptanceRule(
                 metric="verification_determined", op="eq", value=True,
             ),
+            # **「这次验的是哪份构建」**
+            #
+            # 每条观测都必须带着制品摘要（开发盒交付的那份构建）。
+            # 少了它，「临期 SKU 数是 1」是无主的——不知道测的是哪份代码，
+            # 就没法说这次验算不算数。
+            AcceptanceRule(
+                metric="artifact_identified", op="eq", value=True,
+            ),
         ],
         exceptions=[
             ExceptionRule(

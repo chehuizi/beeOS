@@ -73,13 +73,22 @@ _SOURCE_SENTENCE = FieldDef(
     properties=[
         FieldDef(name="sentence_id", type="string"),
         FieldDef(name="text", type="string"),
-        # 三种角色——**角色是句子的性质，不是它的位置**：
-        #   title 这次要建模的东西的名字（"库存管理"）——只是名字，不抽节点
-        #   goal  业务目标句——**它本身就是那句要满足的要求**，要抽节点
-        #   fact  业务事实句——抽节点
+        # 四种角色——**角色是句子的性质，不是它的位置**：
+        #   title   这次要建模的东西的名字（"库存管理"）——只是名字，不抽节点
+        #   goal    业务目标句——**它本身就是那句要满足的要求**，要抽节点
+        #   fact    业务事实句——抽节点
+        #   context 铺垫句（场景 / 时间状语 / 语气说明）——**本身不含要求**，
+        #           不抽节点，也**不进覆盖率的分母**
         # 以前只有 goal / fact，规则是「首句 = goal」。
-        # 那条规则让「需求写在第一句」的情况整条需求都不见了。
-        FieldDef(name="role", type="enum", values=["title", "goal", "fact"]),
+        # 那条规则让「需求写在第一句」的情况整条需求都不见了；
+        # 后来按「首句=goal、其余=fact」补的那版，又把**铺垫句**
+        # （"仓库出库的时候"）塞进了分母——需求盒于是对真需求假红
+        # （实测 source_coverage 50%）。
+        #
+        # 现在：title 由**机械层**判（存在性枚举 + 左边像个名字），
+        # goal / fact / context 由 **LLM** 判（有没有独立的要求是语义问题），
+        # 机械层在 LLM 之上守下限：含要求表达的句必须进分母。
+        FieldDef(name="role", type="enum", values=["title", "goal", "fact", "context"]),
     ],
 )
 

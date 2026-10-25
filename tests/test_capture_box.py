@@ -544,8 +544,18 @@ def _run_capture(store, narrative, llm_result=None):
     # 会漏到下一个测试文件去：那边以为自己调的是真 LLM，
     # 其实调的是上一个文件留下的桩，失败原因离现场隔着两个文件。
     from runtime import llm
+    from tests.conftest import auto_roles
+
+    def _fake(*a, **kw):
+        """桩默认不判角色（它只关心机械层）——原样回抄 prompt 里的机械初判"""
+        out = dict(llm_result)
+        if "roles" not in out:
+            prompt = a[0] if a else str(kw.get("prompt", ""))
+            out["roles"] = auto_roles(prompt)
+        return out
+
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(llm, "complete_json", lambda *a, **kw: llm_result)
+        mp.setattr(llm, "complete_json", _fake)
         return trigger_task(
             "wms_requirement_box", "capture_business_requirement",
             {"narrative": narrative}, store,

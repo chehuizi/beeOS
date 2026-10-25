@@ -24,14 +24,21 @@ def stub_compliant_llm(prompt: str, **kw) -> dict:
 
     **每条内容句（[goal] / [fact]）都要有节点指向它**——
     覆盖率的分母就是这批句子，漏一句就判红。[title] 是名字，不抽节点。
+
+    **roles 也要给**：句子的角色由模型判（机械层只守下限），
+    缺了 roles 的输出会被抽取腿判成「模型没按要求履约」→ 中止。
+    这里原样回抄 prompt 里的机械初判——测试关心的是机械层的行为，
+    角色的语义判断由 tests/test_capture_extraction.py 单独测。
     """
     nodes, goal, title = [], "", ""
+    roles: dict[str, str] = {}
     tail = prompt.split("原文句子：")[-1]
     for line in tail.strip().split("\n"):
         m = re.match(r"(\S+)\s+\[(\w+)\]\s+(.*)", line.strip())
         if not m:
             continue
         sid, role, text = m.group(1), m.group(2), m.group(3)
+        roles[sid] = role
         if role == "goal":
             goal = text
         elif role == "title":
@@ -43,7 +50,22 @@ def stub_compliant_llm(prompt: str, **kw) -> dict:
             "guard": "", "writes": [], "reads": [], "measures": [],
             "trace_to": sid,
         })
-    return {"goal": goal or title, "nodes": nodes, "edges": []}
+    return {"roles": roles, "goal": goal or title, "nodes": nodes, "edges": []}
+
+
+def auto_roles(prompt: str) -> dict[str, str]:
+    """从 prompt 的「原文句子：」段落里取出机械初判的角色
+
+    测试桩默认不判角色（它只关心机械层的行为），所以这里原样回抄。
+    **要测角色的语义判断，就在桩里显式给 roles。**
+    """
+    roles: dict[str, str] = {}
+    tail = prompt.split("原文句子：")[-1]
+    for line in tail.strip().split("\n"):
+        m = re.match(r"(\S+)\s+\[(\w+)\]\s+(.*)", line.strip())
+        if m:
+            roles[m.group(1)] = m.group(2)
+    return roles
 
 
 # ============================================================

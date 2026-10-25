@@ -752,6 +752,12 @@ class TestStructureApi:
         from runtime import llm
         # **用 monkeypatch 装桩**（直接赋值会漏到下一个测试文件）
         monkeypatch.setattr(llm, "complete_json", lambda *a, **kw: {
+            # **roles 也要给**：句子的角色由模型判（机械层只守下限）。
+            # 缺了 roles 的输出会被抽取腿判成「模型没按要求履约」→ 中止。
+            "roles": {
+                "sent_1": "goal", "sent_2": "fact", "sent_3": "fact",
+                "sent_4": "fact", "sent_5": "fact",
+            },
             "goal": "建模订单退款流程",
             "nodes": [
                 # **首句也是内容句**：它本身就是那句需求，必须有节点指向它。

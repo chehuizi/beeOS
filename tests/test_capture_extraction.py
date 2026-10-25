@@ -49,8 +49,21 @@ def _run_capture(store, narrative, llm_result=None):
     # 会漏到下一个测试文件去：那边以为自己调的是真 LLM，
     # 其实调的是上一个文件留下的桩，失败原因离现场隔着两个文件。
     from runtime import llm
+    from tests.conftest import auto_roles
+
+    def _fake(*a, **kw):
+        """桩默认不判角色（它只关心机械层）——原样回抄 prompt 里的机械初判
+
+        要测角色的语义判断，就在 llm_result 里显式给 roles。
+        """
+        out = dict(llm_result)
+        if "roles" not in out:
+            prompt = a[0] if a else str(kw.get("prompt", ""))
+            out["roles"] = auto_roles(prompt)
+        return out
+
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(llm, "complete_json", lambda *a, **kw: llm_result)
+        mp.setattr(llm, "complete_json", _fake)
         return trigger_task(
             "wms_requirement_box", "capture_business_requirement",
             {"narrative": narrative}, store,
@@ -265,15 +278,192 @@ class TestPromptContract:
 
 
 # ============================================================
+# 角色判定：LLM 判语义，机械层守上下限
+# ============================================================
+
+
+class TestSentenceRoles:
+    """**角色是句子的性质，不是它的位置**
+
+    老契约按位置判（首句 = goal，其余 = fact），代价是：
+    「仓库出库的时候」这种铺垫句进了覆盖率的分母 → 需求盒对真需求假红。
+    """
+
+    def test_中文逗号不切句(self):
+        """「仓库出库的时候，同一个 SKU 必须先出快过期的批次」是**一句**
+
+        以前 `_ENUM_SEP` 把中文逗号当枚举分隔符，于是它被切成两半：
+        前半句是状语从句（铺垫），后半句才是需求。
+        铺垫句进分母 → 真需求只覆盖一半 → source_coverage 50% → 判红。
+        """
+        s = _split_sentences("仓库出库的时候，同一个 SKU 必须先出快过期的批次")
+        assert len(s) == 1, f"中文逗号把一句话切成了 {len(s)} 句：{s}"
+        assert "必须" in s[0]["text"], "要求被切散了"
+
+    def test_存在性词左边不像名字时不是标题(self):
+        """「出库必须包含 A、B」——「出库必须」不是名字
+
+        它是半句要求。当成标题丢掉，这条要求就整个不见了（**假绿**）。
+        """
+        s = _split_sentences("出库必须包含 A、B")
+        assert s[0]["role"] != "title", (
+            f"「{s[0]['text']}」被当成了标题——要求被标题吃掉了"
+        )
+        assert any("必须" in x["text"] for x in s), "要求那句话整个不见了"
+
+    def test_llm_标_context_的铺垫句不进分母(self, store):
+        """铺垫句不算漏——它本来就没有要求，抽不出东西来
+
+        LLM 说它是 context，机械层认（**这是模型的语义判断权**）：
+        只有含要求表达的句子，机械层才会把它拉回分母。
+        """
+        r = _run_capture(
+            store,
+            "仓库出库的时候。同一 SKU 出库必须先出快过期的批次。",
+            llm_result={
+                "roles": {"sent_1": "context", "sent_2": "goal"},
+                "nodes": [{
+                    "action": "同一 SKU 出库必须先出快过期的批次",
+                    "trace_to": "sent_2",
+                }],
+                "edges": [],
+            },
+        )
+        res = r["result"]
+        roles = {s["sentence_id"]: s["role"] for s in res["source_sentences"]}
+        assert roles["sent_1"] == "context", (
+            f"铺垫句的角色没定成 context：{roles}"
+        )
+        assert res["source_coverage"] == 100.0, (
+            f"铺垫句进了分母 → 真需求被误判成没覆盖：{res['evidence_detail']}"
+        )
+        assert r["acceptance_status"] == "accepted"
+
+    def test_机械下限_含要求表达的句_llm_说_context_也得进分母(self, store):
+        """模型说它是「只是铺垫」也不作数——那句话确实带着一条要求
+
+        这条是**下限**：漏掉它 = 真需求被悄悄丢掉（**假绿**）。
+        去掉下限，这句就会变成 100% 覆盖 + accepted——**变异转绿**。
+        """
+        r = _run_capture(
+            store,
+            "同一 SKU 必须先出快过期的批次。库存要按 SKU 记账。",
+            llm_result={
+                "roles": {"sent_1": "context", "sent_2": "fact"},
+                "nodes": [{
+                    "action": "库存要按 SKU 记账",
+                    "trace_to": "sent_2",
+                }],
+                "edges": [],
+            },
+        )
+        res = r["result"]
+        assert res["source_coverage"] == 50.0, (
+            "含「必须」的句子被排除在分母外了——那条要求没人认领，"
+            "而没人会发现"
+        )
+        assert res["evidence_detail"]["uncovered_sentences"] == ["sent_1"]
+        assert r["acceptance_status"] == "rejected"
+
+    def test_机械下限_模型自封标题也排除不了一条带要求的句(self, store):
+        """标题是机械层的判断——模型说「这是标题」不能拿来排除要求句"""
+        r = _run_capture(
+            store,
+            "同一 SKU 必须先出快过期的批次。库存要按 SKU 记账。",
+            llm_result={
+                "roles": {"sent_1": "title", "sent_2": "fact"},
+                "nodes": [{
+                    "action": "库存要按 SKU 记账",
+                    "trace_to": "sent_2",
+                }],
+                "edges": [],
+            },
+        )
+        res = r["result"]
+        assert res["source_coverage"] == 50.0, (
+            "模型说它是标题就把带要求的句子踢出分母了——"
+            "排除的权限不该比机械层更大"
+        )
+        assert res["evidence_detail"]["uncovered_sentences"] == ["sent_1"]
+
+    def test_模型没给角色_履约中止而不是用初判凑合(self, store):
+        """roles 缺失 = 模型没按要求履约 = 中止
+
+        **不许退回机械初判**：那份初判（首句=goal、其余=fact）正是
+        把铺垫句塞进分母、让需求盒对真需求假红的那份。
+        """
+        r = _run_capture(
+            store,
+            "同一 SKU 出库必须先出快过期的批次",
+            llm_result={
+                "roles": None,   # 明确不给
+                "nodes": [{
+                    "action": "同一 SKU 出库必须先出快过期的批次",
+                    "trace_to": "sent_1",
+                }],
+                "edges": [],
+            },
+        )
+        assert r["status"] == "failed", "模型没判角色却通过了——那是静默降级"
+        bad = [s for s in r["op_trace"] if s["status"] == "failed"]
+        assert bad and "roles" in bad[0]["error"], (
+            f"报错没说是角色没判：{bad[0]['error'] if bad else None}"
+        )
+
+    def test_角色少判一句也中止(self, store):
+        """漏判一句 = 那一句的角色不明 = 中止（不猜）"""
+        r = _run_capture(
+            store,
+            "第一句。第二句。",
+            llm_result={
+                "roles": {"sent_1": "goal"},   # 漏了 sent_2
+                "nodes": [{"action": "第一句", "trace_to": "sent_1"}],
+                "edges": [],
+            },
+        )
+        assert r["status"] == "failed"
+        bad = [s for s in r["op_trace"] if s["status"] == "failed"]
+        assert bad and "sent_2" in bad[0]["error"], (
+            f"报错没点名是哪句没判：{bad[0]['error'] if bad else None}"
+        )
+
+    def test_终稿角色写回_source_sentences(self, store):
+        """判据读的就是 source_sentences —— 角色必须写回去
+
+        不写回去，判据读到的还是机械初判，铺垫句照样进分母，
+        假红原封不动地回来。
+        """
+        r = _run_capture(
+            store,
+            "仓库出库的时候。同一 SKU 出库必须先出快过期的批次。",
+            llm_result={
+                "roles": {"sent_1": "context", "sent_2": "goal"},
+                "nodes": [{
+                    "action": "同一 SKU 出库必须先出快过期的批次",
+                    "trace_to": "sent_2",
+                }],
+                "edges": [],
+            },
+        )
+        roles = {s["role"] for s in r["result"]["source_sentences"]}
+        assert "context" in roles, (
+            f"终稿角色没写回 source_sentences：{r['result']['source_sentences']}"
+        )
+
+
+# ============================================================
 # schema：角色枚举得跟抽取层一致
 # ============================================================
 
 
 class TestRoleEnum:
-    def test_role_枚举含_title_goal_fact(self):
+    def test_role_枚举含四种角色(self):
         from boxes.requirement_capture.schemas import ALL_SCHEMAS
 
         schema = next(s for s in ALL_SCHEMAS if s.id == "schema_requirement_set_package")
         sent = next(f for f in schema.fields if f.name == "source_sentences")
         role = next(p for p in sent.items.properties if p.name == "role")
-        assert set(role.values) == {"title", "goal", "fact"}
+        assert set(role.values) == {"title", "goal", "fact", "context"}, (
+            "角色少了 context —— 铺垫句就没有地方归类，"
+            "只能硬塞进 fact，于是它进了覆盖率的分母（假红）"
+        )

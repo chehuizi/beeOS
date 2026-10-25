@@ -36,11 +36,50 @@ _TYPE_PREFIX = {
 
 # 句末标点（不含顿号——顿号是句内枚举，不切句）
 _SENT_SPLIT = re.compile(r"[。；;！!？?\n]+")
-# 句内并列分隔符
-_ENUM_SEP = re.compile(r"[、,，]")
+# 句内并列分隔符：**只有顿号**。
+#
+# 以前这里还包含中文逗号，于是
+#   「仓库出库的时候，同一个 SKU 必须先出快过期的批次」
+# 被切成「仓库出库的时候」+「同一个 SKU 必须先出快过期的批次」两半——
+# 前半句是状语从句（**铺垫**），后半句才是需求。
+#
+# 铺垫句进了覆盖率的分母 → 真需求只覆盖了一半 → 需求盒判红
+# （实测 source_coverage 50%，uncovered_sentences=["sent_1"]）。
+# **中文逗号连着的是同一个句子**，不是枚举。
+_ENUM_SEP = re.compile(r"、")
 # 存在性声明词：左侧是目标，右侧每项是业务事实
 _EXIST_WORDS = ("有", "包含", "包括", "分为", "涵盖", "涉及")
 _ENUM_MIN_LEN = 2
+
+# ---- 「名字」的样子（机械判 title 时的护栏）----
+#
+# 「存在性词左边只剩一个名字」——这里的「名字」是有要求的。
+# 「出库必须包含 A、B」里，「出库必须」不是名字，是半句要求：
+# 把它当标题丢掉，这条要求就整个不见了（**假绿**）。
+_NAME_MAX_LEN = 12
+_NAME_FORBIDDEN = (
+    # 要求 / 情态
+    "必须", "应当", "应该", "不得", "不能", "禁止", "要求", "保证", "确保",
+    "优先", "至少", "最多", "超过", "低于", "大于", "小于", "支持", "需要",
+    "要", "需",
+    # 条件 / 关联（这些开头的句子是从句，不是名字）
+    "如果", "假如", "假设", "一旦", "由于", "因为", "为了", "所以", "但是",
+    "不过", "而且", "并且", "然后", "其中", "关于", "以及", "或者",
+)
+
+# ---- 要求表达（机械下限）----
+#
+# 句子里出现这些词，说明**它本身带着一条要求**，不许被排除在覆盖率分母之外。
+#
+# 这张表是下限不是全集。漏掉一种说法，最坏是那句要求没进分母（需求被漏）；
+# 收得太宽，铺垫句会被拉进分母（假红）。所以不收「要」「需要」这种裸词——
+# 「需要注意的是」不是要求，「要支持」才是。
+_REQUIRE_MARKERS = (
+    "必须", "应当", "应该", "不得", "不能", "禁止", "要求",
+    "至少", "最多", "不超过", "不低于", "保证", "确保",
+    "要能", "要可", "要支持", "要看到", "应能", "应支持", "应把",
+    "才能", "需要满足", "需要支持", "需要能", "需在", "需支持", "须在",
+)
 
 
 # ============================================================
@@ -48,7 +87,7 @@ _ENUM_MIN_LEN = 2
 # ============================================================
 
 
-# 句子的三种角色
+# 句子的四种角色
 #
 # **角色是句子的性质，不是它在原文里的位置。**
 #
@@ -62,23 +101,55 @@ _ENUM_MIN_LEN = 2
 # 只剩一句 business_goal 文本躺在那儿。设计盒的绑定腿只读 requirements，
 # 于是这个 WMS 概念从头到尾没进过链——测试盒的探针也就无从谈起。
 #
-# 三种角色：
-#   title —— 这次要建模的东西的**名字**（"库存管理"）。只是名字，不是需求。
-#   goal  —— 业务目标句，**它本身就是那句要满足的要求**，要抽节点。
-#   fact  —— 业务事实句，抽节点。
+# 四种角色：
+#   title   —— 这次要建模的东西的**名字**（"库存管理"）。只是名字，不是需求。
+#   goal    —— 业务目标句，**它本身就是那句要满足的要求**，要抽节点。
+#   fact    —— 业务事实句，抽节点。
+#   context —— **铺垫句**：场景 / 时间状语 / 语气说明，**本身不含任何独立的要求**。
+#
+# **谁判**：
+#   - `title` 由**机械层**判（存在性枚举 + 左边像个名字）。
+#   - `goal / fact / context` 由 **LLM** 判——「这句里有没有独立的要求」是语义问题。
+#     机械层按位置判过一次，代价是**铺垫句进了覆盖率的分母**：
+#     「仓库出库的时候」这种状语从句被当成一句需求，
+#     而它抽不出任何东西 → source_coverage 永远 < 100 → **对真需求假红**。
+#   - 机械层在 LLM 之上守**下限**：含要求表达的句**必须**进分母，
+#     不许被说成「只是铺垫」。
 #
 # title 只在一种情况下出现：首句是「X 有/包含/分为 A、B、C」这种
-# 存在性枚举，且存在性词左边确实只剩一个名字。
+# 存在性枚举，且存在性词左边确实只剩一个**像名字**的名字。
 # 找不到存在性词时（「库存管理要支持入库、出库」），首句**仍是内容句**——
 # 「入库」就藏在它里面，当标题丢掉是丢信息。
+_ROLES = ("title", "goal", "fact", "context")
 _CONTENT_ROLES = ("goal", "fact")
 
 
-def _content_sentences(sentences: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """可抽内容的句子：goal + fact（title 只是名字，不是需求）
+def _looks_like_name(text: str) -> bool:
+    """这段文字像个「名字」吗（机械判 title 时的护栏）
 
-    覆盖率的分母 = 这批句子的数量。title 不进分母——
-    「库存管理」这种名字抽不出需求，让它进分母就是逼模型编碎片。
+    「存在性词左边只剩一个名字」——「出库必须」不是名字。
+    当成名字丢掉，这条要求就整个不见了。
+    """
+    t = (text or "").strip()
+    if not t or len(t) > _NAME_MAX_LEN:
+        return False
+    return not any(w in t for w in _NAME_FORBIDDEN)
+
+
+def _has_requirement_marker(text: str) -> bool:
+    """这句里有没有「要求」的意思（机械下限）
+
+    命中 = 这句自带一条要求，不许被排除在覆盖率分母之外。
+    """
+    return any(w in (text or "") for w in _REQUIRE_MARKERS)
+
+
+def _content_sentences(sentences: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """可抽内容的句子：goal + fact（title 只是名字，context 只是铺垫）
+
+    覆盖率的分母 = 这批句子的数量。
+    title 不进分母——「库存管理」这种名字抽不出需求，让它进分母就是逼模型编碎片。
+    context 也不进分母——「仓库出库的时候」这种铺垫句同理。
     """
     return [
         s for s in sentences
@@ -98,10 +169,14 @@ def _goal_text(sentences: list[dict[str, Any]]) -> str:
 def _split_sentences(narrative: str) -> list[dict[str, Any]]:
     """自然语言 → 带 id 的句子列表（role: title / goal / fact）
 
-    只做切分和角色标注，不做语义判断：
-    - 首句是存在性枚举（「X 有 A、B、C」）→ 名字部分 = title，枚举项 = fact
-    - 首句是完整的一句话 → goal（**它就是那句需求本身**）
-    - 其余 = fact
+    这里只做**机械能确定**的判断：
+    - 按句末标点切句
+    - 首句是存在性枚举（「X 有 A、B、C」）且 X 像个名字 → X = title，各项 = fact
+    - 其余首句 = goal，其余句 = fact（**这是初判，不是结论**）
+
+    **角色是句子的性质，不是它的位置**——所以 goal / fact / context 的最终判定
+    交给 LLM（见 `_extract_roles`），机械层只保留 title 的判定权，
+    并在 LLM 之上守下限（含要求表达的句必须进分母）。
     """
     raw = [s.strip() for s in _SENT_SPLIT.split(narrative) if s.strip()]
     if not raw:
@@ -127,13 +202,19 @@ def _split_sentences(narrative: str) -> list[dict[str, Any]]:
         head_text = first
         is_title = False
         for w in _EXIST_WORDS:
-            if w in first:
-                head_text = first.split(w)[0].strip() or first
-                lead = first.split(w, 1)[1].strip()
-                if lead:
-                    enum_items = [lead, *enum_items]
-                is_title = True
-                break
+            if w not in first:
+                continue
+            candidate = first.split(w)[0].strip() or first
+            # **左边不像名字 → 这不是「X 有 A、B」这种枚举**
+            # （「出库必须包含 A、B」的「出库必须」不是名字）
+            if not _looks_like_name(candidate):
+                continue
+            lead = first.split(w, 1)[1].strip()
+            head_text = candidate
+            is_title = True
+            if lead:
+                enum_items = [lead, *enum_items]
+            break
         # 存在性词左边确实只剩一个名字 → title（不抽节点）
         # 找不到存在性词 → 首句仍可能是内容（「库存管理要支持入库」里就有「入库」）
         _add(head_text, "title" if is_title else "goal")
@@ -170,16 +251,29 @@ _EXTRACT_PROMPT = """从下面这份中文业务表述里抽出一张**流程图
 业务方描述一件事，说的是流程图：节点（做什么）+ 边（走到哪）+ 守卫（什么条件下才走）。
 不要把它摊平成一串需求——摊平会把"哪个约束挂在哪个动作上"这个信息弄丢。
 
-原文已按句子切分，每句有 sentence_id 和角色：
+原文已按句子切分，每句有 sentence_id 和**机械初判**的角色：
 - [title] 是这次要建模的东西的**名字**（例如"库存管理"）。它只是标题，**不要**为它抽节点。
 - [goal] 是业务目标。**它本身就是这次要满足的要求**——必须至少抽一个节点指向它。
 - [fact] 是业务事实。每个动作 / 约束各自成节点。
+
+**上面那个角色只是初判，你要自己重新判一遍**，并在输出里给出每句话的角色（见下面的 roles 字段）：
+- "goal"：这句是业务目标，或者它本身就是一条要满足的要求
+- "fact"：这句是业务事实（实体、动作、约束、指标）
+- "context"：**这句只是铺垫**——场景、时间状语、语气说明、背景交代，
+  它**本身不含任何独立的要求**。例：「仓库出库的时候」「简单来说」「目前的情况是」
+- "title"：**这句只是这次要建模的东西的名字**，没有任何要求。例：「库存管理」
+
+⚠️ 只有真的**没有任何要求**的句子才能标 context 或 title。
+⚠️ 带着要求的句子（哪怕写成陈述句）都要标 goal 或 fact。
+   标错的代价很具体：标成 context 的句子**不算进覆盖率**，
+   那条要求就没人认领——而没人会发现。
 
 你要做的：
 1. 只用原文中真实存在的内容，绝对不要补充、推断或编造
 2. nodes：每个业务动作一个节点。action 写原文里出现的片段，不要改写
 3. **每一条 [goal] / [fact] 句子都至少要有一个节点 trace_to 指向它**——
    漏掉一句，那句原文就没人认领，覆盖率判据会红
+   （你在 roles 里标成 context / title 的句子除外——那些本来就没有要求）
 4. edges：把节点按原文的先后顺序串起来，from/to 用 node_id
 5. 同一句里如果既有动作又有约束，动作进 nodes，约束写进**那一步之后那条边的 guard**；
    **整张图只有一个节点的时候没有边可挂**，约束就写进这个节点自己的 guard 字段
@@ -188,12 +282,14 @@ _EXTRACT_PROMPT = """从下面这份中文业务表述里抽出一张**流程图
 8. goal 字段写 [goal] 句的原文；没有 [goal] 句就写 [title] 句的原文
 
 输出格式：
-{{"goal": "首句原文片段",
+{{"roles": {{"sent_1": "goal", "sent_2": "context"}},
+ "goal": "首句原文片段",
  "nodes": [{{"action": "原文片段", "guard": "", "writes": [], "reads": [], "measures": [],
               "trace_to": "sent_2"}}],
  "edges": [{{"from": "node_1", "to": "node_2", "guard": "", "trace_to": "sent_3"}}]}}
 
 注意：
+- roles 要**每句话都有**，一个都不能漏
 - 没有守卫时 guard 留空字符串，不要编一个
 - 没有产出实体时 writes / reads 留空数组
 - measures 只在原文明确说要度量什么时才填
@@ -204,7 +300,9 @@ _EXTRACT_PROMPT = """从下面这份中文业务表述里抽出一张**流程图
 
 
 def _attach_sources(
-    fragments: list[str], sentences: list[dict[str, Any]]
+    fragments: list[str],
+    sentences: list[dict[str, Any]],
+    content_ids: set[str] | None = None,
 ) -> list[tuple[str, str]]:
     """把挂在节点身上的元素，逐个归到它真实出现的那一句上
 
@@ -216,7 +314,8 @@ def _attach_sources(
     那还是编的——标题是名字，"库存管理"里读不出一个实体。
     """
     out: list[tuple[str, str]] = []
-    content_ids = {s["sentence_id"] for s in _content_sentences(sentences)}
+    if content_ids is None:
+        content_ids = {s["sentence_id"] for s in _content_sentences(sentences)}
     for frag in fragments:
         for s in sentences:
             if s["sentence_id"] in content_ids and frag in s["text"]:
@@ -225,16 +324,110 @@ def _attach_sources(
     return out
 
 
-def _clean_graph(raw: Any, sentences: list[dict[str, Any]]) -> dict[str, Any]:
+# ============================================================
+# 角色判定：LLM 判语义，机械层守上下限
+# ============================================================
+
+
+def _extract_roles(raw: Any, sentences: list[dict[str, Any]]) -> dict[str, str]:
+    """LLM 给的逐句角色（**缺一句就中止**）
+
+    为什么必须由模型给：「这句里有没有独立的要求」是**语义问题**。
+    机械层按位置猜过一次（「首句 = goal，其余 = fact」），
+    代价是**铺垫句进了覆盖率的分母**——「仓库出库的时候」这种状语从句
+    被当成一句需求，它抽不出任何东西 → source_coverage 永远 < 100
+    → **对真需求假红**（实测 50%）。
+
+    模型没按要求履约 = **履约中止**，不是「用初判凑合」。
+    凑合的那份初判正是把真需求判红的那份。
+    """
+    if not isinstance(raw, dict):
+        raise ValueError(f"llm returned {type(raw).__name__}, want dict")
+    roles = raw.get("roles")
+    if not isinstance(roles, dict):
+        raise ValueError(
+            "llm output has no 'roles' map —— 句子的角色得由模型判，"
+            "不能靠位置猜（首句=goal 会把铺垫句算进覆盖率的分母，"
+            "需求盒就对真需求假红）"
+        )
+    out: dict[str, str] = {}
+    missing: list[str] = []
+    for s in sentences:
+        sid = s["sentence_id"]
+        r = roles.get(sid)
+        if r not in _ROLES:
+            missing.append(sid)
+            continue
+        out[sid] = r
+    if missing:
+        raise ValueError(
+            f"llm 没给这几句话的角色：{missing} —— 每句都要判"
+        )
+    return out
+
+
+def _content_ids_for(
+    sentences: list[dict[str, Any]], llm_roles: dict[str, str]
+) -> set[str]:
+    """覆盖率的分母（内容句的 id 集合）
+
+    = LLM 判的内容句（goal / fact）∪ 含要求表达的句（**机械下限**）
+
+    **下限**：含要求表达的句（必须 / 应当 / 至少 / 不超过 / 要能 / 保证…）
+    必须进分母。模型把它叫「只是铺垫」也不作数——那句话确实带着一条要求，
+    它没被抽出来就该判红，不该悄悄消失。
+    """
+    ids: set[str] = set()
+    for s in sentences:
+        sid = s["sentence_id"]
+        role = llm_roles.get(sid, "")
+        if role in _CONTENT_ROLES:
+            ids.add(sid)
+        elif _has_requirement_marker(s.get("text", "")):
+            ids.add(sid)
+    return ids
+
+
+def _resolve_roles(
+    sentences: list[dict[str, Any]],
+    llm_roles: dict[str, str],
+    content_ids: set[str],
+) -> list[dict[str, Any]]:
+    """定稿每句话的角色
+
+    规则：
+    - LLM 说 content（goal / fact）→ content
+    - LLM 说 context / title 且不在 content_ids 里 → 非内容句（不进分母）
+    - 在 content_ids 里但 LLM 没说 content（机械下限拉回来的）→ fact
+    """
+    out: list[dict[str, Any]] = []
+    for s in sentences:
+        sid = s["sentence_id"]
+        role = llm_roles.get(sid, s.get("role", "fact"))
+        if sid in content_ids:
+            role = "goal" if role == "goal" else "fact"
+        out.append({**s, "role": role})
+    return out
+
+
+def _clean_graph(
+    raw: Any,
+    sentences: list[dict[str, Any]],
+    content_ids: set[str] | None = None,
+) -> dict[str, Any]:
     """LLM 图 → 机械清洗后的图
 
     只收能溯源到真实句子、且文本在原文中出现过的内容——
     幻觉在这一层就被挡掉，不留到 acceptance 才报。
+
+    `content_ids` 是**判定过的内容句集合**（LLM 判角色 + 机械层守下限）。
+    不传就退回按当前 role 算——只有直接单测这个函数时才会那样。
     """
     if not isinstance(raw, dict):
         raise ValueError(f"llm returned {type(raw).__name__}, want dict")
     sent_by_id = {s["sentence_id"]: s for s in sentences}
-    content_ids = {s["sentence_id"] for s in _content_sentences(sentences)}
+    if content_ids is None:
+        content_ids = {s["sentence_id"] for s in _content_sentences(sentences)}
     goal = _goal_text(sentences)
 
     def ok_fragment(sid: Any, text: Any) -> bool:
@@ -257,9 +450,9 @@ def _clean_graph(raw: Any, sentences: list[dict[str, Any]]) -> dict[str, Any]:
     for c in (raw.get("nodes") or []):
         if not isinstance(c, dict) or not ok_fragment(c.get("trace_to"), c.get("action")):
             continue
-        writes = _attach_sources(str_list(c.get("writes")), sentences)
-        measures = _attach_sources(str_list(c.get("measures")), sentences)
-        reads = _attach_sources(str_list(c.get("reads")), sentences)
+        writes = _attach_sources(str_list(c.get("writes")), sentences, content_ids)
+        measures = _attach_sources(str_list(c.get("measures")), sentences, content_ids)
+        reads = _attach_sources(str_list(c.get("reads")), sentences, content_ids)
         # **节点自己的 guard**：整张图只有一个节点的时候没有边可挂，
         # 约束只能挂在节点上。以前这里永远是空的——于是单节点需求的
         # 约束（"出库必须先出快过期的批次"里的"必须先出…"）整个丢掉，
@@ -411,12 +604,34 @@ def _simulate_requirement_extractor(input_data: dict[str, Any]) -> dict[str, Any
     # 输出——整轮返回空串，长输入 3 次里空 2 次。关掉后：3 秒、296 token、
     # 正常 JSON（对照 33 秒、8000 token、空输出）。质量不变（4 节点 3 边、
     # coverage 100 实测一致）。
-    raw = llm.complete_json(
-        _EXTRACT_PROMPT.format(sentences=rendered),
-        max_tokens=8000,
-        thinking="disabled",
-    )
-    graph = _clean_graph(raw, sentences)
+    #
+    # **roles 缺了就再问一次**（不是降级）：角色是句子的性质，模型没判
+    # 就等于没履约这一项。再问一次还是不给 → 中止。
+    prompt = _EXTRACT_PROMPT.format(sentences=rendered)
+    raw: Any = None
+    llm_roles: dict[str, str] = {}
+    last_error: ValueError | None = None
+    for _attempt in range(2):
+        raw = llm.complete_json(prompt, max_tokens=8000, thinking="disabled")
+        try:
+            llm_roles = _extract_roles(raw, sentences)
+            break
+        except ValueError as e:
+            last_error = e
+            prompt = (
+                _EXTRACT_PROMPT.format(sentences=rendered)
+                + "\n\n【再强调一次】上一轮的输出里没有给每句话的角色。"
+                "这次必须在 roles 字段里给出**每一句**的 sentence_id 和它的角色"
+                "（goal / fact / context / title 四选一），一句都不能漏。"
+            )
+    else:
+        raise last_error  # type: ignore[misc]
+
+    # 角色定稿 → 覆盖率的分母（内容句）
+    content_ids = _content_ids_for(sentences, llm_roles)
+    final_sentences = _resolve_roles(sentences, llm_roles, content_ids)
+    graph = _clean_graph(raw, final_sentences, content_ids)
+    goal = _goal_text(final_sentences)
 
     # 图 → 兼容平铺列表，编号按 type 分别计数（建模盒按 type 分组）
     requirements = _graph_to_requirements(graph)
@@ -429,6 +644,10 @@ def _simulate_requirement_extractor(input_data: dict[str, Any]) -> dict[str, Any
 
     result = dict(input_data)
     result.update({
+        # **角色定稿要写回 source_sentences**——后面的覆盖率判据读的就是它。
+        # 不写回的话，判据读到的还是机械初判（首句=goal、其余=fact），
+        # 铺垫句照样进分母，假红原封不动地回来。
+        "source_sentences": final_sentences,
         "business_goal": goal,
         "nodes": graph["nodes"],
         "edges": graph["edges"],

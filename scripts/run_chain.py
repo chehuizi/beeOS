@@ -2,33 +2,44 @@
 """
 scripts/run_chain.py —— 跑一条真需求走完 WMS 链
 
-用���：
+用法：
   scripts/run_chain.py "仓库出库的时候，同一个 SKU 必须先出快过期的批次"
   scripts/run_chain.py --file requirements.txt
   echo "..." | scripts/run_chain.py -
 
-**它跑的是四只盒子的真腿**（不是模拟）：
-  需求盒（真 LLM 抽需求）→ 设计盒（真 LLM 归 WMS 概念）
-  → 测试盒（真 WMS 实例跑业务场景，采真实测值）
+**它跑的是六只盒子的真腿**（不是模拟）：
+  需求盒（真 LLM 抽需求）
+  → 设计盒（真 LLM 归 WMS 概念，出可判定预期）
+  → 开发盒（真起隔离工作区、真按方案改代码、真编译、真跑仓库测试套件）
+  → 测试盒（真 WMS 验证实例跑业务场景，采真实测值）
+  → 运维盒（真读**生产**实例 + 真核对上游验收/回滚/告警）
   → 分析盒（预期 vs 实测、归因、播种下一轮需求）
 
-## 现在哪些段是「接力」，哪些是「手工投」
+## 接力在哪，手工投在哪
 
 | 段 | 通道 | 为什么 |
 |---|---|---|
-| 需求盒 → 设计盒 | **手工投** | 设计盒内联吃需求集（`requirements`），没有 `ref:` 输入 |
+| 需求盒 → 设计盒 | 接力 ✓ | `requirement_set_ref`（建模盒声明的形状，需求集的产出整个接过来） |
 | 设计盒 → 开发盒 | 接力 ✓ | `design_package_ref` |
-| 开发盒 → 测试盒 | **断** | 开发盒是骨架盒，产出不满足测试盒要的制品形状（9 个必填字段） |
+| 开发盒 → 测试盒 | 接力 ✓ | `artifact_ref`（**不再是手工常量**） |
 | 需求盒/设计盒 → 测试盒 | 接力 ✓ | `requirement_ref` / `expectation_ref` |
-| 测试盒 → 分析盒 | 接力 ✓ | `observation_ref` |
+| 测试盒 + 开发盒 → 运维盒 | 接力 ✓ | `verification_ref` / `artifact_ref` |
+| 运维盒 → 分析盒 | 接力 ✓ | `observation_ref`（生产上的确定结论优先） |
 
-**开发盒和运维盒未实现，不影响这条链跑通**：
-测试盒验的是 WMS 的业务场景，制品只是「这次测的是哪份构建」——
-所以制品手工投一份（真信息：验证实例上跑的那份 jar）就行。
-运维盒在主线上也不是必需的（分析盒直接接测试盒的实测）。
+**运维盒读的是生产**，测试盒跑的是验证实例——两个盒子读的不是同一个地方，
+所以观测里必须带着「我测的是哪个实例」（`measured_base_url` / `measured_mode`）。
+
+## 环境变量
+
+| 变量 | 作用 | 默认 |
+|---|---|---|
+| `BEEOS_WMS_REPO` | WMS 源码仓（开发盒改代码 / 运维盒查回滚目标） | 不配 = 履约中止 |
+| `BEEOS_MVN` | maven 可执行文件 | PATH 里的 `mvn` |
+| `BEEOS_DEV_WORKSPACE` | 隔离工作区 + 制品库根目录 | `/tmp/beeos-dev` |
+| `BEEOS_PROD_WMS_BASE_URL` | **生产** WMS 的 API 根（运维盒读它） | 不配 = 运维盒判「读不到生产」 |
+| `BEEOS_VERIFY_WMS_BASE_URL` | 验证实例的 API 根（测试盒在它上面造单据） | `http://127.0.0.1:8081/api/v1` |
 
 ## 退出码
-
   0 = 收敛了（有确定结论的预期全过）
   1 = 有落差 / 没能验出东西（**这是正确信号**，不是脚本失败）
   2 = 链路本身断了（WMS 连不上、投料非法等）
@@ -38,6 +49,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -48,23 +60,7 @@ from kanban.trigger import trigger_task  # noqa: E402
 from runtime.store import TaskRunStore  # noqa: E402
 
 
-# 制品：描述「这次测的是哪份构建」。
-#
-# **这是真信息，不是占位符**：开发盒还没真腿，所以这里手工投。
-# 它说的是「本次验的是验证实例上跑的那份 WMS 构建」。
-ARTIFACT = {
-    "commit_count": 1,
-    "build_duration_s": 42.0,
-    "unit_test_pass_rate": 1.0,
-    "artifact_digest": "wms-verify-instance-local-jar",
-    "build_failed": False,
-    "build_reproducibility": True,
-    "unit_test_green": True,
-    "review_coverage": True,
-    "artifact_traceable": True,
-}
-
-DEFAULT_WMS_BASE_URL = "http://127.0.0.1:8081/api/v1"
+DEFAULT_VERIFY_BASE_URL = "http://127.0.0.1:8081/api/v1"
 
 
 def _read_narrative(args: argparse.Namespace) -> str:
@@ -75,9 +71,11 @@ def _read_narrative(args: argparse.Namespace) -> str:
     return args.text.strip()
 
 
-def _run(box_id: str, task_type: str, payload: dict, store: TaskRunStore,
-         handoff: dict | None = None) -> dict:
-    return trigger_task(box_id, task_type, payload, store, handoff=handoff)
+def _git_head(repo: str) -> str:
+    proc = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True,
+    )
+    return proc.stdout.strip()
 
 
 def main() -> int:
@@ -85,11 +83,14 @@ def main() -> int:
     parser.add_argument("text", nargs="?", default="-",
                         help="业务方原话（- 表示从标准输入读）")
     parser.add_argument("--file", help="从文件读业务方原话")
-    parser.add_argument("--wms-base-url", default=None,
-                        help=f"WMS API 根（默认 {DEFAULT_WMS_BASE_URL}）")
-    parser.add_argument("--wms-mode", default="verification",
-                        choices=["verification", "production"],
-                        help="verification 才允许造数（默认）")
+    parser.add_argument("--verify-base-url", default=None,
+                        help=f"验证实例 API 根（默认 {DEFAULT_VERIFY_BASE_URL}）")
+    parser.add_argument("--prod-base-url", default=None,
+                        help="生产 WMS API 根（运维盒读它）")
+    parser.add_argument("--wms-repo", default=None,
+                        help="WMS 源码仓路径（开发盒改代码、运维盒查回滚目标）")
+    parser.add_argument("--alerts", default="",
+                        help="生产告警（逗号分隔；每条都要有处置记录）")
     parser.add_argument("--store", default="/tmp/beeos_chain_runs.jsonl",
                         help="履约记录落盘位置")
     parser.add_argument("--json", action="store_true", help="只输出 JSON")
@@ -100,58 +101,113 @@ def main() -> int:
         print("没读到业务方原话", file=sys.stderr)
         return 2
 
-    os.environ.setdefault("BEEOS_WMS_BASE_URL",
-                          args.wms_base_url or DEFAULT_WMS_BASE_URL)
-    os.environ["BEEOS_WMS_MODE"] = args.wms_mode
+    wms_repo = args.wms_repo or os.environ.get("BEEOS_WMS_REPO") or ""
+    if wms_repo:
+        os.environ["BEEOS_WMS_REPO"] = wms_repo
+    verify_url = args.verify_base_url or os.environ.get(
+        "BEEOS_VERIFY_WMS_BASE_URL") or DEFAULT_VERIFY_BASE_URL
+    prod_url = args.prod_base_url or os.environ.get("BEEOS_PROD_WMS_BASE_URL") or ""
 
     store = TaskRunStore(args.store)
 
     # ---- 1) 需求盒 ----
-    cap = _run("wms_requirement_box", "capture_business_requirement",
-               {"narrative": narrative}, store)
+    cap = trigger_task("wms_requirement_box", "capture_business_requirement",
+                       {"narrative": narrative}, store)
     pkg = cap["result"]
 
-    # ---- 2) 设计盒（**手工投**需求集——它没有 ref: 输入）----
-    design = _run("wms_design_box", "handle_modeling_request", {
-        "set_id": pkg["set_id"],
-        "business_goal": pkg.get("business_goal", ""),
-        "requirements": pkg.get("requirements", []),
-    }, store)
+    # ---- 2) 设计盒（需求集**接力**过来）----
+    design = trigger_task("wms_design_box", "handle_modeling_request", {}, store,
+                          handoff={"requirement_set_ref": cap["task_run_id"]})
+    expectations = design["result"].get("expectations", [])
 
-    # ---- 3) 测试盒（制品手工投 + 需求集/预期接力）----
-    test = _run("wms_testing_box", "handle_testing_request", {
+    # ---- 3) 开发盒（真腿：隔离工作区 → 改代码 → 编译 → 制品）----
+    commit_range = ""
+    if wms_repo:
+        base = _git_head(wms_repo)
+        commit_range = f"{base}..HEAD" if base else ""
+    dev = trigger_task("wms_development_box", "handle_development_request", {
+        "dev_task_id": f"dev_{cap['task_run_id'][:8]}",
+        "commit_range": commit_range,
+        "target_env": "verification",
+    }, store, handoff={"design_package_ref": design["task_run_id"]})
+    dev_result = dev.get("result") or {}
+
+    # ---- 4) 测试盒（制品 + 需求 + 预期 全部接力）----
+    os.environ["BEEOS_WMS_BASE_URL"] = verify_url
+    os.environ["BEEOS_WMS_MODE"] = "verification"
+    test = trigger_task("wms_testing_box", "handle_testing_request", {
         "test_task_id": f"tt_{cap['task_run_id'][:8]}",
-        "artifact_ref": ARTIFACT,
         "scenarios": ["batch_expiry_allocation"],
     }, store, handoff={
         "requirement_ref": cap["task_run_id"],
         "expectation_ref": design["task_run_id"],
+        "artifact_ref": dev["task_run_id"],
     })
 
-    # ---- 4) 分析盒（实测观测接力）----
-    analysis = _run("wms_analysis_box", "handle_effect_analysis_request", {
+    # ---- 5) 运维盒（真读生产 + 真核对上游）----
+    commit_sha = str(dev_result.get("commit_sha") or "")
+    change_request = (
+        f"放行 {commit_sha[:8]} 这份构建（拣货准确率上库存看板）"
+        if commit_sha else ""
+    )
+    rollback_target = _git_head(wms_repo) if wms_repo else ""
+    alerts = [a.strip() for a in (args.alerts or "").split(",") if a.strip()]
+    ops = trigger_task("wms_ops_box", "handle_ops_request", {
+        "ops_task_id": f"ops_{cap['task_run_id'][:8]}",
+        "change_request": change_request,
+        "alerts": alerts,
+        "rollback_target": rollback_target,
+        "target_base_url": prod_url,
+        "target_mode": "production",
+    }, store, handoff={
+        "verification_ref": test["task_run_id"],
+        "artifact_ref": dev["task_run_id"],
+    })
+    ops_result = ops.get("result") or {}
+
+    # ---- 6) 分析盒（观测接力：运维盒合并后的那一份）----
+    analysis = trigger_task("wms_analysis_box", "handle_effect_analysis_request", {
         "analysis_id": f"an_{cap['task_run_id'][:8]}",
         "requirement_ref": pkg["set_id"],
-        "expected_metrics": design["result"].get("expectations", []),
+        "expected_metrics": expectations,
         "observed_window": "now",
-    }, store, handoff={"observation_ref": test["task_run_id"]})
+    }, store, handoff={"observation_ref": ops["task_run_id"]})
+    ares = analysis.get("result") or {}
 
-    result = analysis.get("result") or {}
     payload = {
         "requirement_set": pkg.get("set_id"),
         "requirement_count": pkg.get("requirement_count"),
-        "expectation_count": len(design["result"].get("expectations", [])),
+        "expectation_count": len(expectations),
         "acceptance": {
             "requirement_box": cap.get("acceptance_status"),
             "design_box": design.get("acceptance_status"),
+            "development_box": dev.get("acceptance_status"),
             "testing_box": test.get("acceptance_status"),
+            "ops_box": ops.get("acceptance_status"),
             "analysis_box": analysis.get("acceptance_status"),
         },
-        "observations": test["result"].get("observations", []),
-        "gaps": result.get("gaps", []),
-        "next_requirement_seed": result.get("next_requirement_seed", ""),
-        "compared_metric_count": result.get("compared_metric_count", 0),
-        "gap_count": result.get("gap_count", 0),
+        "development": {
+            "commit_sha": dev_result.get("commit_sha"),
+            "branch": dev_result.get("branch"),
+            "changed_files": dev_result.get("changed_files"),
+            "review_reason": dev_result.get("review_reason"),
+            "trace_reason": dev_result.get("trace_reason"),
+        },
+        "ops": {
+            "change_approval_rate": ops_result.get("change_approval_rate"),
+            "rollback_readiness": ops_result.get("rollback_readiness"),
+            "incident_documented": ops_result.get("incident_documented"),
+            "runtime_state_recorded": ops_result.get("runtime_state_recorded"),
+            "ops_determined": ops_result.get("ops_determined"),
+            "approval_reason": ops_result.get("approval_reason"),
+            "rollback_reason": ops_result.get("rollback_reason"),
+            "runtime_reason": ops_result.get("runtime_reason"),
+            "runtime_state": ops_result.get("runtime_state"),
+        },
+        "observations": ops_result.get("observations") or [],
+        "gaps": ares.get("gaps", []),
+        "gap_count": ares.get("gap_count", 0),
+        "next_requirement_seed": ares.get("next_requirement_seed", ""),
     }
 
     if args.json:
@@ -159,7 +215,6 @@ def main() -> int:
     else:
         _print_report(payload)
 
-    # 有落差 / 没能验出东西 → 退出码 1（**这是正确信号**）
     if analysis.get("acceptance_status") != "accepted":
         return 1
     return 0
@@ -172,32 +227,47 @@ def _print_report(p: dict) -> None:
     print("=" * 72)
     print("各盒结论：", flush=True)
     for name, status in p["acceptance"].items():
-        print(f"  {name:16} {status}")
+        print(f"  {name:18} {status}")
 
-    print("\n-- 实测观测 --")
-    for obs in p["observations"]:
+    dev = p.get("development") or {}
+    if dev.get("commit_sha"):
+        print(f"\n-- 开发盒改动 --\n  提交 {dev['commit_sha'][:8]}（{dev.get('branch')}）")
+        for f in dev.get("changed_files") or []:
+            print(f"    {f}")
+        if dev.get("review_reason"):
+            print(f"  评审：{dev['review_reason']}")
+        if dev.get("trace_reason"):
+            print(f"  追溯：{dev['trace_reason']}")
+
+    ops = p.get("ops") or {}
+    print("\n-- 运维盒 --")
+    for key in ("change_approval_rate", "rollback_readiness", "incident_documented",
+                "runtime_state_recorded", "ops_determined"):
+        print(f"  {key:26} {ops.get(key)}")
+    for key in ("approval_reason", "rollback_reason", "runtime_reason"):
+        if ops.get(key):
+            print(f"    {key}: {ops[key]}")
+    state = ops.get("runtime_state") or {}
+    if state:
+        print(f"  生产现场：{state.get('base_url')} mode={state.get('mode')} "
+              f"可达={state.get('reachable')}")
+        print(f"    看板业务字段：{'、'.join(state.get('business_fields') or []) or '（无）'}")
+
+    print("\n-- 观测（生产优先）--")
+    for obs in p.get("observations") or []:
         d = obs.get("details") or {}
-        where = d.get("measured_base_url") or ""
-        mode = d.get("measured_mode") or ""
-        print(f"  [{obs.get('outcome'):15}] {obs.get('wms_kind'):28} "
+        print(f"  [{str(obs.get('outcome')):15}] {str(obs.get('wms_kind')):32} "
               f"{obs.get('summary')}")
-        if where:
-            print(f"      ↳ 测的是：{where}（mode={mode}）")
+        if d.get("measured_base_url"):
+            print(f"      ↳ 测的是：{d['measured_base_url']}（mode={d.get('measured_mode')}）")
 
-    print(f"\n-- 落差（{p['gap_count']} 条，比了 {p['compared_metric_count']} 条）--")
-    for gap in p["gaps"]:
+    print(f"\n-- 落差（{p['gap_count']} 条）--")
+    for gap in p.get("gaps") or []:
         print(f"  * {gap.get('requirement_id')} / {gap.get('wms_kind')}")
         print(f"    要满足：{gap.get('statement')}")
         print(f"    实测：{gap.get('summary')}")
-        details = gap.get("details") or {}
-        if details.get("allocated"):
-            print(f"    分配到：{details.get('allocated')}"
-                  f"（应为 {details.get('expected_batch_no')}）")
-        for row in details.get("stored_inventory") or []:
-            print(f"      库存行 {row.get('batch_no')} @ {row.get('location_code')}"
-                  f" 效期={row.get('expire_date')}")
 
-    if p["next_requirement_seed"]:
+    if p.get("next_requirement_seed"):
         print("\n-- 下一轮需求种子 --")
         print(f"  {p['next_requirement_seed']}")
 

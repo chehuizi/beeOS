@@ -357,12 +357,23 @@ def build_packager_handler(input_data: dict[str, Any]) -> dict[str, Any]:
         if jar_path:
             src = Path(jar_path)
             if src.exists():
+                import json
                 import shutil
                 dest_dir = workspace_root() / "artifacts" / (commit_sha[:8] or "nocommit")
                 dest_dir.mkdir(parents=True, exist_ok=True)
                 dest = dest_dir / src.name
                 shutil.copy2(src, dest)
                 artifact_path = str(dest)
+                # **meta.json：制品库要能自己说明自己**
+                # 运维盒的回滚判定要按摘要/提交找到这一份构建——
+                # 只有一个没有说明的 jar 目录，它找不到。
+                (dest_dir / "meta.json").write_text(json.dumps({
+                    "commit_sha": commit_sha,
+                    "branch": branch,
+                    "artifact_digest": digest,
+                    "jar": dest.name,
+                    "build_log_ref": str(input_data.get("build_log_ref") or ""),
+                }, ensure_ascii=False, indent=2), encoding="utf-8")
 
         return {
             "commit_count": int(input_data.get("commit_count") or 0),

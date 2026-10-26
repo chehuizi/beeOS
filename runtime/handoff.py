@@ -95,8 +95,13 @@ def assemble_handoff(
                 f"handoff {field_name!r} 指向的上游履约 {run_id!r} 找不到"
             )
         if record.get("status") == "failed":
+            # **带上失败原因**：只说「失败了」等于让下游的人去猜。
+            # 上游已经知道为什么不接（op 的错误文本），不传下来就是
+            # 「算了却看不见」——链路断在哪儿只能靠猜。
+            reason = str(record.get("error_reason") or "").strip()
+            detail = f"：{reason}" if reason else ""
             raise HandoffError(
-                f"handoff {field_name!r} 指向的上游履约 {run_id!r} 失败了，"
+                f"handoff {field_name!r} 指向的上游履约 {run_id!r} 失败了{detail}，"
                 f"接过来的产出不可信"
             )
         artifact = record.get("artifact")

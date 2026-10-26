@@ -241,6 +241,9 @@ TEST_REPORT_SCHEMA = SchemaDef(
         # 没有它，「临期 SKU 数是 1」这句话是无主的——
         # 不知道测的是哪份代码，就没法说这次验算不算数。
         FieldDef(name="artifact_identified", type="boolean", required=True),
+        # **产出里一直有这个字段，schema 里一直没写**——
+        # 消费方（运维盒）要按它归档「这次验的是哪一次」，就得更。
+        FieldDef(name="test_task_id", type="string", required=False),
         # ---- 证据 ----
         FieldDef(name="observations", type="array", required=True,
                  items=FieldDef(name="observation", type="object", properties=[

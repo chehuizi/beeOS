@@ -25,6 +25,7 @@ from kanban.trigger import (
     BOX_REGISTRY,
     TriggerError,
     box_manifest,
+    list_task_entries,
     resolve_text_intake,
     trigger_task,
 )
@@ -479,48 +480,159 @@ class TestSkeletonIsHonest:
             f"声明了却拿不到"
         )
 
-    def test_a_skeleton_box_actually_fails_its_criteria(self, tmp_path):
+    def test_a_skeleton_box_actually_fails_its_criteria(self, tmp_path, monkeypatch):
         """跑一只骨架盒：必须真的 REJECTED，而且每条判据都红
 
         这条是「未实现」这三个字的**唯一凭据**。只看 `maturity`
         字段的话，那只是一行声明；真跑一遍红，才知道这条声明是真的。
 
-        **样例盒是 `wms_ops_box`**，不是 `wms_system_box`：后者在 v2 里
-        真的实现了腿（会发 HTTP 去探线上那套 WMS），拿它当骨架样例会
-        在目标不可达时红、在线可达时绿——那就不是骨架测试了，
-        是把「今天线上通不通」当成了「这只盒子实现没实现」。
+        **为什么用一只合成盒，而不是某只现役盒子**：
+        原来拿 `wms_ops_box` 当样例，但它后来把腿实现了（maturity=live），
+        于是这条守卫变成在验一只**live 盒子的判据**，跟「未实现」半点关系没有——
+        而且它会随现役盒子的行为变化而漂（ops 盒判据一改就红）。
+        「未实现」这件事一旦没有任何盒子再声明，这条保证就静默消失了。
 
-        骨架盒的定义就是：**换成哪只盒子都一样红**。
-        所以这里断言的是它的判据名，跟线上状态无关。
+        所以改成**机制级**验证：临时注册一只 `maturity="skeleton"` 的合成盒，
+        它的产出**不带**判据要的那些 metric → 必须每条判据都红、都判失败、
+        整轮 REJECTED。这验的是 runtime 的诚实性本身：
+        **「交不出东西」必须表现为红，而不是 n/a，更不是通过。**
+
+        另外保留一条动态检查：注册表里**真的**有骨架盒时，
+        每只都要自己跑一遍、全红。将来新加骨架盒，这条自动覆盖它。
         """
+        from core.beeline_models import Bee, Beeline, Operation
+        from core.models import (
+            AcceptanceRule,
+            BeeBoxDefinition,
+            FieldDef,
+            MetricsDef,
+            PlacementDef,
+            QueenAuthorization,
+            QueenDef,
+            QueenRules,
+            ResultDef,
+            SchemaDef,
+            TaskDef,
+        )
+        from kanban.trigger import RUNNER_REGISTRY
+        from runtime.runner import HandlerRunner
+
+        box_id = "skeleton_sample_box"
+        definition = BeeBoxDefinition(
+            id=box_id,
+            version=1,
+            description="合成骨架盒：只用来验「未实现必须真的红」",
+            schemas=[
+                SchemaDef(
+                    id="schema_skel_in",
+                    fields=[FieldDef(name="topic", type="string")],
+                ),
+                SchemaDef(
+                    id="schema_skel_out",
+                    fields=[FieldDef(name="note", type="string")],
+                ),
+            ],
+            task=[
+                TaskDef(
+                    type="do_skeleton",
+                    task_schema="schema_skel_in",
+                    beeline_id="beeline_skeleton_sample",
+                    beeline_version=1,
+                ),
+            ],
+            result=ResultDef(
+                type="skeleton_result",
+                result_schema="schema_skel_out",
+                acceptance=[
+                    AcceptanceRule(metric="never_computed", op="gte", value=1),
+                    AcceptanceRule(metric="never_flagged", op="eq", value=True),
+                ],
+                exceptions=[],
+                maturity="skeleton",
+            ),
+            placement=PlacementDef(
+                display_name="骨架样例盒",
+                domain="WMS",
+                feeds_into=[],
+                feedback_into=[],
+            ),
+            queen=QueenDef(
+                authorization=QueenAuthorization(),
+                rules=QueenRules(),
+            ),
+            metrics=MetricsDef(),
+        )
+        beeline = Beeline(
+            id="beeline_skeleton_sample",
+            version=1,
+            description="合成骨架盒的作业路线",
+            operations=[
+                Operation(
+                    op_id="skel_op",
+                    type="skel_op",
+                    input_from="external",
+                    input="schema_skel_in",
+                    output="schema_skel_out",
+                    next=[],
+                    bee=Bee(type="skel_handler"),
+                ),
+            ],
+        )
+
+        def _skel_handler(_input_data: dict) -> dict:
+            # **产出里没有那两条判据要的值** —— 这正是「腿还没实现」。
+            return {"note": "骨架盒没实现这条判据"}
+
+        monkeypatch.setitem(
+            BOX_REGISTRY,
+            box_id,
+            (lambda: definition, {"beeline_skeleton_sample": lambda: beeline}),
+        )
+        monkeypatch.setitem(
+            RUNNER_REGISTRY,
+            box_id,
+            HandlerRunner({"skel_op": _skel_handler}, owner=box_id),
+        )
+
         store = TaskRunStore(tmp_path / "runs.jsonl")
         r = trigger_task(
-            "wms_ops_box",
-            "handle_ops_request",
-            {
-                "ops_task_id": "ops-1",
-                "change_request": "把库存索引改成 BRIN",
-                "alerts": ["p99 延迟升高"],
-                "rollback_target": "deploy://prod/2026-10-15",
-            },
-            store,
+            box_id, "do_skeleton", {"topic": "随便"}, store,
         )
         assert r["acceptance_status"] == "rejected", (
             f"骨架盒跑成了 {r['acceptance_status']}——"
-            f"要么桩在替没实现的检查点打勾，要么判据读到了它不该读到的值"
+            f"「未实现」必须是红：交不出东西不是「用不上」，更不是通过"
         )
         outcomes = {d["metric"]: d["outcome"] for d in r["acceptance_detail"]}
         assert outcomes == {
-            "change_approval_rate": "failed",
-            "rollback_readiness": "failed",
-            "incident_documented": "failed",
-            "runtime_state_recorded": "failed",
+            "never_computed": "failed",
+            "never_flagged": "failed",
         }, (
             f"骨架盒不该有判据通过或被判不适用：{outcomes}"
         )
-        # 实测值一个都取不到——这正是「未实现」的真实读数，
-        # 而不是「跑了但没过」
-        assert r["result"].get("evidence") == {}
+
+        # 动态检查：注册表里真的有骨架盒的话，每只都要自己跑一遍、全红。
+        # 用看板自己生成的示例投料（跟看板按钮投出去的是同一份形状）。
+        for real_id in ALL_BOXES:
+            d = BOX_REGISTRY[real_id][0]()
+            if d.result.maturity != "skeleton":
+                continue
+            entry = list_task_entries(real_id)[0]
+            rr = trigger_task(
+                real_id,
+                entry["task_type"],
+                entry["sample_payload"],
+                TaskRunStore(tmp_path / f"{real_id}.jsonl"),
+            )
+            assert rr["acceptance_status"] == "rejected", (
+                f"{real_id} 声明自己是骨架盒，跑出来却是 {rr['acceptance_status']}"
+            )
+            bad = {
+                x["metric"]: x["outcome"] for x in rr["acceptance_detail"]
+                if x["outcome"] != "failed"
+            }
+            assert not bad, (
+                f"{real_id} 声明自己是骨架盒，判据却有非失败的读数：{bad}"
+            )
 
 
 class TestRegistryCoverage:

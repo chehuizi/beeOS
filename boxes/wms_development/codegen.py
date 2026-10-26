@@ -276,11 +276,26 @@ def _resolve_edit_path(ws: Path, rel: str) -> Path:
     return path
 
 
-def _validate_edit(ws: Path, edit: Any) -> tuple[Path, str, str]:
+def _validate_edit(
+    ws: Path,
+    edit: Any,
+    created: Optional[set[str]] = None,
+) -> tuple[Path, str, str]:
     """校验一处替换（不写盘）
 
     校验和写盘**分成两步**：这样「三条改动里第二条落不下去」时，
     第一条不会留在盘上——重试才是干净的。
+
+    `created` 是**本次会话已经建出来的文件**（相对工作区的路径）。
+    它解决的是重试时的死结：模型每一轮重出整份计划，
+    于是它会再次「新建」上一轮已经建好的文件——
+    机械层一看「文件已存在」就拒绝，三轮下来它改不完。
+
+    分两种：
+    - 文件是我们**这一轮之前**建的 → 允许整篇写回
+      （模型要的就是「这个文件应该是这个内容」）
+    - 文件本来就在（仓库里的老文件）→ 拒绝
+      （整篇写回会把老文件冲掉，那不是「改」，是「重写」）
     """
     if not isinstance(edit, dict):
         raise CodegenError(f"edit 不是对象：{edit!r}")
@@ -291,13 +306,15 @@ def _validate_edit(ws: Path, edit: Any) -> tuple[Path, str, str]:
         raise CodegenError(f"edit 缺字段：{edit!r}")
     path = _resolve_edit_path(ws, rel)
     if old == "":
-        # 新建文件：文件不许已经存在
         if path.exists():
-            raise CodegenError(
-                f"{rel}：old 留空表示新建文件，但这个文件已经存在——"
-                "要改已有文件，必须给出要替换的原文片段（old 逐字复制，"
-                "且在文件里只出现一次）；只有真正的新文件才把 old 留空"
-            )
+            rel_key = str(path.relative_to(ws.resolve()))
+            if not (created and rel_key in created):
+                raise CodegenError(
+                    f"{rel}：old 留空表示新建文件，但这个文件已经存在"
+                    "（而且不是本次会话建的）——"
+                    "要改已有文件，必须给出要替换的原文片段"
+                    "（old 逐字复制，且在文件里只出现一次）"
+                )
         return path, old, new
     if not path.exists():
         raise CodegenError(f"edit 指向的文件不存在：{rel}")
@@ -310,7 +327,11 @@ def _validate_edit(ws: Path, edit: Any) -> tuple[Path, str, str]:
     return path, old, new
 
 
-def apply_edits(ws: Path, edits: list[dict[str, Any]]) -> list[str]:
+def apply_edits(
+    ws: Path,
+    edits: list[dict[str, Any]],
+    created: Optional[set[str]] = None,
+) -> list[str]:
     """把模型给的「精确片段替换」应用到工作区
 
     机械层只做三件事：文件在不在、old 是不是**只出现一次**、替换后写回。
@@ -321,7 +342,7 @@ def apply_edits(ws: Path, edits: list[dict[str, Any]]) -> list[str]:
     """
     planned: list[tuple[Path, str, str]] = []
     for edit in edits:
-        planned.append(_validate_edit(ws, edit))
+        planned.append(_validate_edit(ws, edit, created))
 
     applied: list[str] = []
     root = ws.resolve()
@@ -329,6 +350,8 @@ def apply_edits(ws: Path, edits: list[dict[str, Any]]) -> list[str]:
         if old == "":
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(new, encoding="utf-8")
+            if created is not None:
+                created.add(str(path.relative_to(root)))
         else:
             text = path.read_text(encoding="utf-8")
             path.write_text(text.replace(old, new, 1), encoding="utf-8")
@@ -377,6 +400,10 @@ def generate_edits(
 
     feedback = ""
     last_error = ""
+    # **本次会话建出来的文件**（跨轮次记着）：
+    # 模型每一轮重出整份计划，它会再次「新建」上一轮建好的文件——
+    # 机械层要认得出那些是它自己建的（见 _validate_edit）。
+    created: set[str] = set()
     for attempt in range(max_attempts):
         if attempt and refresh is not None:
             files = refresh()
@@ -404,7 +431,7 @@ def generate_edits(
             feedback = last_error
             continue
         try:
-            applied = apply_edits(ws, edits)
+            applied = apply_edits(ws, edits, created)
         except CodegenError as exc:
             last_error = str(exc)
             feedback = last_error

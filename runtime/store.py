@@ -97,10 +97,19 @@ def task_run_to_record(
 
     # 中止归因：整轮跑挂在哪个设施上（llm_call / op_error / 没挂）。
     error_kind = None
+    error_reason = ""
     for op in task_run.operations.values():
         if op.status == "failed":
             error_kind = op.error_kind or "op_error"
+            error_reason = op.error or ""
             break
+    if not error_reason:
+        # op 没留下错误，但状态机记了转移原因（例：起点 op 缺失、步数超限）——
+        # 那是同样重要的失败信息，不能因为「没有 op 错误」就丢。
+        for event in reversed(task_run.event_log.entries):
+            if event.event == "status_change":
+                error_reason = str((event.detail or {}).get("reason") or "")
+                break
 
     return {
         "task_run_id": task_run.identity.task_run_id,
@@ -123,6 +132,7 @@ def task_run_to_record(
         "artifact_truncated": artifact_truncated,
         "observed": observed or {},
         "error_kind": error_kind,
+        "error_reason": error_reason,
         "started_at": task_run.identity.started_at.isoformat() if task_run.identity.started_at else None,
         "finished_at": task_run.identity.finished_at.isoformat() if task_run.identity.finished_at else None,
         "created_at": task_run.identity.created_at.isoformat(),

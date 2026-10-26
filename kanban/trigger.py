@@ -446,6 +446,12 @@ def _sample_field(field: FieldDef) -> Any:
     if field.type == "boolean":
         return True
     if field.type == "enum":
+        # **有取值表就给一个真值**：示例投料必须**投得出去**。
+        # 占位符 "<enum>" 过不了契约校验（枚举值不在合法取值表里），
+        # 于是看板上那份示例是一份投出去就被拒的东西。
+        # 取值表没声明时（不约束取值）才退回占位符。
+        if field.values:
+            return field.values[0]
         return "<enum>"
     if field.type == "array":
         return [_sample_field(field.items)] if field.items else []

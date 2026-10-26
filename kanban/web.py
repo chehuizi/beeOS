@@ -1032,6 +1032,33 @@ HTML_PAGE = f"""<!DOCTYPE html>
     margin-bottom: 6px; line-height: 1.5;
   }}
   .rs-hint {{ font-size: 10px; color: #94a3b8; margin-bottom: 8px; font-style: italic; }}
+  /* 需求文档：给业务方看的那一份（需求集的另一种投影，不是第二份事实） */
+  .rd-doc {{ margin-top: 10px; }}
+  .rd-doc > summary {{
+    cursor: pointer; font-size: 11px; color: #334155; font-weight: 600;
+    padding: 5px 8px; border: 1px solid #e2e8f0; border-radius: 6px;
+    background: #f8fafc; list-style: none;
+  }}
+  .rd-doc > summary::-webkit-details-marker {{ display: none; }}
+  .rd-doc > summary::before {{ content: '▸ '; color: #94a3b8; }}
+  .rd-doc[open] > summary::before {{ content: '▾ '; }}
+  .rd-item {{
+    margin-top: 6px; padding: 6px 8px; border: 1px solid #e2e8f0;
+    border-radius: 6px; background: #ffffff; font-size: 11px; line-height: 1.6;
+  }}
+  .rd-id {{ font-weight: 700; color: #0f172a; }}
+  .rd-type {{
+    font-size: 10px; padding: 1px 5px; border-radius: 4px;
+    background: #eef2ff; color: #4338ca; margin-left: 4px;
+  }}
+  .rd-meta {{ color: #64748b; font-size: 10px; margin-top: 2px; }}
+  .rd-quote {{ color: #475569; font-size: 10px; margin-top: 2px; }}
+  .rd-matrix {{ margin-top: 8px; font-size: 10px; color: #475569; }}
+  .rd-matrix table {{ width: 100%; border-collapse: collapse; }}
+  .rd-matrix td, .rd-matrix th {{
+    border: 1px solid #e2e8f0; padding: 3px 5px; text-align: left; vertical-align: top;
+  }}
+  .rd-matrix th {{ background: #f8fafc; color: #334155; }}
   /* 流程图：节点 + 边 + 守卫。竖排单链——看板列窄，横排会被挤断 */
   .fg {{ display: flex; flex-direction: column; align-items: stretch; }}
   .fg-node {{
@@ -2155,6 +2182,41 @@ function renderFlowGraph(r) {{
   return `<div class="fg">${{chain}}${{rest}}</div>`;
 }}
 
+function renderRequirementDocument(doc) {{
+  if (!doc || !Array.isArray(doc.items)) return '';
+  const items = doc.items.map((it) => `
+    <div class="rd-item">
+      <span class="rd-id">${{esc(it.doc_id || '')}}</span>
+      <span class="rd-type">${{esc(it.item_type || '')}}</span>
+      <div>${{esc(it.description || '')}}</div>
+      <div class="rd-quote">原文：${{esc(it.source_quote || '（未挂到原文句）')}}</div>
+      <div class="rd-meta">流程位置：${{esc(it.flow_position || '—')}}${{it.priority ? ` · 优先级：${{esc(it.priority)}}` : ''}}</div>
+      <div class="rd-meta">验收标准：${{esc((it.acceptance_criteria || []).join('；') || '—')}}</div>
+    </div>`).join('');
+  const matrix = Array.isArray(doc.trace_matrix) ? doc.trace_matrix : [];
+  const rows = matrix.map((r) => `
+    <tr>
+      <td>${{esc(r.sentence_id || '')}}</td>
+      <td>${{esc(r.text || '')}}</td>
+      <td>${{esc(r.role || '')}}</td>
+      <td>${{esc((r.claimed_by || []).join('、') || '—')}}</td>
+      <td>${{esc(r.status || '')}}</td>
+    </tr>`).join('');
+  const matrixHtml = rows ? `
+    <div class="rd-matrix">
+      <div>需求 ↔ 原文追溯矩阵</div>
+      <table>
+        <thead><tr><th>原文句</th><th>内容</th><th>角色</th><th>被哪些条目认领</th><th>状态</th></tr></thead>
+        <tbody>${{rows}}</tbody>
+      </table>
+    </div>` : '';
+  return `<details class="rd-doc">
+    <summary>需求文档（${{doc.items.length}} 条 · 可展开）</summary>
+    ${{items}}
+    ${{matrixHtml}}
+  </details>`;
+}}
+
 function renderRequirementSet(r) {{
   if (!r) return '';
   // 4 项判据不在这里画——它们跟上面 ACCEPTANCE 区是同一批数据。
@@ -2165,6 +2227,7 @@ function renderRequirementSet(r) {{
     <div class="rs-head">业务目标：${{esc(r.business_goal || '—')}}</div>
     <div class="rs-hint">流程图：${{nNodes}} 个节点${{nEdges ? ` · ${{nEdges}} 条转移` : ''}} —— 类型由所在位置决定，无需逐条确认</div>
     ${{renderFlowGraph(r)}}
+    ${{renderRequirementDocument(r.document)}}
   </div>`;
 }}
 

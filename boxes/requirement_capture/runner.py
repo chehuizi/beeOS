@@ -24,6 +24,8 @@ from uuid import uuid4
 
 from runtime.runner import HandlerRunner
 
+from boxes.requirement_capture.document import build_document
+
 
 _TYPE_PREFIX = {
     "object": "obj",
@@ -786,8 +788,13 @@ def _simulate_graph_fidelity_verifier(input_data: dict[str, Any]) -> dict[str, A
 
 
 def _simulate_requirement_set_packager(input_data: dict[str, Any]) -> dict[str, Any]:
-    """产出建模盒可直接消费的 RequirementSetPackage"""
-    return {
+    """产出建模盒可直接消费的 RequirementSetPackage
+
+    **外加一份人读的需求文档**（机械投影，见 document.py）：
+    需求集包是给建模盒吃的形状，文档是给业务方看的形状——
+    两者是同一份事实的两种投影，不是两份事实。
+    """
+    result = {
         "set_id": input_data.get("set_id", ""),
         "business_goal": input_data.get("business_goal", ""),
         "context": input_data.get("context", ""),
@@ -802,6 +809,16 @@ def _simulate_requirement_set_packager(input_data: dict[str, Any]) -> dict[str, 
         "no_hallucination": input_data.get("no_hallucination", False),
         "evidence_detail": input_data.get("evidence_detail", {}),
     }
+    result["document"] = build_document(
+        set_id=result["set_id"],
+        goal=result["business_goal"],
+        context=result["context"],
+        sentences=result["source_sentences"],
+        nodes=result["nodes"],
+        edges=result["edges"],
+        requirements=result["requirements"],
+    )
+    return result
 
 
 # ============================================================

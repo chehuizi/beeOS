@@ -177,6 +177,56 @@ EXTRACTED_FACTS = SchemaDef(
 # 输出层：需求集包
 # ============================================================
 
+# **人读的需求文档**（机械投影，见 boxes/requirement_capture/document.py）
+#
+# 需求集包是给建模盒吃的：流程图 + 可判定的结构化字段。
+# 这一份是给**人**看的：背景、目标、一条条编号的需求、每条出自哪句原文。
+#
+# **它不新增任何事实**：条目来自流程图，每条带原文出处和流程位置；
+# 验收标准是占位（怎么算满足由建模盒的可判定预期回答）。
+REQUIREMENT_DOCUMENT = SchemaDef(
+    id="schema_requirement_document",
+    description="人读的需求文档（机械投影：只重组已有事实，不新增）",
+    fields=[
+        FieldDef(name="title", type="string"),
+        FieldDef(name="goal", type="string"),
+        FieldDef(name="background", type="string", required=False),
+        FieldDef(name="set_id", type="string", required=False),
+        FieldDef(name="items", type="array", items=FieldDef(
+            name="item", type="object", properties=[
+                FieldDef(name="doc_id", type="string"),          # REQ-001
+                FieldDef(name="item_type", type="string"),      # 流程步骤 / 约束 / 指标 / 事件
+                FieldDef(name="description", type="string"),
+                FieldDef(name="priority", type="string", required=False),
+                FieldDef(name="source_sentence_ids", type="array", required=False,
+                         items=FieldDef(name="s", type="string")),
+                FieldDef(name="source_quote", type="string", required=False),
+                FieldDef(name="flow_position", type="string", required=False),
+                FieldDef(name="linked_requirement_ids", type="array", required=False,
+                         items=FieldDef(name="r", type="string")),
+                FieldDef(name="acceptance_criteria", type="array", required=False,
+                         items=FieldDef(name="c", type="string")),
+                FieldDef(name="outputs", type="array", required=False,
+                         items=FieldDef(name="w", type="string")),
+                FieldDef(name="inputs", type="array", required=False,
+                         items=FieldDef(name="r", type="string")),
+            ])),
+        # 需求 ↔ 原文追溯矩阵（哪句被哪些条目认领）
+        FieldDef(name="trace_matrix", type="array", required=False, items=FieldDef(
+            name="row", type="object", properties=[
+                FieldDef(name="sentence_id", type="string"),
+                FieldDef(name="text", type="string"),
+                FieldDef(name="role", type="string"),
+                FieldDef(name="claimed_by", type="array", required=False,
+                         items=FieldDef(name="doc_id", type="string")),
+                FieldDef(name="status", type="string"),
+            ])),
+        FieldDef(name="unclaimed_sentence_ids", type="array", required=False,
+                 items=FieldDef(name="s", type="string")),
+        FieldDef(name="markdown", type="string"),
+    ],
+)
+
 REQUIREMENT_SET_PACKAGE = SchemaDef(
     id="schema_requirement_set_package",
     description="需求集包（建模盒的输入 + 4 项抽取验证证据）",
@@ -204,6 +254,8 @@ REQUIREMENT_SET_PACKAGE = SchemaDef(
             FieldDef(name="hallucinated", type="array",
                      items=FieldDef(name="h", type="string")),
         ]),
+        # ---- 人读的需求文档（机械投影）----
+        FieldDef(name="document", type="ref:schema_requirement_document", required=False),
     ],
 )
 
@@ -212,5 +264,6 @@ ALL_SCHEMAS = [
     BUSINESS_NARRATIVE,
     FLOW_GRAPH,
     EXTRACTED_FACTS,
+    REQUIREMENT_DOCUMENT,
     REQUIREMENT_SET_PACKAGE,
 ]

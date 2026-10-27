@@ -1,5 +1,5 @@
 """
-boxes.requirement_capture.definition - 需求捕获履约盒 Definition 数据
+boxes.wms_requirement.definition - 需求捕获履约盒 Definition 数据
 
 按 Fulfillment 5 维度 + 度量组织：
 - 基础元信息
@@ -37,7 +37,7 @@ from core.models import (
     ResultDef,
     TaskDef,
 )
-from boxes.requirement_capture.schemas import ALL_SCHEMAS
+from boxes.wms_requirement.schemas import ALL_SCHEMAS
 
 
 WMS_REQUIREMENT_BOX = BeeBoxDefinition(

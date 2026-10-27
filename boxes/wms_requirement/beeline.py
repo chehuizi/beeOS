@@ -1,5 +1,5 @@
 """
-boxes.requirement_capture - 需求捕获履约作业路线
+boxes.wms_requirement - 需求捕获履约作业路线
 
 Software Line 第二只 beeline。
 

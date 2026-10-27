@@ -28,7 +28,7 @@ def stub_compliant_llm(prompt: str, **kw) -> dict:
     **roles 也要给**：句子的角色由模型判（机械层只守下限），
     缺了 roles 的输出会被抽取腿判成「模型没按要求履约」→ 中止。
     这里原样回抄 prompt 里的机械初判——测试关心的是机械层的行为，
-    角色的语义判断由 tests/test_capture_extraction.py 单独测。
+    角色的语义判断由 tests/test_wms_requirement_extraction.py 单独测。
     """
     nodes, goal, title = [], "", ""
     roles: dict[str, str] = {}
@@ -91,11 +91,11 @@ def stub_wms_binder(prompt: str, **kw) -> dict:
     """按词表造一份 WMS 绑定结果（**测试桩，不是产品逻辑**）
 
     它复刻的是**改造前**的关键词绑定行为，所以既有测试的期望值不用改。
-    真实路径走 LLM（boxes/modeling/binder.py），语义质量由那组测试真测。
+    真实路径走 LLM（boxes/wms_design/binder.py），语义质量由那组测试真测。
 
     桩也守机械层的要求：evidence 必须是原文里真实出现的那一段。
     """
-    from boxes.modeling.domain import (
+    from boxes.wms_design.domain import (
         WMS_CONSTRAINTS,
         WMS_ENTITIES,
         WMS_METRIC_KEYWORDS,
@@ -158,8 +158,8 @@ def stub_llm_dispatch(prompt: str, **kw) -> dict:
     """按 prompt 里的标记分流到对应的桩
 
     仓里有两条 LLM 腿：
-    - 需求抽取（boxes/requirement_capture）—— prompt 里有「原文句子：」
-    - WMS 概念绑定（boxes/modeling/binder）—— prompt 里有「需求列表：」
+    - 需求抽取（boxes/wms_requirement）—— prompt 里有「原文句子：」
+    - WMS 概念绑定（boxes/wms_design/binder）—— prompt 里有「需求列表：」
 
     各写各的桩必然漂移：一条 prompt 改了格式，另一条还按老格式造，
     最后挂掉的是没人改过的那组测试。

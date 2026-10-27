@@ -19,8 +19,8 @@ import re
 
 import pytest
 
-from boxes.modeling import get_definition as get_modeling_definition
-from boxes.requirement_capture import get_definition as get_capture_definition
+from boxes.wms_design import get_definition as get_modeling_definition
+from boxes.wms_requirement import get_definition as get_capture_definition
 from kanban.trigger import (
     BOX_REGISTRY,
     TriggerError,
@@ -244,6 +244,37 @@ class TestDeclarationCoherence:
                         f"{box_id}: beeline {load().id} 的 op "
                         f"{op.op_id!r} {role} 指向未声明的 schema {sid!r}"
                     )
+
+
+class TestExamplePayloadsAreSubmittable:
+    """看板给的示例 payload 必须真的投得出去
+
+    单盒页把示例投料直接显示出来，用户复制粘贴就能用。
+    示例不满足 task_schema 的话，那份示例就是**假的**——
+    用户照着投，得到的是一句看不懂的契约错误。
+
+    这条以前没人守：`ref:` 字段生成出来是空 dict，
+    必填字段一个都没有，于是**每只走 ref 通道的盒子**，
+    看板给的示例都是投不出去的东西。
+    """
+
+    @pytest.mark.parametrize("box_id", ALL_BOXES)
+    def test_the_example_payload_satisfies_the_task_schema(self, box_id):
+        from kanban.trigger import list_task_entries
+        from runtime.contract import validate_payload
+
+        definition = BOX_REGISTRY[box_id][0]()
+        entries = list_task_entries(box_id)
+        for task in definition.task:
+            schema = definition.get_schema(task.task_schema)
+            entry = next(e for e in entries if e["task_type"] == task.type)
+            errors = validate_payload(
+                entry["sample_payload"], schema, schemas=definition.schemas,
+            )
+            assert not errors, (
+                f"{box_id}/{task.type} 的示例 payload 不满足 {task.task_schema}："
+                + "; ".join(errors[:5])
+            )
 
 
 class TestExceptionConditionsAreReachable:

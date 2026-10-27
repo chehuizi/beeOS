@@ -1,8 +1,8 @@
-"""tests.test_modeling_box - 业务建模盒 Definition + Beeline + 端到端
+"""tests.test_wms_design_box - 业务建模盒 Definition + Beeline + 端到端
 
 覆盖范围：
-- boxes.modeling definition 加载 + 5 机械 acceptance + 3 exception
-- boxes.modeling.beeline 加载 + 7 ops 顺序链
+- boxes.wms_design definition 加载 + 5 机械 acceptance + 3 exception
+- boxes.wms_design.beeline 加载 + 7 ops 顺序链
 - 端到端：requirement set → parse → classify → generate → verify → evidence → ACCEPTED
 """
 
@@ -13,11 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from boxes.modeling import WMS_DESIGN_BOX, get_definition
-from boxes.modeling.runner import RUNNER as MODELING_RUNNER
-from boxes.modeling.measure import COMPUTERS as MODEL_COMPUTERS
-from boxes.modeling.schemas import REQUIREMENT_TYPES
-from boxes.modeling.beeline import WMS_DESIGN_BEELINE, get_beeline
+from boxes.wms_design import WMS_DESIGN_BOX, get_definition
+from boxes.wms_design.runner import RUNNER as MODELING_RUNNER
+from boxes.wms_design.measure import COMPUTERS as MODEL_COMPUTERS
+from boxes.wms_design.schemas import REQUIREMENT_TYPES
+from boxes.wms_design.beeline import WMS_DESIGN_BEELINE, get_beeline
 from boxes.inventory_shortage.beeline import get_beeline as get_inventory_shortage_beeline
 from core import metrics as m
 from runtime import (
@@ -471,7 +471,7 @@ class TestModelingMockSemantics:
 
     def test_coverage_verifier_detects_uncovered(self):
         """coverage_verifier 真实对比：未被 trace 覆盖的需求进入 uncovered"""
-        from boxes.modeling.runner import RUNNER
+        from boxes.wms_design.runner import RUNNER
         out = RUNNER.run("coverage_verifier", {
             "set_id": "s",
             "modelable_ids": ["r1", "r2", "r3"],
@@ -485,7 +485,7 @@ class TestModelingMockSemantics:
 
     def test_consistency_checker_detects_broken_reference(self):
         """consistency_checker 真实检查：trace_to 指向无效需求 → reference_integrity=False"""
-        from boxes.modeling.runner import RUNNER
+        from boxes.wms_design.runner import RUNNER
         out = RUNNER.run("consistency_checker", {
             "set_id": "s",
             "valid_ids": ["r1"],
@@ -558,7 +558,7 @@ class TestWmsDomainIsRealNotJustTheName:
 
         放 core 的话，内核就知道了「仓储有 SKU 和波次」——那是业务知识。
         """
-        import boxes.modeling.domain as domain
+        import boxes.wms_design.domain as domain
 
         assert len(domain.WMS_ENTITIES) >= 8, "WMS 实体词表太空，说不出口袋"
         assert "sku" in domain.WMS_ENTITIES
@@ -569,7 +569,7 @@ class TestWmsDomainIsRealNotJustTheName:
         core_src = (Path(__file__).resolve().parent.parent / "core").rglob("*.py")
         offenders = [p.name for p in core_src
                      if "boxes." in p.read_text(encoding="utf-8")
-                     and "boxes.modeling" in p.read_text(encoding="utf-8")]
+                     and "boxes.wms_design" in p.read_text(encoding="utf-8")]
         assert not offenders, f"core 里引用了 WMS 词表：{offenders}"
 
     def test_every_model_element_type_can_declare_a_wms_kind(self):

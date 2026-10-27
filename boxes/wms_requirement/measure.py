@@ -1,5 +1,5 @@
 """
-boxes.requirement_capture.measure - 需求捕获盒的实测指标采集
+boxes.wms_requirement.measure - 需求捕获盒的实测指标采集
 
 definition.metrics 里写的是 target（目标）。目标是承诺，不是事实。
 这一层负责从履约历史里把 actual 算出来，让看板显示的每个数字都有出处。

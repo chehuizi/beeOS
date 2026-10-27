@@ -1,5 +1,5 @@
 """
-boxes.requirement_capture.runner - 需求捕获盒的 5 个 operation 实现
+boxes.wms_requirement.runner - 需求捕获盒的 5 个 operation 实现
 
 从 runtime/capture_runner.py 搬来。盒子以前只带 definition / schemas / measure，
 执行部分躺在内核里——它带不走自己的实现，也就不算一个自包含单元。
@@ -24,7 +24,7 @@ from uuid import uuid4
 
 from runtime.runner import HandlerRunner
 
-from boxes.requirement_capture.document import build_document
+from boxes.wms_requirement.document import build_document
 
 
 _TYPE_PREFIX = {
@@ -694,7 +694,7 @@ def _simulate_graph_fidelity_verifier(input_data: dict[str, Any]) -> dict[str, A
     全部是集合运算与字符串匹配——不需要模型，结果可复现。
     """
     from runtime.contract import validate_payload
-    from boxes.requirement_capture.definition import get_definition
+    from boxes.wms_requirement.definition import get_definition
 
     sentences = input_data.get("source_sentences", [])
     requirements = input_data.get("requirements", [])
@@ -708,7 +708,7 @@ def _simulate_graph_fidelity_verifier(input_data: dict[str, Any]) -> dict[str, A
     # ① 契约：拿**建模盒的输入 schema** 校验
     #    schema 归消费者（建模盒）所有——捕获盒负责满足它，不自己另立一套。
     #    这正是"捕获盒换 LLM 建模盒零改动"的根据。
-    from boxes.modeling import get_definition as get_modeling_definition
+    from boxes.wms_design import get_definition as get_modeling_definition
     contract_schema = get_modeling_definition().get_schema(
         "schema_business_requirement_set"
     )

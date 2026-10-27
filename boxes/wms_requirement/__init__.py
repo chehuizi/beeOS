@@ -1,4 +1,4 @@
-"""boxes.requirement_capture - 需求捕获履约盒
+"""boxes.wms_requirement - 需求捕获履约盒
 
 自然语言 → 结构化业务需求集（建模盒的输入）。
 
@@ -18,10 +18,10 @@
 LLM 实测仍有边界错判。这条走人工确认，不写进 acceptance 假装机器能判。
 """
 
-from boxes.requirement_capture.definition import (
+from boxes.wms_requirement.definition import (
     WMS_REQUIREMENT_BOX,
     get_definition,
 )
-from boxes.requirement_capture.beeline import WMS_REQUIREMENT_BEELINE, get_beeline
+from boxes.wms_requirement.beeline import WMS_REQUIREMENT_BEELINE, get_beeline
 
 __all__ = ["WMS_REQUIREMENT_BOX", "get_definition", "WMS_REQUIREMENT_BEELINE", "get_beeline"]

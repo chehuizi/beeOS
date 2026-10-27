@@ -1,4 +1,4 @@
-"""tests.test_capture_extraction - 需求盒抽取层的守卫
+"""tests.test_wms_requirement_extraction - 需求盒抽取层的守卫
 
 这一组守的是 **抽取层的三条契约**（每一组都有能独立触发的失败）：
 
@@ -24,8 +24,8 @@ from pathlib import Path
 
 import pytest
 
-from boxes.requirement_capture import runner as capture_runner
-from boxes.requirement_capture.runner import (
+from boxes.wms_requirement import runner as capture_runner
+from boxes.wms_requirement.runner import (
     _attach_sources,
     _content_sentences,
     _split_sentences,
@@ -301,11 +301,14 @@ class TestSentenceRoles:
         assert "必须" in s[0]["text"], "要求被切散了"
 
     def test_存在性词左边不像名字时不是标题(self):
-        """「出库必须包含 A、B」——「出库必须」不是名字
+        """「出库必须包含甲批次、乙批次」——「出库必须」不是名字
 
         它是半句要求。当成标题丢掉，这条要求就整个不见了（**假绿**）。
+
+        枚举项要够长（`_ENUM_MIN_LEN` = 2）：太短的项会被机械层当噪声滤掉，
+        那样压根走不到存在性词分支，这条守卫就白测了。
         """
-        s = _split_sentences("出库必须包含 A、B")
+        s = _split_sentences("出库必须包含甲批次、乙批次")
         assert s[0]["role"] != "title", (
             f"「{s[0]['text']}」被当成了标题——要求被标题吃掉了"
         )
@@ -458,7 +461,7 @@ class TestSentenceRoles:
 
 class TestRoleEnum:
     def test_role_枚举含四种角色(self):
-        from boxes.requirement_capture.schemas import ALL_SCHEMAS
+        from boxes.wms_requirement.schemas import ALL_SCHEMAS
 
         schema = next(s for s in ALL_SCHEMAS if s.id == "schema_requirement_set_package")
         sent = next(f for f in schema.fields if f.name == "source_sentences")

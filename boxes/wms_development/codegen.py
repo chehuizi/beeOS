@@ -204,6 +204,12 @@ _CODE_PROMPT = """你在一个 Java（Spring Boot + MyBatis）仓储管理系统
 6. 「已经实现」不是你的结论，是**机械查出来的事实**：
    只要「必须新实现的概念」清单非空，edits 就不能是空的。
    你可以额外说明哪些概念已有实现（给出文件名 + 标识符），但那只是补充说明
+7. **你在 Mapper 接口里新增的方法，必须同时在对应的 XML 里加同名语句**
+   （`server/src/main/resources/mapper/XxxMapper.xml` 里的
+   `<select id="方法名">`）。MyBatis 是**运行期**绑定：
+   少了 XML 语句，编译过、单测过（仓里没有报表测试），
+   上线后一调那个接口就 `Invalid bound statement`，看板直接 500。
+   用注解式 SQL（`@Select`）也可以，但那样就不需要 XML。
 
 输出格式（只输出 JSON，不要解释、不要复述）：
 
@@ -221,7 +227,7 @@ old 留空字符串**只**用于真正的新建文件（那个文件此刻还不
 def build_prompt(expectations: list[dict[str, Any]], locations: list[str],
                  files: dict[str, str], feedback: str = "",
                  concepts: Optional[list[str]] = None,
-                 must_implement: Optional[list[tuple[str, tuple[str, ...]]]] = None,
+                 must_implement: Optional[list[tuple[str, str]]] = None,
                  ) -> str:
     """把期望 + 落点 + 源码拼成 prompt"""
     exp_lines = []
@@ -244,9 +250,13 @@ def build_prompt(expectations: list[dict[str, Any]], locations: list[str],
         fb = ""
     concept_lines = [f"- {c}" for c in (concepts or [])] or ["（没有概念）"]
     missing_lines = []
-    for concept, tokens in (must_implement or []):
-        tok = "、".join(tokens) if tokens else "（没有登记实现证据）"
-        missing_lines.append(f"- {concept}：源码里找不到 {tok} → **这次要新增实现**")
+    for concept, description in (must_implement or []):
+        what = description or "（没有登记实现证据）"
+        missing_lines.append(
+            f"- {concept}：源码里找不到 {what} → **这次要新增实现**"
+            "（看板类指标：这个标识符必须出现在**看板 VO**上——"
+            "业务方是在看板的字段里看到它，不是在你新加的接口里看到它）"
+        )
     missing_text = "\n".join(missing_lines) or "（没有：本次涉及的每个概念源码里都已有实现）"
     return _CODE_PROMPT.format(
         expectations="\n".join(exp_lines) or "（没有预期）",
@@ -367,7 +377,7 @@ def generate_edits(
     llm_call: Optional[Callable[[str], Any]] = None,
     max_attempts: int = MAX_CODGEN_ATTEMPTS,
     concepts: Optional[list[str]] = None,
-    must_implement: Optional[list[tuple[str, tuple[str, ...]]]] = None,
+    must_implement: Optional[list[tuple[str, str]]] = None,
     verify: Optional[Callable[[], list[str]]] = None,
     refresh: Optional[Callable[[], dict[str, str]]] = None,
 ) -> tuple[list[str], str]:
@@ -455,14 +465,29 @@ def generate_edits(
 
 
 def changed_files(ws: Path) -> list[str]:
-    """工作区里被改动的文件（相对 HEAD）"""
+    """工作区里被改动的文件（相对 HEAD）
+
+    **别把路径切错**（2026-10-27 实测）：porcelain 每行是
+    `XY path`（两个状态位 + 一个空格），路径从**第 4 个字符**开始。
+    之前这里先 `line.strip()` 再取 `line[3:]` ——
+    strip 把**前导空格**也去了（" M path" → "M path"），
+    于是 `line[3:]` 切掉了 "M p"，路径少了第一个字符
+    （"erver/src/main/..."）。
+
+    后果很隐蔽：路径里仍然含 "mapper/ReportMapper" 这类位置片段，
+    所以「改动在不在范围内」的判断照样过，**没有报错**。
+    但任何拿路径去**打开文件**的检查都会拿到一个不存在的路径，
+    然后静默跳过——本轮那条「新增 Mapper 方法必须��对应 SQL」的校验
+    就是这么被废掉的：它看见的是 `erver/src/...`，文件不存在 → 跳过。
+    """
     out = _run(["git", "status", "--porcelain"], cwd=ws)
     if out.returncode != 0:
         return []
     files = []
-    for line in out.stdout.splitlines():
-        line = line.strip()
-        if not line:
+    for raw in out.stdout.splitlines():
+        # **只去尾部空白**：前导空白是状态位的一部分，去了就切错位置
+        line = raw.rstrip()
+        if len(line) < 4:
             continue
         # porcelain 格式：XY path（重命名是 "R  old -> new"）
         path = line.split(" -> ")[-1].strip() if " -> " in line else line[3:].strip()

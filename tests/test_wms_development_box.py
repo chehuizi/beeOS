@@ -339,6 +339,91 @@ class TestCodeMap:
         assert unmapped_concepts(["totally_made_up"]) == ["totally_made_up"]
 
 
+class TestMapperBindingsAreChecked:
+    """新增的 Mapper 方法必须有对应的 SQL（MyBatis 是运行期绑定）
+
+    2026-10-27 实测撞出来的：开发盒给 `ReportMapper` 加了
+    `selectPickAccuracy()`，XML 里没有对应语句。编译过、单测过、
+    判据全绿——而仓里**一个报表测试都没有**，没人能发现它。
+    上线后一调看板接口就 500。
+    """
+
+    def _repo(self, tmp_path):
+        """造一个最小的仓：接口 + XML"""
+        java = tmp_path / "server/src/main/java/com/wms/mapper"
+        res = tmp_path / "server/src/main/resources/mapper"
+        java.mkdir(parents=True)
+        res.mkdir(parents=True)
+        return java, res
+
+    def test_a_new_mapper_method_without_sql_is_reported(self, tmp_path):
+        from boxes.wms_development.mapper_binding import check_mapper_bindings
+
+        java, res = self._repo(tmp_path)
+        (java / "ReportMapper.java").write_text(
+            "package com.wms.mapper;\n"
+            "public interface ReportMapper {\n"
+            "    Long countSku();\n"
+            "    java.math.BigDecimal selectPickAccuracy();\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (res / "ReportMapper.xml").write_text(
+            '<mapper namespace="com.wms.mapper.ReportMapper">\n'
+            '  <select id="countSku" resultType="Long">SELECT count(*) FROM wms_sku</select>\n'
+            '</mapper>\n',
+            encoding="utf-8",
+        )
+        problems = check_mapper_bindings(
+            tmp_path,
+            ["server/src/main/java/com/wms/mapper/ReportMapper.java"],
+        )
+        assert problems, "缺 SQL 的新增方法必须被报出来"
+        assert "selectPickAccuracy" in problems[0]
+
+    def test_a_new_mapper_method_with_sql_is_not_reported(self, tmp_path):
+        from boxes.wms_development.mapper_binding import check_mapper_bindings
+
+        java, res = self._repo(tmp_path)
+        (java / "ReportMapper.java").write_text(
+            "package com.wms.mapper;\n"
+            "public interface ReportMapper {\n"
+            "    java.math.BigDecimal selectPickAccuracy();\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (res / "ReportMapper.xml").write_text(
+            '<mapper namespace="com.wms.mapper.ReportMapper">\n'
+            '  <select id="selectPickAccuracy" resultType="java.math.BigDecimal">'
+            "SELECT 1</select>\n"
+            '</mapper>\n',
+            encoding="utf-8",
+        )
+        assert check_mapper_bindings(
+            tmp_path,
+            ["server/src/main/java/com/wms/mapper/ReportMapper.java"],
+        ) == []
+
+    def test_an_annotated_method_needs_no_xml(self, tmp_path):
+        """@Select 注解式 SQL 不需要 XML 里有同名语句"""
+        from boxes.wms_development.mapper_binding import check_mapper_bindings
+
+        java, _res = self._repo(tmp_path)
+        (java / "ReportMapper.java").write_text(
+            "package com.wms.mapper;\n"
+            "import org.apache.ibatis.annotations.Select;\n"
+            "public interface ReportMapper {\n"
+            "    @Select(\"SELECT 1\")\n"
+            "    Long countSku();\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        assert check_mapper_bindings(
+            tmp_path,
+            ["server/src/main/java/com/wms/mapper/ReportMapper.java"],
+        ) == []
+
+
 class TestImplementedIsMechanical:
     """「已实现」这句话得由源码说了算，不由模型说
 
@@ -350,14 +435,37 @@ class TestImplementedIsMechanical:
     def test_a_concept_without_its_identifier_in_the_source_is_missing(self):
         from boxes.wms_development.code_map import implementation_state
 
-        source = "class DashboardVO { private Long skuCount; }"
-        assert implementation_state("wms_pick_accuracy", source) == "missing"
+        files = {"server/src/main/java/com/wms/vo/DashboardVO.java":
+                 "class DashboardVO { private Long skuCount; }"}
+        assert implementation_state("wms_pick_accuracy", files=files) == "missing"
 
     def test_a_concept_whose_identifier_is_in_the_source_is_implemented(self):
         from boxes.wms_development.code_map import implementation_state
 
-        source = "class DashboardVO { private BigDecimal pickAccuracy; }"
-        assert implementation_state("wms_pick_accuracy", source) == "implemented"
+        files = {"server/src/main/java/com/wms/vo/DashboardVO.java":
+                 "class DashboardVO { private BigDecimal pickAccuracy; }"}
+        assert implementation_state("wms_pick_accuracy", files=files) == "implemented"
+
+    def test_a_same_named_method_elsewhere_is_not_the_dashboard_field(self):
+        """同名方法 ≠ 看板上有这个数
+
+        2026-10-27 实测：开发盒把拣货准确率做成了独立接口
+        `/reports/pick-accuracy`，里面有个方法叫 `pickAccuracy()`。
+        全仓搜「pickAccuracy」是搜得到的 → 旧的证据判定判成「已实现」
+        就放行了。可业务方要的是**在库存看板看得到**——
+        那个字段在看板 VO 上，它压根不在看板 VO 上。
+
+        所以证据必须带**在哪个文件里**：字段在别处 = 业务方看不到。
+        """
+        from boxes.wms_development.code_map import implementation_state
+
+        files = {
+            "server/src/main/java/com/wms/module/report/service/ReportServiceImpl.java":
+                "public PickAccuracyVO pickAccuracy() { return null; }",
+            "server/src/main/java/com/wms/vo/PickAccuracyVO.java":
+                "class PickAccuracyVO { private BigDecimal accuracyRate; }",
+        }
+        assert implementation_state("wms_pick_accuracy", files=files) == "missing"
 
     def test_a_concept_without_registered_evidence_cannot_be_called_implemented(self):
         """判不了 ≠ 已实现
@@ -376,8 +484,12 @@ class TestImplementedIsMechanical:
         """
         from boxes.wms_development.code_map import implementation_state
 
-        assert implementation_state("fefo", "ORDER BY expire_date ASC NULLS LAST") == "implemented"
-        assert implementation_state("fefo", "ORDER BY created_at ASC") == "missing"
+        files = {"server/src/main/resources/mapper/InventoryMapper.xml":
+                 "ORDER BY expire_date ASC NULLS LAST"}
+        assert implementation_state("fefo", files=files) == "implemented"
+        files_bad = {"server/src/main/resources/mapper/InventoryMapper.xml":
+                     "ORDER BY created_at ASC"}
+        assert implementation_state("fefo", files=files_bad) == "missing"
 
     def test_zero_changes_with_a_missing_concept_is_red(self):
         ok, reason, _detail = review.coverage(
@@ -431,7 +543,7 @@ class TestEmptyEditsAreNotAFreeExit:
             ws, [], [], {},
             llm_call=llm,
             concepts=["wms_pick_accuracy"],
-            must_implement=[("wms_pick_accuracy", ("pickAccuracy",))],
+            must_implement=[("wms_pick_accuracy", "vo/DashboardVO 里的 pickAccuracy")],
         )
         assert applied == ["server/src/main/java/A.java"]
         assert len(prompts) == 2
@@ -462,7 +574,7 @@ class TestEmptyEditsAreNotAFreeExit:
             ws, [], [], {},
             llm_call=llm,
             concepts=["wms_pick_accuracy"],
-            must_implement=[("wms_pick_accuracy", ("pickAccuracy",))],
+            must_implement=[("wms_pick_accuracy", "vo/DashboardVO 里的 pickAccuracy")],
             verify=lambda: [] if "pickAccuracy" in (
                 ws / "server" / "src" / "main" / "java" / "A.java"
             ).read_text(encoding="utf-8") else ["wms_pick_accuracy"],

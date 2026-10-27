@@ -18,10 +18,10 @@ from pathlib import Path
 
 import pytest
 
-from boxes.modeling import get_definition as get_modeling_definition
-from boxes.modeling.measure import COMPUTERS as MODEL_COMPUTERS
-from boxes.requirement_capture import get_definition as get_capture_definition
-from boxes.requirement_capture.measure import COMPUTERS as CAPTURE_COMPUTERS
+from boxes.wms_design import get_definition as get_modeling_definition
+from boxes.wms_design.measure import COMPUTERS as MODEL_COMPUTERS
+from boxes.wms_requirement import get_definition as get_capture_definition
+from boxes.wms_requirement.measure import COMPUTERS as CAPTURE_COMPUTERS
 from core import metrics as m
 from kanban.trigger import METRIC_COMPUTERS, box_metrics_readings, trigger_task
 from kanban.web import HTML_PAGE

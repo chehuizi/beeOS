@@ -1,5 +1,5 @@
 """
-boxes.requirement_capture.schemas - 需求捕获盒的业务 schemas
+boxes.wms_requirement.schemas - 需求捕获盒的业务 schemas
 
 为什么有这只盒子：
 - 建模盒的 task in 是**已结构化**的 BusinessRequirementSet，它不做自然语言理解
@@ -177,7 +177,7 @@ EXTRACTED_FACTS = SchemaDef(
 # 输出层：需求集包
 # ============================================================
 
-# **人读的需求文档**（机械投影，见 boxes/requirement_capture/document.py）
+# **人读的需求文档**（机械投影，见 boxes/wms_requirement/document.py）
 #
 # 需求集包是给建模盒吃的：流程图 + 可判定的结构化字段。
 # 这一份是给**人**看的：背景、目标、一条条编号的需求、每条出自哪句原文。

@@ -26,9 +26,9 @@ from runtime import (
 from boxes.inventory_shortage import get_definition as get_inv_def
 from boxes.inventory_shortage.beeline import get_beeline as get_inv_beeline
 from boxes.inventory_shortage.runner import RUNNER as INVENTORY_RUNNER
-from boxes.modeling.runner import RUNNER as MODELING_RUNNER
-from boxes.modeling import get_definition as get_mod_def
-from boxes.modeling.beeline import get_beeline as get_mod_beeline
+from boxes.wms_design.runner import RUNNER as MODELING_RUNNER
+from boxes.wms_design import get_definition as get_mod_def
+from boxes.wms_design.beeline import get_beeline as get_mod_beeline
 from kanban.cli import render_dashboard
 
 

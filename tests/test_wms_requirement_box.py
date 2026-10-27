@@ -1,4 +1,4 @@
-"""tests.test_capture_box - 需求捕获盒（Software Line 第二只盒子）
+"""tests.test_wms_requirement_box - 需求捕获盒（Software Line 第二只盒子）
 
 覆盖：
 - definition：4 条 acceptance + 两盒判据零重叠（分盒判据本身要可测）
@@ -17,16 +17,16 @@ from pathlib import Path
 
 import pytest
 
-from boxes.requirement_capture import get_definition as get_capture_definition
-from boxes.modeling import get_definition as get_modeling_definition
-from boxes.requirement_capture.beeline import get_beeline as get_requirement_capture_beeline
+from boxes.wms_requirement import get_definition as get_capture_definition
+from boxes.wms_design import get_definition as get_modeling_definition
+from boxes.wms_requirement.beeline import get_beeline as get_requirement_capture_beeline
 from kanban.trigger import (
     TriggerError,
     list_task_entries,
     registered_box_ids,
     trigger_task,
 )
-from boxes.requirement_capture.runner import _split_sentences, _simulate_requirement_set_packager
+from boxes.wms_requirement.runner import _split_sentences, _simulate_requirement_set_packager
 from runtime.store import TaskRunStore
 from tests.conftest import stub_compliant_llm
 
@@ -356,8 +356,8 @@ class TestBoxFlowOrder:
         """看板 API 返回的 boxes 必须是流向序，不是字母序"""
         import tempfile
         from pathlib import Path
-        from boxes.modeling import get_definition as get_mod_def
-        from boxes.requirement_capture import get_definition as get_cap_def
+        from boxes.wms_design import get_definition as get_mod_def
+        from boxes.wms_requirement import get_definition as get_cap_def
         from kanban import web as web_mod
         from runtime import create_task_run
         with tempfile.TemporaryDirectory() as td:
@@ -460,16 +460,20 @@ class TestCaptureEndToEnd:
             assert q["trace_to"] in sent_ids
 
     def test_产出可直接投建模盒(self, store: TaskRunStore):
-        """schema 归建模盒所有——捕获盒换实现，建模盒零改动"""
+        """schema 归建模盒所有——捕获盒换实现，建模盒零改动
+
+        **而且是走接力通道投的**：需求集整个从需求盒的产出接过来，
+        按建模盒自己声明的形状校验一遍。
+        以前这里是手工拷 set_id / requirements——每次拷的形状可能不一样，
+        拷漏一个字段下游照样收。
+        """
         cap = trigger_task(
             "wms_requirement_box", "capture_business_requirement",
             {"narrative": self.TEXT}, store,
         )
-        pkg = cap["result"]
         mod = trigger_task(
-            "wms_design_box", "handle_modeling_request",
-            {k: pkg[k] for k in ("set_id", "business_goal", "context", "requirements")},
-            store,
+            "wms_design_box", "handle_modeling_request", {}, store,
+            handoff={"requirement_set_ref": cap["task_run_id"]},
         )
         assert mod["status"] == "completed"
         assert mod["result"]["requirement_coverage"] == 100.0
@@ -882,7 +886,7 @@ def test_extractor_disables_thinking():
     """
     import inspect
 
-    from boxes.requirement_capture import runner as capture_runner
+    from boxes.wms_requirement import runner as capture_runner
 
     src = inspect.getsource(capture_runner._simulate_requirement_extractor)
     assert 'thinking="disabled"' in src

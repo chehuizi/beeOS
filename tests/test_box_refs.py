@@ -370,7 +370,97 @@ class TestHandoff:
 
 
 # ============================================================
-# 4. 一条需求沿链路走完
+# 4. 设计盒的 ref: 入口（需求盒 → 设计盒）
+# ============================================================
+
+
+class TestTheDesignBoxHasARealRefEntry:
+    """需求盒 → 设计盒这条通道必须**真的存在**
+
+    以前设计盒内联吃需求集（`schema_business_requirement_set`），
+    所以这条通道**根本不存在**：看板拓扑上画着那条边，
+    链子上却只能人手工把 set_id / requirements 拷过去。
+
+    「没有悬空 ref」这条守卫盖不住它——内联形状压根没有 ref，
+    悬空不了，也就红不了。得有一条守卫直接说「这里必须有 ref」。
+    """
+
+    def test_the_task_input_is_a_ref_shape(self):
+        from boxes.wms_design import get_definition as get_mod_definition
+
+        definition = get_mod_definition()
+        task = definition.get_task("handle_modeling_request")
+        schema = definition.get_schema(task.task_schema)
+        fields = {f.name: f for f in schema.fields}
+        assert "requirement_set_ref" in fields, (
+            f"设计盒的投料 {task.task_schema} 里没有 requirement_set_ref —— "
+            "需求集接不进来，这条通道等于没有"
+        )
+        assert fields["requirement_set_ref"].type.startswith("ref:"), (
+            f"requirement_set_ref 的类型是 {fields['requirement_set_ref'].type!r}，"
+            "不是 ref: —— 交接通道只认 ref: 字段"
+        )
+
+    def test_the_ref_target_is_declared_inside_this_box(self):
+        """ref 只能引用本 definition 内的 schema（悬空 = 没人校验）"""
+        from boxes.wms_design import get_definition as get_mod_definition
+
+        definition = get_mod_definition()
+        task = definition.get_task("handle_modeling_request")
+        schema = definition.get_schema(task.task_schema)
+        ref = next(f for f in schema.fields if f.name == "requirement_set_ref")
+        target_id = ref.type[len("ref:"):]
+        assert definition.get_schema(target_id) is not None, (
+            f"ref 指向的 {target_id!r} 不在本盒的 schemas 里——"
+            "悬空引用的代价是哑的：没人校验，投什么都行"
+        )
+
+    def test_the_upstream_artifact_is_validated_against_the_box_own_shape(self):
+        """交接时按**设计盒自己声明的形状**校验上游产出
+
+        上游产出形状不对 → 当场失败。
+        静默接上一份不像需求集的东西，就是「声明了却拿不到」的镜像病。
+        """
+        from runtime.handoff import HandoffError, assemble_handoff
+        from boxes.wms_design import get_definition as get_mod_definition
+
+        definition = get_mod_definition()
+        schema = definition.get_schema("schema_model_task_input")
+        with pytest.raises(HandoffError) as exc:
+            assemble_handoff(
+                {},
+                {"requirement_set_ref": "run-1"},
+                task_schema=schema,
+                schemas=definition.schemas,
+                get_run=lambda rid: {
+                    "status": "completed",
+                    # requirements 不是数组 → 不满足设计盒声明的形状
+                    "artifact": {"set_id": "s", "requirements": "不是数组"},
+                },
+            )
+        assert "requirement_set_ref" in str(exc.value), (
+            f"报错没点名是哪个字段的形状不对：{exc.value}"
+        )
+
+    def test_the_subject_is_read_from_inside_the_requirement_set(self):
+        """标识藏在需求集对象里 → 要声明从哪个键取
+
+        不声明 subfield，运行时只能把整份对象当标识，
+        归档里就会出现 `{'set_id': ...}` 这种东西。
+        """
+        from boxes.wms_design import get_definition as get_mod_definition
+
+        definition = get_mod_definition()
+        task = definition.get_task("handle_modeling_request")
+        assert task.subject_ref_field == "requirement_set_ref"
+        assert task.subject_ref_subfield == "set_id", (
+            f"subject_ref_subfield 是 {task.subject_ref_subfield!r}，"
+            "应该是 set_id（需求集对象里的那个键）"
+        )
+
+
+# ============================================================
+# 5. 一条需求沿链路走完
 # ============================================================
 
 
@@ -404,28 +494,21 @@ class TestOneRequirementWalksTheChain:
         set_id = req_run["artifact"]["set_id"]
         assert set_id, "需求盒的产出里没有 set_id"
 
-        # 2) 设计盒：需求集 → 设计包
-        design_payload = {
-            "set_id": set_id,
-            "business_goal": req_run["artifact"].get("business_goal", ""),
-            "context": "",
-            "requirements": [
-                {
-                    "requirement_id": r.get("requirement_id", ""),
-                    "description": r.get("description", ""),
-                    "requirement_type": r.get("requirement_type", "object"),
-                    "priority": r.get("priority", "must_have"),
-                }
-                for r in req_run["artifact"].get("requirements", [])
-            ],
-        }
+        # 2) 设计盒：需求集**靠 handoff 接进来**（走 ref: 通道）
         design = trigger_task(
-            "wms_design_box", "handle_modeling_request", design_payload, store,
+            "wms_design_box", "handle_modeling_request", {}, store,
+            handoff={"requirement_set_ref": req["task_run_id"]},
         )
         design_run = store.get_run(design["task_run_id"])
         assert design_run["subject_ref"] == set_id, (
             f"设计盒的 subject_ref 是 {design_run['subject_ref']!r}，"
             f"应该是需求集的 set_id {set_id!r}"
+        )
+        # **需求集真的流过去了**——不只是没报错。
+        # 通道「接上了」但数据没到，是「声明了却拿不到」那一族：
+        # 接线看起来是通的，产出是空的。
+        assert design_run["artifact"]["requirement_count"] > 0, (
+            "设计盒接过来的是空需求集——通道通了，数据没到"
         )
 
         # 3) 开发盒：设计包靠 handoff 接进来
@@ -458,13 +541,14 @@ class TestOneRequirementWalksTheChain:
         design = trigger_task(
             "wms_design_box", "handle_modeling_request",
             {
-                "set_id": "REQ-CHAIN",
-                "business_goal": "g",
-                "context": "",
-                "requirements": [
-                    {"requirement_id": "r1", "description": "SKU",
-                     "requirement_type": "object", "priority": "must_have"},
-                ],
+                "requirement_set_ref": {
+                    "set_id": "REQ-CHAIN",
+                    "business_goal": "g",
+                    "requirements": [
+                        {"requirement_id": "r1", "description": "SKU",
+                         "requirement_type": "object", "priority": "must_have"},
+                    ],
+                },
             },
             store,
         )

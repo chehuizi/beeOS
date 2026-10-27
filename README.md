@@ -127,7 +127,7 @@ flowchart LR
 .venv/bin/python -c "from boxes.inventory_shortage import get_definition; d = get_definition(); print(d.id, d.version)"
 
 # 加载软件线盒子
-.venv/bin/python -c "from boxes.modeling import get_definition; d = get_definition(); print(d.id, d.version)"
+.venv/bin/python -c "from boxes.wms_design import get_definition; d = get_definition(); print(d.id, d.version)"
 
 # 端到端冒烟（订单异常）
 .venv/bin/python -c "
@@ -143,9 +143,9 @@ print('inventory_shortage:', tr.status.value)
 
 # 端到端冒烟（业务建模）
 .venv/bin/python -c "
-from boxes.modeling import get_definition
-from boxes.modeling import get_beeline
-from boxes.modeling.runner import RUNNER
+from boxes.wms_design import get_definition
+from boxes.wms_design import get_beeline
+from boxes.wms_design.runner import RUNNER
 from runtime import create_task_run, BeelineExecutor, evaluate_acceptance
 box = get_definition(); beeline = get_beeline()
 input_data = {'set_id': 'r1', 'business_goal': 'test', 'requirements': [{'requirement_id': 'req_obj_1', 'description': 'x', 'requirement_type': 'object', 'priority': 'must_have'}]}

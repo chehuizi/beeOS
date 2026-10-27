@@ -1,5 +1,5 @@
 """
-boxes.modeling.binder - 把需求绑到 WMS 概念上（**LLM 做语义，机械做校验**）
+boxes.wms_design.binder - 把需求绑到 WMS 概念上（**LLM 做语义，机械做校验**）
 
 **为什么要换掉关键词匹配**
 
@@ -33,7 +33,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from boxes.modeling.domain import (
+from boxes.wms_design.domain import (
     WMS_CONSTRAINTS,
     WMS_ENTITIES,
     WMS_METRICS,

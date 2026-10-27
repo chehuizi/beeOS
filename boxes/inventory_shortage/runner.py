@@ -1,7 +1,7 @@
 """
 boxes.inventory_shortage.runner - 库存不足订单盒的 8 个 operation 实现
 
-从 runtime/mock_runner.py 搬来（见 boxes/modeling/runner.py 顶部为什么搬）。
+从 runtime/mock_runner.py 搬来（见 boxes/wms_design/runner.py 顶部为什么搬）。
 
 执行是假的：没有真实仓储 API 调用，返回的是确定性模拟结果。
 业务语义是真的：每一步的输出形状按 schema 契约来。

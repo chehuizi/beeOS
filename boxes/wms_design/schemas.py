@@ -1,5 +1,5 @@
 """
-boxes.modeling.schemas - 业务建模盒子的业务 schemas
+boxes.wms_design.schemas - 业务建模盒子的业务 schemas
 
 定义 6 个业务 schema：
 
@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from core.models import FieldDef, SchemaDef
 
-from boxes.modeling.domain import (
+from boxes.wms_design.domain import (
     WMS_CONSTRAINT_KINDS,
     WMS_ENTITY_KINDS,
     WMS_METRIC_KEYWORDS,
@@ -614,9 +614,61 @@ BUSINESS_MODEL_PACKAGE = SchemaDef(
 )
 
 
+# ============================================================
+# 输入层：建模任务的投料（**走 ref: 通道**）
+# ============================================================
+#
+# 以前建模盒的投料就是 `schema_business_requirement_set` 本身
+# ——**内联**吃需求集。结果是：上游需求盒的产出接不进来，
+# 每次都得人手工把 set_id / business_goal / requirements 拷过去，
+# 拷漏一个字段下游照样收。
+#
+# 现在：需求集是**上游盒子的产出**，通过 `ref:` 通道接过来。
+#
+# **形状由建模盒自己声明**（schema 归消费者所有）：
+# 交接时 runtime/handoff.py 按这份声明校验上游产出——
+# 上游改了字段，这里旧了，交接**当场失败**（响的），
+# 而不是悬空引用那样永远没人发现（哑的）。
+#
+# 注意 `ref:` 只能引用**本 definition 内**的 schema id，
+# 所以这份形状必须住在本盒的 schemas 里，不能指向需求盒的 schema id。
+REQUIREMENT_SET_INPUT_SCHEMA = SchemaDef(
+    id="schema_requirement_set_input",
+    description="建模盒要消费的需求集（形状由建模盒自己声明）",
+    fields=[
+        # set_id 是「这批需求是哪一批」——建模盒的 subject_ref 从这儿取
+        FieldDef(name="set_id", type="string", required=True),
+        FieldDef(name="business_goal", type="string", required=False),
+        FieldDef(name="context", type="string", required=False),
+        FieldDef(name="requirements", type="array", required=True, items=FieldDef(
+            name="requirement", type="object", properties=[
+                FieldDef(name="requirement_id", type="string"),
+                FieldDef(name="description", type="string"),
+                FieldDef(name="requirement_type", type="string"),
+                FieldDef(name="priority", type="string"),
+            ],
+        )),
+    ],
+)
+
+MODEL_TASK_INPUT_SCHEMA = SchemaDef(
+    id="schema_model_task_input",
+    description="建模任务（需求集）（一次建模任务的投料）",
+    fields=[
+        # **只有这一个字段**：需求集整个从上游接过来。
+        # 留一份内联的 set_id / requirements 在旁边 = 一个字段两个来源，
+        # 说不清哪个是真的——所以不留。
+        FieldDef(name="requirement_set_ref", type="ref:schema_requirement_set_input",
+                 required=True),
+    ],
+)
+
+
 ALL_SCHEMAS = [
     BUSINESS_REQUIREMENT_SET,
     BUSINESS_REQUIREMENT,
+    REQUIREMENT_SET_INPUT_SCHEMA,
+    MODEL_TASK_INPUT_SCHEMA,
     PARSED_REQUIREMENTS,
     CLASSIFIED_REQUIREMENTS,
     MODEL_ELEMENTS,

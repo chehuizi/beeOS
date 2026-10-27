@@ -170,7 +170,7 @@ LLM 调用点，也不引入新的幻觉面。
 **现状问题**：`DDD_PATTERNS` 硬编码映射；规则的条件/动作是占位符
 （`<condition for req_x>`）；`rule_consistency` 恒 True（占位符无语义可判矛盾）。
 
-**补法**：给 `boxes/modeling/domain.py` 的每个 WMS 概念加一个**代码锚点**
+**补法**：给 `boxes/wms_design/domain.py` 的每个 WMS 概念加一个**代码锚点**
 （`code_anchor`，指向 WMS 的模块/服务/方法），让设计包能回答「这条需求要动哪里」：
 ```python
 WMS_ENTITIES = {

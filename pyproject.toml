@@ -26,14 +26,23 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
+# **这份清单必须跟磁盘上的包一一对应**：
+# 少了 → 打包出来的 wheel 里没有那个包（装了也 import 不到）；
+# 多了 → 指向一个不存在的目录（打包直接报错）。
+# 它以前还写着 "boxes.modeling" 和 "beelines.*"——前者是改名之前的老名字，
+# 后者那三个目录早就不存在了（beeline 搬进盒子了）。
 packages = [
     "core",
     "boxes",
     "boxes.inventory_shortage",
-    "boxes.modeling",
-    "beelines",
-    "beelines.inventory_shortage",
-    "beelines.modeling",
+    "boxes.receipt",
+    "boxes.wms_analysis",
+    "boxes.wms_design",
+    "boxes.wms_development",
+    "boxes.wms_ops",
+    "boxes.wms_requirement",
+    "boxes.wms_system",
+    "boxes.wms_testing",
     "runtime",
     "kanban",
     "tests",

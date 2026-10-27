@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from boxes.requirement_capture.document import (
+from boxes.wms_requirement.document import (
     ACCEPTANCE_PLACEHOLDER,
     TYPE_CONSTRAINT,
     TYPE_EVENT,
@@ -275,7 +275,7 @@ class TestTheDocumentIsHonest:
 
 class TestTheBoxShipsTheDocument:
     def test_the_packager_produces_a_document(self):
-        from boxes.requirement_capture.runner import _simulate_requirement_set_packager
+        from boxes.wms_requirement.runner import _simulate_requirement_set_packager
 
         out = _simulate_requirement_set_packager({
             "set_id": "req_set_1",
@@ -291,7 +291,7 @@ class TestTheBoxShipsTheDocument:
         assert out["document"]["markdown"].startswith("# 需求文档")
 
     def test_the_result_schema_declares_the_document(self):
-        from boxes.requirement_capture import get_definition
+        from boxes.wms_requirement import get_definition
 
         definition = get_definition()
         fields = {f.name for f in definition.get_schema(definition.result.result_schema).fields}
@@ -301,7 +301,7 @@ class TestTheBoxShipsTheDocument:
 
     def test_the_document_shape_is_declared(self):
         """文档自己的形状也得声明（ref: 只能引用本 definition 内）"""
-        from boxes.requirement_capture import get_definition
+        from boxes.wms_requirement import get_definition
 
         definition = get_definition()
         schema = definition.get_schema("schema_requirement_document")

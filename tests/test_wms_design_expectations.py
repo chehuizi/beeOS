@@ -1,4 +1,4 @@
-"""tests/test_modeling_expectations.py - 可判定的预期（需求侧的预期载体）
+"""tests/test_wms_design_expectations.py - 可判定的预期（需求侧的预期载体）
 
 **这组测试验的是「载体」**：模型认出来的每个 WMS 概念，
 是不是真的变成了一条「这条需求怎样才算被满足」的可判定预期。
@@ -19,8 +19,8 @@ from __future__ import annotations
 
 import pytest
 
-from boxes.modeling.domain import statement_for_kind
-from boxes.modeling.runner import (
+from boxes.wms_design.domain import statement_for_kind
+from boxes.wms_design.runner import (
     _simulate_check_consistency,
     _simulate_generate_evidence,
     _simulate_generate_model_elements,
@@ -177,7 +177,7 @@ class TestTheExpectationCarrier:
 
         隔离：这条只测 `_expectations_from_elements` 一个函数。
         """
-        from boxes.modeling.runner import _expectations_from_elements
+        from boxes.wms_design.runner import _expectations_from_elements
 
         dup = [{"trace_to": "r1",
                 "wms_bindings": [{"kind": "sku", "evidence": "SKU"}]}]
@@ -246,7 +246,7 @@ class TestTheCompletenessCriterionCanActuallyFail:
 
         隔离：这条只查 schema，不跑链路。
         """
-        from boxes.modeling.schemas import BUSINESS_MODEL_PACKAGE
+        from boxes.wms_design.schemas import BUSINESS_MODEL_PACKAGE
 
         by_name = {f.name: f for f in BUSINESS_MODEL_PACKAGE.fields}
         assert "expectation_completeness" in by_name
@@ -257,7 +257,7 @@ class TestTheCompletenessCriterionCanActuallyFail:
 
         隔离：这条只查 definition 的 acceptance 列表。
         """
-        from boxes.modeling import get_definition
+        from boxes.wms_design import get_definition
 
         metrics = [a.metric for a in get_definition().result.acceptance]
         assert "expectation_completeness" in metrics

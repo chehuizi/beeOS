@@ -527,7 +527,7 @@ class TestTheProbesTellTheTruth:
 
         隔离：这条只查注册表。
         """
-        from boxes.modeling.domain import (
+        from boxes.wms_design.domain import (
             WMS_CONSTRAINTS,
             WMS_ENTITIES,
             WMS_METRICS,

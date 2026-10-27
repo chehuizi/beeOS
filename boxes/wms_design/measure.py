@@ -1,5 +1,5 @@
 """
-boxes.modeling.measure - 业务建模盒的实测指标采集
+boxes.wms_design.measure - 业务建模盒的实测指标采集
 
 和捕获盒一样：definition.metrics 里的 target 是承诺，
 这一层负责把 actual 从履约历史里算出来。

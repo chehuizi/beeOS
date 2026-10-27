@@ -1,5 +1,5 @@
 """
-boxes.requirement_capture.document - 把需求集机械投影成**人读的需求文档**
+boxes.wms_requirement.document - 把需求集机械投影成**人读的需求文档**
 
 **为什么要有这一层**：需求盒的产出是给建模盒吃的——流程图 + 可判定的
 结构化字段。那是机器的形状，不是人的形状。业务方要看的是一份文档：

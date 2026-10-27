@@ -29,7 +29,7 @@ class TestTheStubDoesNotEscape:
         桩就留在了原地，后面 5 条 LLM 重试用例全被炸掉。
         """
         from runtime import llm
-        from tests.test_capture_extraction import _run_capture
+        from tests.test_wms_requirement_extraction import _run_capture
 
         original = llm.complete_json
         store = TaskRunStore(Path(tempfile.mktemp(suffix=".jsonl")))

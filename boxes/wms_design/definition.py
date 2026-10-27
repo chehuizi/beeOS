@@ -1,5 +1,5 @@
 """
-boxes.modeling.definition - 业务建模履约盒 Definition 数据
+boxes.wms_design.definition - 业务建模履约盒 Definition 数据
 
 Software Line 第一只盒子定义。
 
@@ -32,7 +32,7 @@ from core.models import (
     ResultDef,
     TaskDef,
 )
-from boxes.modeling.schemas import ALL_SCHEMAS
+from boxes.wms_design.schemas import ALL_SCHEMAS
 
 
 WMS_DESIGN_BOX = BeeBoxDefinition(
@@ -68,12 +68,21 @@ WMS_DESIGN_BOX = BeeBoxDefinition(
     task=[
         TaskDef(
             type="handle_modeling_request",
-            task_schema="schema_business_requirement_set",
+            # **投料走 ref: 通道**：需求集是上游（需求盒）的产出，
+            # 整个接过来，不在投料里内联一份。
+            # 以前这里是 schema_business_requirement_set（内联），
+            # 于是需求盒→设计盒这条通道**根本不存在**——
+            # 看板拓扑上画着那条边，链子上却没有，每次都靠人手工拷。
+            task_schema="schema_model_task_input",
             beeline_id="beeline_wms_design_v1",
             beeline_version=1,
             # 本次履约处理的业务对象标识（归档按它分组）
-            # 设计盒的 subject 就是需求集本身（set_id 直接在投料里）。
-            subject_ref_field="set_id",
+            #
+            # 标识**藏在需求集对象里**——`ref:` 字段装的是整份上游产出，
+            # 「这批模型对应哪批需求」的答案在它的 set_id 上。
+            # 所以要指明从对象的哪个键取。
+            subject_ref_field="requirement_set_ref",
+            subject_ref_subfield="set_id",
             subject_kind="requirement",
             trigger=(
                 "仓储主管提交结构化 WMS 需求集（上架 / 拣货 / 盘点 / 波次合并）\n"

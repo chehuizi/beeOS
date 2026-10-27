@@ -68,7 +68,7 @@ verify_coverage → check_consistency → generate_evidence → package_model (t
 ## 加载
 
 ```python
-from boxes.modeling import get_definition
+from boxes.wms_design import get_definition
 from beelines.modeling import get_beeline
 from runtime import create_task_run, BeelineExecutor, evaluate_acceptance
 

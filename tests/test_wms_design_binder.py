@@ -1,4 +1,4 @@
-"""tests/test_modeling_binder.py - WMS 概念绑定的机械校验层
+"""tests/test_wms_design_binder.py - WMS 概念绑定的机械校验层
 
 **这组测试验的不是「模型聪不聪明」**——那是语义质量，由手工验证覆盖。
 这组验的是**机械层会不会守住**：
@@ -21,8 +21,8 @@ import json
 
 import pytest
 
-from boxes.modeling.binder import BindingError, bind_requirements
-from boxes.modeling.domain import WMS_CONSTRAINTS, WMS_ENTITIES
+from boxes.wms_design.binder import BindingError, bind_requirements
+from boxes.wms_design.domain import WMS_CONSTRAINTS, WMS_ENTITIES
 from runtime import llm
 
 
@@ -219,7 +219,7 @@ class TestTheCatalogIsReal:
         assert errors == [], f"概念表里有绑不上的东西：{errors}"
 
     def test_the_metric_names_are_bindable(self, monkeypatch):
-        from boxes.modeling.domain import WMS_METRICS
+        from boxes.wms_design.domain import WMS_METRICS
 
         for metric in WMS_METRICS:
             monkeypatch.setattr(llm, "complete_json", _stub({"bindings": [
@@ -245,7 +245,7 @@ class TestTheCatalogIsReal:
 
         隔离：这条只查词表本身。
         """
-        from boxes.modeling.domain import (
+        from boxes.wms_design.domain import (
             WMS_CONSTRAINTS,
             WMS_ENTITIES,
             WMS_METRICS,
@@ -276,7 +276,7 @@ class TestTheRunnerKeepsCoverageAndBindingApart:
         混成一件的话，一条绑不上的需求会把覆盖率也拖下水，
         而覆盖率那个数从此不再表示覆盖率。
         """
-        from boxes.modeling.runner import _simulate_generate_model_elements
+        from boxes.wms_design.runner import _simulate_generate_model_elements
 
         monkeypatch.setattr(llm, "complete_json", _stub({"bindings": [
             {"requirement_id": "r_obj", "kinds": [{"kind": "sku", "evidence": "SKU"}]},
@@ -302,7 +302,7 @@ class TestTheRunnerKeepsCoverageAndBindingApart:
         「吃了不传」的同族病：中间某一跳没带，下游拿到的是空列表而不是 None，
         于是安安静静地少了一份证据——而看板上只看到一个没有原因的布尔值。
         """
-        from boxes.modeling.runner import (
+        from boxes.wms_design.runner import (
             _simulate_check_consistency,
             _simulate_classify_requirements,
             _simulate_generate_evidence,
@@ -338,7 +338,7 @@ class TestTheRunnerKeepsCoverageAndBindingApart:
         关键词匹配**永远不会**给出这个结果（那是 sku）。
         模型说是 location 就是 location——**词表只是候选集，不是判据**。
         """
-        from boxes.modeling.runner import _simulate_generate_model_elements
+        from boxes.wms_design.runner import _simulate_generate_model_elements
 
         monkeypatch.setattr(llm, "complete_json", _stub({"bindings": [
             {"requirement_id": "r_obj",
@@ -438,7 +438,7 @@ class TestTheReportConceptIsWiredEndToEnd:
 
         隔离：这条只验 `kind_category`，不验 binder 也不验 runner。
         """
-        from boxes.modeling.domain import kind_category
+        from boxes.wms_design.domain import kind_category
 
         assert kind_category("inventory_dashboard") == "report"
 
@@ -451,13 +451,13 @@ class TestTheReportConceptIsWiredEndToEnd:
 
         隔离：这条只查枚举成员，不碰 binder/runner。
         """
-        from boxes.modeling.domain import (
+        from boxes.wms_design.domain import (
             WMS_CONSTRAINTS,
             WMS_ENTITIES,
             WMS_METRICS,
             WMS_REPORTS,
         )
-        from boxes.modeling.schemas import WMS_ALL_KINDS
+        from boxes.wms_design.schemas import WMS_ALL_KINDS
 
         every = (
             list(WMS_ENTITIES) + list(WMS_CONSTRAINTS)
@@ -474,7 +474,7 @@ class TestTheReportConceptIsWiredEndToEnd:
 
         隔离：这条只验 `label_for_kind`，不碰 runner。
         """
-        from boxes.modeling.domain import (
+        from boxes.wms_design.domain import (
             WMS_CONSTRAINTS,
             WMS_ENTITIES,
             WMS_METRICS,
@@ -502,7 +502,7 @@ class TestTheReportConceptIsWiredEndToEnd:
         （LLM 直接给出合法绑定），所以它转红的原因只有一个——
         `wms_domain` 没带出 reports。
         """
-        from boxes.modeling.runner import (
+        from boxes.wms_design.runner import (
             _simulate_check_consistency,
             _simulate_generate_model_elements,
             _simulate_package_model,
@@ -540,7 +540,7 @@ class TestTheReportConceptIsWiredEndToEnd:
 
         隔离：这条只查 schema，不跑链路。
         """
-        from boxes.modeling.schemas import BUSINESS_MODEL_PACKAGE
+        from boxes.wms_design.schemas import BUSINESS_MODEL_PACKAGE
 
         by_name = {f.name: f for f in BUSINESS_MODEL_PACKAGE.fields}
         domain_field = by_name["wms_domain"]
@@ -633,7 +633,7 @@ class TestTheMetricVocabularyIsNotCopiedTwice:
         绑定腿的目录里就没有那个指标的说法 → 绑不上 → 判红，
         而红的原因离现场隔着两层。
         """
-        from boxes.modeling.domain import WMS_METRIC_KEYWORDS, WMS_METRICS
+        from boxes.wms_design.domain import WMS_METRIC_KEYWORDS, WMS_METRICS
 
         assert set(WMS_METRIC_KEYWORDS) == {m["name"] for m in WMS_METRICS}
 
@@ -644,7 +644,7 @@ class TestTheMetricVocabularyIsNotCopiedTwice:
         LLM 读目录看到的是「临期 SKU 数」，而业务方说的是「临期 30 天内 SKU」，
         不是同一串字 → 指标绑不上（真 LLM 实测：同一批需求一次绑上一次没绑上）。
         """
-        from boxes.modeling.domain import WMS_METRICS
+        from boxes.wms_design.domain import WMS_METRICS
 
         for m in WMS_METRICS:
             assert m.get("keywords"), f"{m['name']} 没有例词"
@@ -652,8 +652,8 @@ class TestTheMetricVocabularyIsNotCopiedTwice:
 
     def test_绑定目录里的指标带例词(self):
         """目录里必须真的把例词给出去（不是只存在词表里）"""
-        from boxes.modeling.binder import _catalog_for
-        from boxes.modeling.domain import WMS_METRICS
+        from boxes.wms_design.binder import _catalog_for
+        from boxes.wms_design.domain import WMS_METRICS
 
         cat = {c["kind"]: c for c in _catalog_for("metric")}
         for m in WMS_METRICS:

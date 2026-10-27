@@ -188,8 +188,7 @@ class TestTheRefIsRecordedAndFindable:
         result = trigger_task(
             "wms_design_box",
             "handle_modeling_request",
-            _minimal_payload(_schema_of("wms_design_box", "handle_modeling_request"))
-            | {"set_id": "REQ-2026-003"},
+            _design_payload("REQ-2026-003"),
             store,
         )
         run = store.get_run(result["task_run_id"])
@@ -204,18 +203,17 @@ class TestTheRefIsRecordedAndFindable:
         就得到这个单元名下的全部事实。
         """
         store = TaskRunStore(tmp_path / "runs.jsonl")
-        schema = _schema_of("wms_design_box", "handle_modeling_request")
         for i in range(3):
             trigger_task(
                 "wms_design_box",
                 "handle_modeling_request",
-                _minimal_payload(schema, _schemas_of("wms_design_box")) | {"set_id": "REQ-2026-003"},
+                _design_payload("REQ-2026-003"),
                 store,
             )
         trigger_task(
             "wms_design_box",
             "handle_modeling_request",
-            _minimal_payload(schema, _schemas_of("wms_design_box")) | {"set_id": "REQ-2026-999"},
+            _design_payload("REQ-2026-999"),
             store,
         )
 
@@ -237,10 +235,9 @@ class TestTheRefIsRecordedAndFindable:
         「accepted_only 收进来的每一条都必须是 accepted」不是。
         """
         store = TaskRunStore(tmp_path / "runs.jsonl")
-        schema = _schema_of("wms_design_box", "handle_modeling_request")
         trigger_task(
             "wms_design_box", "handle_modeling_request",
-            _minimal_payload(schema, _schemas_of("wms_design_box")) | {"set_id": "REQ-X"}, store,
+            _design_payload("REQ-X"), store,
         )
 
         everything = store.list_by_subject("REQ-X")
@@ -437,10 +434,9 @@ class TestTheKindIsDeclared:
 
     def test_same_ref_different_kinds_can_be_told_apart(self, tmp_path):
         store = TaskRunStore(tmp_path / "runs.jsonl")
-        schema = _schema_of("wms_design_box", "handle_modeling_request")
         trigger_task(
             "wms_design_box", "handle_modeling_request",
-            _minimal_payload(schema, _schemas_of("wms_design_box")) | {"set_id": "OPS-1"}, store,
+            _design_payload("OPS-1"), store,
         )
         assert len(store.list_by_subject("OPS-1")) == 1
         assert len(store.list_by_subject("OPS-1", subject_kind="requirement")) == 1
@@ -501,4 +497,16 @@ def _minimal_payload(schema, schemas=None) -> dict:
             payload[f.name] = 0
         else:
             payload[f.name] = "x"
+    return payload
+
+
+def _design_payload(set_id: str) -> dict:
+    """设计盒的最小投料
+
+    **需求集整个装在 `requirement_set_ref` 里**（ref: 通道），
+    set_id 是这个对象的键——所以标识也藏在里面。
+    """
+    schema = _schema_of("wms_design_box", "handle_modeling_request")
+    payload = _minimal_payload(schema, _schemas_of("wms_design_box"))
+    payload["requirement_set_ref"]["set_id"] = set_id
     return payload

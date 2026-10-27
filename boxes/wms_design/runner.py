@@ -1,5 +1,5 @@
 """
-boxes.modeling.runner - 业务建模盒的 7 个 operation 实现
+boxes.wms_design.runner - 业务建模盒的 7 个 operation 实现
 
 从 runtime/mock_runner.py 搬来。这些 handler 以前住在内核里，
 跟另外两只盒子的实现混在同一张分派表上——内核因此比任何一只盒子
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from boxes.modeling.domain import (
+from boxes.wms_design.domain import (
     kind_category,
     label_for_kind,
     statement_for_kind,
@@ -37,14 +37,35 @@ REQUIREMENT_TYPES = ("object", "rule", "process", "metric", "goal", "event")
 MODELABLE_TYPES = ("object", "rule", "process", "metric", "event")
 
 
+def _requirement_set_of(input_data: dict[str, Any]) -> dict[str, Any]:
+    """从投料里取出需求集
+
+    投料的形状是 `{requirement_set_ref: {...}}`——需求集是**上游盒子的产出**，
+    通过 `ref:` 通道接过来（形状由本盒自己声明，见 schemas.py）。
+
+    程序内直调（测试 / 脚本）时也接受内联的需求集，那是同一份数据的
+    另一种拿法，不是第二条腿。
+    """
+    ref = input_data.get("requirement_set_ref")
+    if isinstance(ref, dict):
+        return ref
+    if "requirements" in input_data or "set_id" in input_data:
+        return input_data
+    raise ValueError(
+        "投料里没有 requirement_set_ref —— 建模盒的需求集从上游盒子的产出接过来，"
+        "不是自己解析自然语言"
+    )
+
+
 def _simulate_parse_requirements(input_data: dict[str, Any]) -> dict[str, Any]:
     """解析业务需求集：结构校验 + 透传有效需求载荷
 
     无效需求（缺 id / type 不在枚举内）记入 parse_errors 并从有效集剔除。
     """
+    req_set = _requirement_set_of(input_data)
     valid = []
     parse_errors = []
-    for r in input_data.get("requirements", []):
+    for r in req_set.get("requirements", []):
         rid = r.get("requirement_id")
         if not rid:
             parse_errors.append("requirement missing requirement_id")
@@ -54,8 +75,8 @@ def _simulate_parse_requirements(input_data: dict[str, Any]) -> dict[str, Any]:
             continue
         valid.append(r)
     return {
-        "set_id": input_data.get("set_id", ""),
-        "business_goal": input_data.get("business_goal", ""),
+        "set_id": req_set.get("set_id", ""),
+        "business_goal": req_set.get("business_goal", ""),
         "requirement_count": len(valid),
         "valid_ids": [r["requirement_id"] for r in valid],
         "requirements": valid,
@@ -103,7 +124,7 @@ DDD_PATTERNS = {
 def _simulate_generate_model_elements(input_data: dict[str, Any]) -> dict[str, Any]:
     """按分类生成 DDD 战术设计元素（名称取自需求描述，pattern 标注战术模式，trace_to 回指需求）
 
-    **WMS 绑定这一段换成了 LLM**（见 boxes/modeling/binder.py）：
+    **WMS 绑定这一段换成了 LLM**（见 boxes/wms_design/binder.py）：
     原来的纯关键词匹配认不出「同一 SKU 出库按效期升序分配」这种最普通的说法，
     连 fefo 自己的 statement 都绑不上——主线需求因此在第 2 只盒子就断了。
 
@@ -113,7 +134,7 @@ def _simulate_generate_model_elements(input_data: dict[str, Any]) -> dict[str, A
     作废的绑定（自造概念 / 证据不是原文）记进 `binding_errors`，
     一路带到 evidence_detail——**红要能定位到具体是哪条需求、为什么**。
     """
-    from boxes.modeling.binder import bind_requirements
+    from boxes.wms_design.binder import bind_requirements
 
     by_type = input_data.get("by_type", {})
     requirements = input_data.get("requirements", [])

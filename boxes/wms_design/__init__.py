@@ -1,4 +1,4 @@
-"""boxes.modeling - 业务建模履约盒
+"""boxes.wms_design - 业务建模履约盒
 
 Software Line 第一只盒子——按结构化需求产出可验证的业务模型包。
 
@@ -18,7 +18,7 @@ Software Line 第一只盒子——按结构化需求产出可验证的业务模
 基础设施可以是假的（每个 op 是 mock，下一阶段实现真实 modeling engine）。
 """
 
-from boxes.modeling.definition import WMS_DESIGN_BOX, get_definition
-from boxes.modeling.beeline import WMS_DESIGN_BEELINE, get_beeline
+from boxes.wms_design.definition import WMS_DESIGN_BOX, get_definition
+from boxes.wms_design.beeline import WMS_DESIGN_BEELINE, get_beeline
 
 __all__ = ["WMS_DESIGN_BOX", "get_definition", "WMS_DESIGN_BEELINE", "get_beeline"]

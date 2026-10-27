@@ -25,6 +25,8 @@ boxes.wms_development.code_map - WMS 概念 → 该概念在 WMS 仓里的代码
 
 from __future__ import annotations
 
+from typing import Optional
+
 # 概念 → WMS 仓里的源码位置（路径片段）
 WMS_CONCEPT_CODE_LOCATIONS: dict[str, tuple[str, ...]] = {
     # ---- 实体 ----
@@ -80,7 +82,7 @@ WMS_CONCEPT_CODE_LOCATIONS: dict[str, tuple[str, ...]] = {
     "inventory_dashboard": ("module/report", "mapper/ReportMapper", "vo/"),
 }
 
-# 概念 → 该概念在源码里的**实现证据**（标识符片段）
+# 概念 → 该概念在源码里的**实现证据**（文件落点提示 + 标识符片段）
 #
 # **为什么需要这张表**：「这条需求代码里已经实现了」是一句**自述**。
 # 自述不是神谕——上一轮真跑就撞上了：模型看着已有的看板聚合，
@@ -91,50 +93,106 @@ WMS_CONCEPT_CODE_LOCATIONS: dict[str, tuple[str, ...]] = {
 # 片段取**机制**，不是概念名的字面：
 # - fefo 的机制是「按 expire_date 排序」（InventoryMapper 的分配 SQL）
 #   ——源码里有 `fefo` 这个词吗？没有（那是业务词，不是代码标识符）。
-# - wms_pick_accuracy 的机制是「看板上那个字段」→ 字段名 pickAccuracy
 #
-# **没登记片段的概念 = 判不了**（既不算已实现，也不算待实现）：
+# **为什么证据还要带「在哪个文件里」**（2026-10-27 实测撞出来的）：
+# 只查「全仓有没有这个字符串」会被**同名方法**骗过去——
+# 上一轮开发盒把拣货准确率做成了独立接口 `/reports/pick-accuracy`，
+# 里面有个方法叫 `pickAccuracy()`，于是「全仓有 pickAccuracy」成立，
+# 开发盒判「已实现」就放行了。可业务方要的是
+# **「在库存看板看得到」**——那个字段在 `DashboardVO` 里，
+# 而它压根不在看板 VO 上。**字段在别处 = 业务方看不到。**
+#
+# 所以证据改成 (文件落点提示, 标识符片段)：
+# - 片段必须出现在**指定的那个文件**里才算数；
+# - 报表类指标的落点就是看板 VO（`vo/DashboardVO`）——
+#   看板接口返回的就是它，字段不在那儿 = 业务方看不到。
+#
+# **没登记证据的概念 = 判不了**（既不算已实现，也不算待实现）：
 # 说不出证据就不能算落地，这跟「认不出就判红」是同一条纪律。
-WMS_CONCEPT_IMPL_TOKENS: dict[str, tuple[str, ...]] = {
-    # ---- 指标：看板上那个字段名 ----
-    "wms_pick_accuracy": ("pickAccuracy",),
-    "wms_expiring_soon_sku_count": ("expiringSoonSkuCount",),
-    "wms_space_utilization": ("spaceUtilization",),
-    "wms_stockout_rate": ("stockoutRate",),
-    "wms_inventory_turnover_days": ("inventoryTurnoverDays",),
+WMS_CONCEPT_IMPL_EVIDENCE: dict[str, tuple[tuple[str, str], ...]] = {
+    # ---- 指标：必须是**看板 VO 上的那个字段** ----
+    "wms_pick_accuracy": (("vo/DashboardVO", "pickAccuracy"),),
+    "wms_expiring_soon_sku_count": (("vo/DashboardVO", "expiringSoonSkuCount"),),
+    "wms_space_utilization": (("vo/DashboardVO", "spaceUtilization"),),
+    "wms_stockout_rate": (("vo/DashboardVO", "stockoutRate"),),
+    "wms_inventory_turnover_days": (("vo/DashboardVO", "inventoryTurnoverDays"),),
 
     # ---- 约束：实现的机制 ----
-    "fefo": ("ORDER BY expire_date",),
-    "lot": ("expire_date",),
+    "fefo": (("mapper/InventoryMapper", "ORDER BY expire_date"),),
+    "lot": (("mapper/InventoryMapper", "expire_date"),),
 
     # ---- 报表 ----
-    "inventory_dashboard": ("class DashboardVO",),
+    "inventory_dashboard": (("vo/DashboardVO", "class DashboardVO"),),
 }
 
 
 def implementation_tokens(concept: str) -> tuple[str, ...]:
-    """这个概念在源码里的实现证据（没有 = 判不了）"""
-    return WMS_CONCEPT_IMPL_TOKENS.get(concept, ())
+    """这个概念在源码里的实现证据（标识符片段；没有 = 判不了）"""
+    return tuple(tok for _hint, tok in implementation_evidence(concept))
 
 
-def implementation_state(concept: str, source_text: str) -> str:
+def implementation_evidence_description(concept: str) -> str:
+    """这个概念的证据长什么样（给人看的：哪个文件里的哪个标识符）
+
+    「vo/DashboardVO 里的 pickAccuracy」——模型得知道**落在哪个文件**，
+    否则它会在别处造一个同名的东西，机械层照样判不了它落地。
+    """
+    parts = [
+        (f"{hint} 里的 {tok}" if hint else tok)
+        for hint, tok in implementation_evidence(concept)
+    ]
+    return "、".join(parts)
+
+
+def implementation_evidence(concept: str) -> tuple[tuple[str, str], ...]:
+    """这个概念的证据（文件落点提示 + 标识符片段）"""
+    return WMS_CONCEPT_IMPL_EVIDENCE.get(concept, ())
+
+
+def implementation_state(
+    concept: str,
+    source_text: str = "",
+    files: Optional[dict[str, str]] = None,
+) -> str:
     """这个概念在源码里是「已实现」/「待实现」/「判不了」
 
-    - implemented：登记了证据片段，且片段真的出现在源码里
-    - missing：登记了证据片段，但源码里找不到 → **这次要新增**
+    - implemented：登记了证据，且证据**真的出现在指定的那个文件里**
+    - missing：登记了证据，但源码里找不到 → **这次要新增**
     - unknown：没登记证据 → 判不了（不许当成已实现）
+
+    `files` 是 {相对路径: 源码}。**给了它才谈得上「在哪个文件里」**：
+    只给一段拼接文本的话，只能做全文匹配——那就分不出
+    「看板上有这个字段」和「别处有个同名方法」。
+
+    没给 `files` 时退回全文匹配（老调用方的口径），
+    但**带文件提示的证据在全文模式下不算数**——
+    宁可是「待实现」（逼它真去改），也不要「已实现」放过一个假实现。
     """
-    tokens = implementation_tokens(concept)
-    if not tokens:
+    evidence = implementation_evidence(concept)
+    if not evidence:
         return "unknown"
-    if all(tok in source_text for tok in tokens):
-        return "implemented"
-    return "missing"
+    if files is None:
+        # 没有文件视图：带文件提示的证据判不了 → 记成「待实现」。
+        if any(hint for hint, _tok in evidence):
+            return "missing"
+        return (
+            "implemented"
+            if all(tok in source_text for _hint, tok in evidence)
+            else "missing"
+        )
+    for hint, tok in evidence:
+        if not any(hint in path and tok in text for path, text in files.items()):
+            return "missing"
+    return "implemented"
 
 
-def implementation_states(concepts: list[str], source_text: str) -> dict[str, str]:
+def implementation_states(
+    concepts: list[str],
+    source_text: str = "",
+    files: Optional[dict[str, str]] = None,
+) -> dict[str, str]:
     """一批概念的实现状态"""
-    return {c: implementation_state(c, source_text) for c in concepts}
+    return {c: implementation_state(c, source_text, files) for c in concepts}
 
 
 # 测试目录：改测试永远允许（开发盒要补回归测试）。

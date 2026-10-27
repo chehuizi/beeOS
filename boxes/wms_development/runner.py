@@ -46,7 +46,7 @@ from boxes.wms_development.build import (
 from boxes.wms_development.code_map import (
     implementation_state,
     implementation_states,
-    implementation_tokens,
+    implementation_evidence_description,
     locations_for,
     unmapped_concepts,
 )
@@ -61,6 +61,7 @@ from boxes.wms_development.codegen import (
     repo_path,
     workspace_root,
 )
+from boxes.wms_development.mapper_binding import check_mapper_bindings
 from runtime.runner import HandlerRunner
 
 
@@ -172,9 +173,15 @@ def dev_code_handler(input_data: dict[str, Any]) -> dict[str, Any]:
     # ---- 机械核对：哪些概念在源码里还没有实现 ----
     #
     # **这一步是「已实现」这句话的神谕**：模型说「看板已经有了」不算，
-    # 源码里有没有那个标识符才算。
+    # 源码里有没有那个标识符、且那个标识符**在对的文件里**才算。
+    #
+    # **为什么必须带文件视图**（2026-10-27 实测）：上一轮开发盒把拣货准确率
+    # 做成了独立接口，里面有个方法叫 `pickAccuracy()` → 全仓搜得到
+    # 「pickAccuracy」→ 判成「已实现」就放行了。可业务方要的是
+    # **「在库存看板看得到」**——那个字段在看板 VO 上，它压根不在。
+    # 全仓匹配分不出「看板上有这个数」和「别处有个同名方法」。
     source_text = "\n".join(files.values())
-    states = implementation_states(concepts, source_text)
+    states = implementation_states(concepts, source_text, files)
     # **只算预期挂着的概念**：模型元素里的实体（sku/lot…）不是这次要验的东西，
     # 它们没有实现证据也不该拖垮这次交付的判定。
     expectation_concepts = [
@@ -183,7 +190,8 @@ def dev_code_handler(input_data: dict[str, Any]) -> dict[str, Any]:
         ) if c
     ]
     missing = [
-        (c, implementation_tokens(c)) for c, s in states.items() if s == "missing"
+        (c, implementation_evidence_description(c))
+        for c, s in states.items() if s == "missing"
     ]
 
     def _refresh() -> dict[str, str]:
@@ -194,26 +202,34 @@ def dev_code_handler(input_data: dict[str, Any]) -> dict[str, Any]:
         return collect_context(ws, locations)
 
     def _verify() -> list[str]:
-        """改完之后再核两遍：概念实现了没 + 代码编译得过吗
+        """改完之后再核三遍：概念实现了没 + 代码编译得过吗 + SQL 绑得上吗
 
-        **两样都是外部神谕**：
-        - 概念的实现证据（源码里有没有那个标识符）
+        **三样都是外部神谕**：
+        - 概念的实现证据（源码里有没有那个标识符，且在对的文件里）
         - 编译器（找不到符号就说明没写对）
+        - MyBatis 的 SQL 绑定（接口方法在 XML 里有没有对应语句）
 
         上一轮真跑就撞上了：模型把新 VO 用在了 Mapper 里，
         却忘了 import → 编译器说「找不到符号」。
         这段错误原样回给它，它自己会改。
+
+        **SQL 绑定为什么也要查**（2026-10-27 实测）：
+        MyBatis 的绑定是**运行期**的——接口加了方法、XML 里没有同名语句，
+        编译过、单测过（仓里根本没有报表测试），上线一调就 500。
         """
         problems: list[str] = []
-        after = "\n".join(collect_context(ws, locations).values())
+        after_files = collect_context(ws, locations)
+        after = "\n".join(after_files.values())
         still = [
             c for c, _ in missing
-            if implementation_state(c, after) != "implemented"
+            if implementation_state(c, after, after_files) != "implemented"
         ]
         if still:
             return [
                 "这些概念的标识符在源码里仍然找不到："
                 f"{'、'.join(still)}——请用这些标识符命名你新增的实现"
+                "（看板类指标必须落在**看板 VO**上：业务方是在看板上看到它，"
+                "不是在你新加的接口里看到它）"
             ]
         comp = run_compile(ws)
         if not comp.get("ok"):
@@ -221,6 +237,11 @@ def dev_code_handler(input_data: dict[str, Any]) -> dict[str, Any]:
                 "代码编译不过（编译器说的，不是我说的）：\n"
                 f"{comp.get('errors') or '（没摘到错误详情）'}"
             )
+        # **SQL 绑定**：新增的 Mapper 方法必须有对应的语句
+        binding_problems = check_mapper_bindings(
+            ws, changed_files(ws), base_ref=base_ref,
+        )
+        problems.extend(binding_problems)
         return problems
 
     applied, summary = generate_edits(

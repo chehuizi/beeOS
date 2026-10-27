@@ -114,24 +114,24 @@ def _valid_payload() -> dict:
 
 class TestContractGate:
     def test_valid_payload_passes(self):
-        from boxes.modeling import get_definition
+        from boxes.wms_design import get_definition
         schema = get_definition().get_schema("schema_business_requirement_set")
         assert validate_payload(_valid_payload(), schema) == []
 
     def test_missing_required_field(self):
-        from boxes.modeling import get_definition
+        from boxes.wms_design import get_definition
         schema = get_definition().get_schema("schema_business_requirement_set")
         errors = validate_payload({"set_id": "s1", "requirements": []}, schema)
         assert any("business_goal" in e for e in errors)
 
     def test_wrong_type(self):
-        from boxes.modeling import get_definition
+        from boxes.wms_design import get_definition
         schema = get_definition().get_schema("schema_business_requirement_set")
         errors = validate_payload({**_valid_payload(), "requirements": "not-a-list"}, schema)
         assert any("requirements" in e and "array" in e for e in errors)
 
     def test_illegal_enum_value(self):
-        from boxes.modeling import get_definition
+        from boxes.wms_design import get_definition
         schema = get_definition().get_schema("schema_business_requirement_set")
         bad = _valid_payload()
         bad["requirements"][0]["requirement_type"] = "NOT_A_TYPE"
@@ -139,7 +139,7 @@ class TestContractGate:
         assert any("NOT_A_TYPE" in e for e in errors)
 
     def test_nested_item_missing_field(self):
-        from boxes.modeling import get_definition
+        from boxes.wms_design import get_definition
         schema = get_definition().get_schema("schema_business_requirement_set")
         bad = _valid_payload()
         del bad["requirements"][0]["requirement_id"]
@@ -147,7 +147,7 @@ class TestContractGate:
         assert any("requirement_id" in e for e in errors)
 
     def test_optional_field_may_be_absent(self):
-        from boxes.modeling import get_definition
+        from boxes.wms_design import get_definition
         schema = get_definition().get_schema("schema_business_requirement_set")
         p = _valid_payload()  # 无 context / traceable_to（都 required=False）
         assert validate_payload(p, schema) == []
@@ -193,7 +193,9 @@ class TestIntakeRejectsBeforeFulfillment:
         """空需求集结构上合法（0 条违规）→ 放行 → acceptance 按业务判据拦下"""
         r = trigger_task(
             "wms_design_box", "handle_modeling_request",
-            {"set_id": "s1", "business_goal": "wms", "requirements": []}, store,
+            {"requirement_set_ref": {
+                "set_id": "s1", "business_goal": "wms", "requirements": []}},
+            store,
         )
         assert r["status"] == "completed"
         assert r["acceptance_status"] == "rejected"
@@ -261,7 +263,7 @@ class TestAcceptanceOutcomeCarriesReason:
     def test_accepted_has_no_rejection_class(self, store: TaskRunStore):
         r = trigger_task(
             "wms_design_box", "handle_modeling_request",
-            {
+            {"requirement_set_ref": {
                 "set_id": "s1",
                 "business_goal": "wms 的流程",
                 "requirements": [
@@ -274,7 +276,7 @@ class TestAcceptanceOutcomeCarriesReason:
                     {"requirement_id": "req_met_1", "description": "拣货准确率要达到 99.5%",
                      "requirement_type": "metric", "priority": "must_have"},
                 ],
-            }, store,
+            }}, store,
         )
         assert r["acceptance_status"] == "accepted"
         assert r["rejection_class"] is None
@@ -282,7 +284,9 @@ class TestAcceptanceOutcomeCarriesReason:
     def test_rejection_class_persisted_to_store(self, store: TaskRunStore):
         trigger_task(
             "wms_design_box", "handle_modeling_request",
-            {"set_id": "s1", "business_goal": "wms", "requirements": []}, store,
+            {"requirement_set_ref": {
+                "set_id": "s1", "business_goal": "wms", "requirements": []}},
+            store,
         )
         rec = store.list_recent()[0]
         assert rec["acceptance_status"] == "rejected"

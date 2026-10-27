@@ -1,5 +1,5 @@
 """
-boxes.modeling - 业务建模履约作业路线
+boxes.wms_design - 业务建模履约作业路线
 
 Software Line 第一只 beeline。
 
@@ -58,7 +58,9 @@ WMS_DESIGN_BEELINE = Beeline(
             op_id="parse_requirements",
             type="requirement_parser",
             input_from="external",
-            input="schema_business_requirement_set",
+            # **投料是 ref: 形状**（{requirement_set_ref: {...}}）：
+            # 需求集从上游盒子的产出接过来，不在投料里内联。
+            input="schema_model_task_input",
             output="schema_parsed_requirements",
             next=[NextRef(op_id="classify_requirements")],
             bee=Bee(type="requirement_parser_impl"),

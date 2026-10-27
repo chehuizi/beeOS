@@ -21,14 +21,14 @@ from uuid import uuid4
 # 它引用的 schema id 全部来自本盒的 schemas.py，每个 op 的 handler 都在
 # 本盒的 runner.py 里。顶层一个 beelines/ 目录会让人以为存在一种可复用的
 # 跨盒路线，实际上一条都没有。
-from boxes.modeling.beeline import get_beeline as get_modeling_beeline
+from boxes.wms_design.beeline import get_beeline as get_modeling_beeline
 from boxes.wms_analysis.beeline import get_beeline as get_wms_analysis_beeline
 from boxes.wms_development.beeline import get_beeline as get_wms_development_beeline
 from boxes.wms_ops.beeline import get_beeline as get_wms_ops_beeline
 from boxes.wms_system.beeline import get_beeline as get_wms_system_beeline
 from boxes.wms_testing.beeline import get_beeline as get_wms_testing_beeline
 from boxes.receipt.beeline import get_beeline as get_receipt_capture_beeline
-from boxes.requirement_capture.beeline import get_beeline as get_requirement_capture_beeline
+from boxes.wms_requirement.beeline import get_beeline as get_requirement_capture_beeline
 from boxes.inventory_shortage.runner import RUNNER as INVENTORY_RUNNER
 from boxes.wms_analysis.measure import COMPUTERS as WMS_ANALYSIS_COMPUTERS
 from boxes.wms_analysis.runner import RUNNER as WMS_ANALYSIS_RUNNER
@@ -40,9 +40,9 @@ from boxes.wms_system.measure import COMPUTERS as WMS_SYS_COMPUTERS
 from boxes.wms_system.runner import RUNNER as WMS_SYS_RUNNER
 from boxes.wms_testing.measure import COMPUTERS as WMS_TEST_COMPUTERS
 from boxes.wms_testing.runner import RUNNER as WMS_TEST_RUNNER
-from boxes.modeling import get_definition as get_mod_definition
-from boxes.modeling.measure import COMPUTERS as MODELING_COMPUTERS
-from boxes.modeling.runner import RUNNER as MODELING_RUNNER
+from boxes.wms_design import get_definition as get_mod_definition
+from boxes.wms_design.measure import COMPUTERS as MODELING_COMPUTERS
+from boxes.wms_design.runner import RUNNER as MODELING_RUNNER
 from boxes.wms_analysis import get_definition as get_wms_analysis_definition
 from boxes.wms_development import get_definition as get_wms_development_definition
 from boxes.wms_ops import get_definition as get_wms_ops_definition
@@ -51,12 +51,12 @@ from boxes.wms_testing import get_definition as get_wms_testing_definition
 from boxes.receipt.runner import RUNNER as RECEIPT_RUNNER
 from boxes.receipt import get_definition as get_receipt_definition
 from boxes.receipt.measure import COMPUTERS as RECEIPT_COMPUTERS
-from boxes.requirement_capture import get_definition as get_capture_definition
-from boxes.requirement_capture.measure import COMPUTERS as CAPTURE_COMPUTERS
-from boxes.requirement_capture.runner import RUNNER as CAPTURE_RUNNER
+from boxes.wms_requirement import get_definition as get_capture_definition
+from boxes.wms_requirement.measure import COMPUTERS as CAPTURE_COMPUTERS
+from boxes.wms_requirement.runner import RUNNER as CAPTURE_RUNNER
 from core import metrics as core_metrics
 from core.beeline_models import Beeline
-from core.models import BeeBoxDefinition, FieldDef
+from core.models import BeeBoxDefinition, FieldDef, SchemaDef
 from runtime import BeelineExecutor, create_task_run, evaluate_acceptance
 from runtime.contract import validate_payload
 from runtime.handoff import HandoffError, assemble_handoff
@@ -435,8 +435,14 @@ class TriggerError(ValueError):
     """task 触发校验失败（box 未知 / task_type 未注册 / beeline 不匹配）"""
 
 
-def _sample_field(field: FieldDef) -> Any:
-    """按 FieldDef 生成示例值（payload 骨架）"""
+def _sample_field(field: FieldDef, schemas: Any = None) -> Any:
+    """按 FieldDef 生成示例值（payload 骨架）
+
+    **`ref:` 字段要按目标形状生成整份对象**，不能给空 dict：
+    空 dict 不满足 ref 的必填字段，契约校验会拒——
+    于是看板给出的示例是一份**投不出去的东西**。
+    用户照着示例投，得到的是一句看不懂的契约错误。
+    """
     if field.type == "string":
         return ""
     if field.type == "integer":
@@ -454,26 +460,47 @@ def _sample_field(field: FieldDef) -> Any:
             return field.values[0]
         return "<enum>"
     if field.type == "array":
-        return [_sample_field(field.items)] if field.items else []
+        return [_sample_field(field.items, schemas)] if field.items else []
     if field.type == "object":
-        return {p.name: _sample_field(p) for p in (field.properties or [])}
+        return {p.name: _sample_field(p, schemas) for p in (field.properties or [])}
     if field.type.startswith("ref:"):
-        return {}
+        target = _resolve_schema(field.type[len("ref:"):], schemas)
+        if target is None:
+            return {}
+        return {f.name: _sample_field(f, schemas) for f in target.fields}
+    return None
+
+
+def _resolve_schema(schema_id: str, schemas: Any) -> Any:
+    """按 id 找 schema（ref: 的目标只在本盒的 schemas 里）"""
+    if not schemas:
+        return None
+    if isinstance(schemas, dict):
+        found = schemas.get(schema_id)
+        return found if isinstance(found, SchemaDef) else None
+    for s in schemas:
+        if isinstance(s, SchemaDef) and s.id == schema_id:
+            return s
     return None
 
 
 # 手写示例（演示效果优于 schema 骨架）；缺省回退到 schema 生成
 _EXAMPLE_PAYLOADS: dict[tuple[str, str], dict[str, Any]] = {
     ("wms_design_box", "handle_modeling_request"): {
-        "set_id": "req_set_demo",
-        "business_goal": "建模订单退款流程",
-        "requirements": [
-            {"requirement_id": "req_obj_order", "description": "订单实体", "requirement_type": "object", "priority": "must_have"},
-            {"requirement_id": "req_rule_7days", "description": "退款必须在 7 天内", "requirement_type": "rule", "priority": "must_have"},
-            {"requirement_id": "req_proc_apply", "description": "退款申请流程", "requirement_type": "process", "priority": "must_have"},
-            {"requirement_id": "req_evt_refunded", "description": "退款已完成", "requirement_type": "event", "priority": "should_have"},
-            {"requirement_id": "req_met_sla", "description": "退款处理时长", "requirement_type": "metric", "priority": "should_have"},
-        ],
+        # **需求集整个装在 ref: 字段里**——建模盒的投料走接力通道，
+        # 形状由建模盒自己声明（schema_model_task_input）。
+        # 看板的示例投料也得按这个形状给，否则示例一投就被契约拒。
+        "requirement_set_ref": {
+            "set_id": "req_set_demo",
+            "business_goal": "建模订单退款流程",
+            "requirements": [
+                {"requirement_id": "req_obj_order", "description": "订单实体", "requirement_type": "object", "priority": "must_have"},
+                {"requirement_id": "req_rule_7days", "description": "退款必须在 7 天内", "requirement_type": "rule", "priority": "must_have"},
+                {"requirement_id": "req_proc_apply", "description": "退款申请流程", "requirement_type": "process", "priority": "must_have"},
+                {"requirement_id": "req_evt_refunded", "description": "退款已完成", "requirement_type": "event", "priority": "should_have"},
+                {"requirement_id": "req_met_sla", "description": "退款处理时长", "requirement_type": "metric", "priority": "should_have"},
+            ],
+        },
     },
     ("wms_requirement_box", "capture_business_requirement"): {
         "narrative": (
@@ -594,7 +621,7 @@ def list_task_entries(box_id: str) -> list[dict[str, Any]]:
         sample = _EXAMPLE_PAYLOADS.get((box_id, task.type))
         if sample is None:
             sample = (
-                {f.name: _sample_field(f) for f in schema.fields}
+                {f.name: _sample_field(f, definition.schemas) for f in schema.fields}
                 if schema is not None
                 else {}
             )
@@ -1316,7 +1343,7 @@ def _structure_business_text_llm(text: str) -> dict[str, Any]:
     raw.setdefault("context", "")
 
     # 第 1 道：结构契约
-    from boxes.modeling import get_definition
+    from boxes.wms_design import get_definition
     schema = get_definition().get_schema("schema_business_requirement_set")
     errors = validate_payload(raw, schema)
     if errors:

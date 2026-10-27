@@ -1,5 +1,5 @@
 """
-boxes.modeling.domain - WMS 领域词表 + 机械绑定器
+boxes.wms_design.domain - WMS 领域词表 + 机械绑定器
 
 这只盒子是 **WMS 域建模盒**。名字写着 WMS，schema 里就得有 WMS 的概念；
 只有名字没有词表，就是「换个招牌的通用盒」——跟这项目反复治的那个病

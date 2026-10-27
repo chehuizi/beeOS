@@ -82,8 +82,8 @@ def _code_strings_and_names(path: pathlib.Path) -> tuple[list[str], list[str]]:
 # 任何盒子出现过的 op 名（从三只盒子的 runner 里读出来，不手抄——手抄会漂）
 def _all_box_op_types() -> set[str]:
     from boxes.inventory_shortage.runner import INVENTORY_HANDLERS
-    from boxes.modeling.runner import MODEL_HANDLERS
-    from boxes.requirement_capture.runner import CAPTURE_HANDLERS
+    from boxes.wms_design.runner import MODEL_HANDLERS
+    from boxes.wms_requirement.runner import CAPTURE_HANDLERS
     return set(INVENTORY_HANDLERS) | set(MODEL_HANDLERS) | set(CAPTURE_HANDLERS)
 
 
@@ -116,7 +116,7 @@ BUSINESS_WORDS = (
 # 代价：删掉建模盒，捕获盒 import 不动。要消除得把契约引用声明化
 #（捕获盒 definition 里写下游 box_id，由解析层查），本轮记债。
 KNOWN_CROSS_BOX_IMPORTS = {
-    "boxes/requirement_capture/runner.py → boxes.modeling",
+    "boxes/wms_requirement/runner.py → boxes.wms_design",
 }
 
 
@@ -169,8 +169,8 @@ class TestBoxIsSelfContained:
     def test_each_runner_carries_its_own_ops(self):
         """每只盒子都带得走自己的 op 实现"""
         from boxes.inventory_shortage.runner import INVENTORY_HANDLERS, RUNNER as INV
-        from boxes.modeling.runner import MODEL_HANDLERS, RUNNER as MOD
-        from boxes.requirement_capture.runner import CAPTURE_HANDLERS, RUNNER as CAP
+        from boxes.wms_design.runner import MODEL_HANDLERS, RUNNER as MOD
+        from boxes.wms_requirement.runner import CAPTURE_HANDLERS, RUNNER as CAP
 
         for handlers, runner, name in [
             (INVENTORY_HANDLERS, INV, "inventory_shortage"),
@@ -275,8 +275,8 @@ class TestRegistry:
 
     def test_a_runner_never_runs_another_boxes_ops(self):
         """跨盒执行要显式换 runner，不许一只盒子的 runner 顺手跑别人的 op"""
-        from boxes.modeling.runner import RUNNER as MOD
-        from boxes.requirement_capture.runner import RUNNER as CAP
+        from boxes.wms_design.runner import RUNNER as MOD
+        from boxes.wms_requirement.runner import RUNNER as CAP
 
         assert not MOD.supports("requirement_extractor")
         assert not CAP.supports("model_generator")

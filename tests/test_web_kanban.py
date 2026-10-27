@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 from boxes.inventory_shortage.runner import RUNNER as INVENTORY_RUNNER
-from boxes.modeling.runner import RUNNER as MODELING_RUNNER
+from boxes.wms_design.runner import RUNNER as MODELING_RUNNER
 from kanban.trigger import box_manifest
 from kanban.web import (
     HTML_PAGE,
@@ -36,8 +36,8 @@ from runtime.store import TaskRunStore
 from runtime import create_task_run, BeelineExecutor
 from boxes.inventory_shortage import get_definition as get_inv_def
 from boxes.inventory_shortage.beeline import get_beeline as get_inv_beeline
-from boxes.modeling import get_definition as get_mod_def
-from boxes.modeling.beeline import get_beeline as get_mod_beeline
+from boxes.wms_design import get_definition as get_mod_def
+from boxes.wms_design.beeline import get_beeline as get_mod_beeline
 
 # 看板盒子名单 = 注册表按业务流向排出来的那一串。
 # 手抄进各个测试会漂：加一只盒子就得改 N 处，漏一处就是一条假绿。
@@ -562,7 +562,7 @@ class TestTriggerApi:
         status, data = self._post(url, {
             "box_id": "wms_design_box",
             "task_type": "handle_modeling_request",
-            "payload": {
+            "payload": {"requirement_set_ref": {
                 "set_id": "req_api_1",
                 "business_goal": "把入库上架和拣货出库管清楚",
                 # description 是真 WMS 需求。以前这里是 "x" 和「建模退款流程」——
@@ -574,7 +574,7 @@ class TestTriggerApi:
                     {"requirement_id": "r_met", "description": "拣货准确率要达到 99.5%",
                      "requirement_type": "metric", "priority": "must_have"},
                 ],
-            },
+            }},
         })
         assert status == 200
         assert data["status"] == "completed"
@@ -603,13 +603,13 @@ class TestTriggerApi:
         status, data = self._post(url, {
             "box_id": "wms_design_box",
             "task_type": "handle_modeling_request",
-            "payload": {
+            "payload": {"requirement_set_ref": {
                 "set_id": "req_api_2",
                 "business_goal": "x",
                 "requirements": [
                     {"requirement_id": "r_obj", "description": "x", "requirement_type": "object", "priority": "must_have"},
                 ],
-            },
+            }},
         })
         assert status == 200
         assert data["status"] == "completed"
@@ -671,7 +671,9 @@ class TestTriggerApi:
         assert len(entries) == 1
         assert entries[0]["task_type"] == "handle_modeling_request"
         # 示例 payload 符合 task_schema 顶层字段
-        assert set(entries[0]["sample_payload"]) >= {"set_id", "business_goal", "requirements"}
+        # （设计盒的需求集走 ref: 通道 → 顶层只有 requirement_set_ref）
+        assert set(entries[0]["sample_payload"]) >= {"requirement_set_ref"}
+        assert "requirements" in entries[0]["sample_payload"]["requirement_set_ref"]
         # 内部工位图：beeline 7 个 op 按声明顺序
         assert entries[0]["beeline_ops"] == [
             "parse_requirements",
@@ -788,7 +790,11 @@ class TestStructureApi:
             body=json.dumps({
                 "box_id": "wms_design_box",
                 "task_type": "handle_modeling_request",
-                "payload": structured["payload"],
+                # **走接力通道**：需求集整个从需求盒的产出接过来。
+                # 以前这里是手工把产出的字段摊进 payload——
+                # 需求集改一次形状，抄的地方就漏一次。
+                "payload": {},
+                "handoff": {"requirement_set_ref": structured["task_run_id"]},
             }).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )

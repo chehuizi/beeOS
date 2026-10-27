@@ -24,7 +24,8 @@ runtime/
 
 > **可见性**：看板只展示 `BOX_REGISTRY`（trigger.py）里已注册的盒子；
 > 未注册盒子的历史记录保留在 JSONL 审计日志里，只是不显示、不可触发。
-> 当前聚焦业务建模履约盒子，`order_exception_box` 代码保留在仓库但未注册。
+> 当前已注册 8 只盒子（WMS 域 7 只 + 小票识别 1 只），
+> `order_exception_box` 代码保留在仓库但未注册。
 
 ## CLI 入口
 
@@ -71,7 +72,12 @@ runtime/
 | `GET /` | HTML 页面 |
 | `GET /api/data` | JSON 全量 dashboard 数据 |
 | `GET /api/data?box=xxx` | JSON 单 box 数据 |
+| `GET /api/boxes` | 盒子目录 + 各自 API 面 |
+| `GET /api/runs/{run_id}` | 单次履约的完整记录（含产出本体）|
+| `GET /api/boxes/{id}` | 单只盒子的定义（它是什么）|
+| `GET /api/boxes/{id}/artifacts` | 单只盒子产出过的产物（形状由 result_schema 定）|
 | `POST /api/trigger` | 触发 1 次履约（`{box_id, task_type, payload}`），返回执行轨迹 `op_trace` + 验收结果 |
+| `POST /api/structure` | 自然语言业务表述 → 结构化表达（走盒子的 task，不是影子函数）|
 
 ## 数据落盘
 
@@ -101,8 +107,7 @@ TaskRunStore 用 JSONL 追加写（每行一条 record）：
 ```python
 from runtime.store import TaskRunStore
 from runtime import create_task_run, BeelineExecutor, evaluate_acceptance
-from boxes.inventory_shortage import get_definition
-from beelines.inventory_shortage import get_beeline
+from boxes.inventory_shortage import get_definition, get_beeline
 
 box = get_definition()
 beeline = get_beeline()
@@ -130,7 +135,8 @@ store.append(tr, box_id=box.id, acceptance_status=eval_result.status.value)
 
 ## 限制
 
-- 当前 store 是"调用方主动 append"——executor 本身没自动接入
-- 后续可以让 executor 在 task_run 终态时自动落盘
-- 没有 instance / runtime 视图（设计稿有，PoC 还没做）
-- Web 看板无认证（仅本地开发用）|
+- store 由调用方 append——`trigger.py` 的 `trigger_task` 会落盘，但 executor 本身不自动落盘
+- 触发是**同步执行**（建模盒 7 op 毫秒级，POST 直接返回终态）；
+  真实 worker 接入后应异步化（POST 只落盘 triggered 状态）
+- 没有 instance / runtime 视图（设计稿有，还没做）
+- Web 看板无认证（线上部署也是裸的——这是个已知缺口，不是设计选择）|

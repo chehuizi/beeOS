@@ -1,5 +1,8 @@
 # beeOS / beeBox 设计 v0.1
 
+> **这是设计稿，实现已经往前走。** 本文定的是概念与契约（仍然有效），
+> 但仓库现状（8 只盒子全部 live、beeline 住在盒子里、盒间接力通道已落地）
+> 以 [仓库 README](../README.md) 为准——本文停在 v0.1 草稿时的两只盒子架构。
 > **状态**：v0.1 草稿 · 修订中
 > **日期**：2026-09-13
 > **定位**：beeOS = 业务履约操作系统（Business Fulfillment Operating System），beeBox = bounded 业务履约单元（bounded Business Fulfillment Unit）

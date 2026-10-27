@@ -1,5 +1,9 @@
 # 示例：订单异常履约盒（Order Exception Fulfillment Box）
 
+> **这是 v0.1 示例，本仓的 `boxes/inventory_shortage/` 已与它分家。**
+> 示例里描述的是最早的订单异常盒；当前代码以
+> [`boxes/inventory_shortage/`](../../boxes/inventory_shortage/README.md) 为准
+> （该盒**未注册**进看板，代码保留）。
 > **状态**：v0.1 示例
 > **日期**：2026-09-18
 > **对应**：[beebox-design.md](./beebox-design.md) · [beebox-gtm.md §2 Catalog](./beeos-gtm.md#2-履约盒子-catalog) · [beebox-definition-schema.md](./beebox-definition-schema.md) · [beebox-beeline-schema.md](./beebox-beeline-schema.md)

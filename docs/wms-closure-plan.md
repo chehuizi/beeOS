@@ -2,6 +2,11 @@
 
 > 写于 2026-10-22，基线 commit `a61d0fd`。
 > 本文里的每条可行性结论都来自本次实测，不是推断。
+>
+> **2026-10-28 更新**：阶段 2、阶段 3 均已完成——开发盒真腿（`ba92d28`）、
+> 运维盒真腿（`ef52b61`）、WMS 侧效期修复（WMS 仓 `c0a7aa2`，62 条单测绿）。
+> 本文其余部分保持当时的原始判断，**未按今天的实现重写**——这是一份带日期的实测记录，
+> 不是活文档；现状看仓库根 README 与各盒子 README。
 
 ---
 
@@ -34,10 +39,10 @@ gap_attribution / next_requirement_seeded）真的在问「业务价值」。
 
 ### 1.1 WMS 真能构建、真能跑测试
 ```
-cd /tmp/wms-src2/server && mvn -o test
-→ Tests run: 61, Failures: 0, Errors: 0, Skipped: 0
+cd /Users/chehuizi/Desktop/code/wms/server && mvn -o test
+→ Tests run: 62, Failures: 0, Errors: 0, Skipped: 0
 ```
-（本次复跑确认，2026-10-22。）
+（2026-10-22 首次复跑确认是 61 条；效期修复补了回归测试后为 62 条。）
 
 ### 1.2 隔离验证实例跑得通完整业务单据流
 本机 PostgreSQL 16 + JDK21 + Maven 齐备。起独立库 `wms_verify` +
@@ -363,15 +368,28 @@ curl -X POST localhost:8765/api/trigger -d '{
     模型交白卷会被回喂重做（上一轮真跑就撞上：模型说「看板已经实现了」，
     而源码里连 `pickAccuracy` 都没有）
 - ⬜ ops 真腿（变更核对 + 回写档案）
+  → **已完成**（`ef52b61`）：3 跳 `ops_intake → ops_handle → ops_packager`，
+  真读线上状态并回写系统档案；5 条判据含 `ops_determined`
 - **验收**：一条真需求 → dev 盒在隔离工作区里真写出代码 → 编译过 + 单测绿 +
   可复现 + 改动落在方案覆盖的位置 + 制品追得到具体提交。
   实测（2026-10-26）：「拣货准确率要能在库存看板看得到」→ 4 个文件 / 31 行 →
   提交 `3db4da7b`（分支 `beeos/dev-3db4da7b`）→ 4 条判据全绿。
 
-### 阶段 3：WMS 侧修复（可选，独立仓）
+### 阶段 3：WMS 侧修复（独立仓）✅ 已完成
 修 `wms_putaway_task` 缺 `produced_date` / `expire_date` 两列 + 传递链 +
-补回归测试（`PutawayServiceImplTest` 现在完全不断言效期）。
-**这正好是 dev 盒的第一个真实用例。**
+补回归测试（`PutawayServiceImplTest` 现在会断言效期随货移动）。
+
+**落地的样子**（WMS 仓 `c0a7aa2`）：
+- 迁移 `V4__putaway_task_expiry.sql`：补两列 + 从 `wms_inbound_receipt_item`
+  回填历史任务（验证实例 53/53 条补上）
+- `PutawayTask` / `PutawayTaskVO` 补两字段，mapper 带上
+- 收货生成任务时带效期，上架时传给 `lockOrCreate`
+- 62 条单测全绿
+
+**注意**：本文 §1.3 描述的「效期在上架时丢失」现在**已经不成立**——
+它记录的是修复前的事实。复现请用修复前的代码。
+
+> 这正好是 dev 盒的第一个真实用例。
 
 ---
 

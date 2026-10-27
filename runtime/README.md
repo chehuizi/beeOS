@@ -10,10 +10,17 @@ runtime/
   __init__.py            # 统一导出
   models.py              # TaskRun durable object + 9 状态机 + Acceptance 4 状态
   executor.py            # BeelineExecutor（顺序 / 分支推进 + when 评估）
-  mock_runner.py         # MockOperationRunner（业务 op 类型映射）
+  runner.py              # HandlerRunner（按 op.type 找 handler，纯机制）
+  contract.py            # 投料结构契约闸（履约前第一道闸）
+  handoff.py             # 盒间接力：上游产出 → 下游 ref 字段
   acceptance.py          # Acceptance 评估器（4 状态转移）
   queen.py               # Queen escalation hook
+  store.py               # TaskRunStore（JSONL 持久化 + 查询）
+  llm.py                 # LLM 客户端（只管传输与解析）
 ```
+
+**这个包不含任何业务知识。** handler 在各盒子的 `runner.py` 里，
+runtime 只负责「按 `op.type` 找到该跑的 handler 并执行」。
 
 ## 流程
 
@@ -62,8 +69,7 @@ flowchart TB
 ## 端到端冒烟
 
 ```python
-from boxes.inventory_shortage import get_definition
-from beelines import get_beeline
+from boxes.inventory_shortage import get_definition, get_beeline
 from runtime import (
     create_task_run, BeelineExecutor, evaluate_acceptance,
     default_queen_escalation_handler,
@@ -97,18 +103,18 @@ eval_result = evaluate_acceptance(
 # → status: ACCEPTED / REJECTED / COMPENSATING_ACCEPTANCE
 ```
 
-## Mock Operation 覆盖
+## op → handler 的映射在哪
 
-| op.type | handler | 输出 |
-|---|---|---|
-| `validate_exception` | diagnose | exception_type / severity / customer_tier |
-| `warehouse_inventory_lookup` | 替代仓 | resolution_type=fulfilled |
-| `inter_warehouse_transfer` | 跨仓调拨 | resolution_type=fulfilled |
-| `replenishment_check` | 补货 ETA | resolution_type=partial_fulfilled |
-| `product_substitution` | 替代品 | resolution_type=fulfilled |
-| `compensation_calc` | 补偿计算 | resolution_type=refunded |
-| `customer_notification` | 通知 | customer_notified=true |
-| `human_escalation` | 升级人工 | resolution_type=escalated |
+**不在 runtime 里**。runtime 的 `runner.py` 只做「按 `op.type` 找 handler」这一件事，
+handler 由各盒子自己提供（`boxes/<box>/runner.py`）。
+
+例：订单异常盒的 8 个 op（`diagnose_exception` / `try_alternative_warehouse` /
+`try_inter_warehouse_transfer` / `try_replenishment_eta` / `try_substitute_product` /
+`calculate_compensation` / `notify_customer` / `escalate_to_human`）
+全部实现在 `boxes/inventory_shortage/runner.py`。
+
+这条边界是硬边界：**runtime 里出现任何 WMS 词、票据词、需求词，就是越界了**
+（`tests/test_layering.py` 盯着）。
 
 ## Queen 自治边界
 
@@ -119,8 +125,10 @@ PoC 2 实现 escalation decision hook：
 
 Queen 不可改：contract / acceptance / release / policy（bounded autonomy）。
 
-## PoC 2 已暴露的真实问题
+## PoC 2 时期暴露的真实问题（历史记录）
 
-- mock runner 没填满所有 result 字段，导致 acceptance 大部分 rule fail
+- 早期 mock runner 没填满所有 result 字段，导致 acceptance 大部分 rule fail
 - acceptance rule 设计需要 executor 辅助填字段（如 `order_state_consistent`、`evidence_complete`）
-- 下一轮改进 mock + executor 协作模式
+
+这两条都已在「handler 归盒子、runtime 只做分派」的边界下解决：
+字段填不满是盒子的责任，不是 runtime 的。

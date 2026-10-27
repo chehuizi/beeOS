@@ -2,6 +2,9 @@
 
 > 第一只业务履约盒子——按政策在 SLA 内给客户一个符合政策的可验证结果。
 
+> **状态：未注册进 `BOX_REGISTRY`**——代码完整保留（definition / beeline / runner），
+> 但看板不显示、投料口不接收。恢复时把它挂回 `BOX_REGISTRY` 即可。
+
 ## 业务定位
 
 订单履约过程中发生的异常（库存不足 / 支付失败 / 物流延迟 / 客户投诉 /
@@ -14,7 +17,9 @@
   continuous_improvement）
 - **Result**：resolution_result 业务结果
 
-基础设施是假的（runtime / executor / worker 待下一阶段实现）。
+基础设施也已经是真的：runtime / executor / store / 验收评估器都已落地，
+`docs/examples/order-exception-box.md` 里那份 v0.1 示例是**历史设计稿**，
+实现以本目录的 `definition.py` 为准。
 
 ## 数据形状
 
@@ -53,6 +58,8 @@ flowchart TB
 - `schemas.py` — 4 个业务 schema 定义（order_request / address /
   order_exception / resolution_result）
 - `definition.py` — 完整 BeeBoxDefinition 实例 + get_definition 函数
+- `beeline.py` — beeline_inventory_shortage_v3（8 个 operation）
+- `runner.py` — 8 个 op 的 handler
 
 ## 加载方式
 

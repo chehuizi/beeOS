@@ -1,5 +1,7 @@
 # beeOS GTM（Go-To-Market）
 
+> **这是商业定位稿，产品形态已经往前走。** 目录里的盒子已经从两只长到八只，
+> 商业叙述以本文为准，**产品现状**以 [仓库 README](../README.md) 为准。
 > **状态**：v0.1 草稿 · 修订中
 > **日期**：2026-09-18
 > **对应**：[beebox-design.md §0.5 产品语言](./beebox-design.md#05-产品语言与商业叙事) · [§1.1 第一性定义](./beebox-design.md#11-第一性定义)（bounded Business Fulfillment Unit）

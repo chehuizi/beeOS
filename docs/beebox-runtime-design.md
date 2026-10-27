@@ -1,5 +1,8 @@
 # BeeBox runtime 设计
 
+> **这是设计稿，实现已经往前走。** 本文设计的是「runtime 平台」这一层，
+> 而仓库里的 `runtime/` 是**盒子执行内核**（另一个东西）——两者不要混。
+> 仓库现状见 [README](../README.md)。
 > **状态**：v0.1 草稿 · 修订中
 > **日期**：2026-09-15
 > **对应**：[beebox-design.md §1.6 运行关系](./beebox-design.md#16-运行关系) · §3.3 instance · §3.4 履约实现 · [beebox-runtime-schema.md](./beebox-runtime-schema.md)

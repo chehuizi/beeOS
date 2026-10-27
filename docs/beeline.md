@@ -1,4 +1,4 @@
-# beelines - 履约作业路线（procedure 实现）
+# beeline - 履约作业路线（procedure 实现）
 
 > beeline 是 1 类任务的标准作业路线，本质是 1 张有向图——节点是 operation，
 > `next` 字段是节点之间的有向边（支持顺序 / 并发 / 分支）。
@@ -22,7 +22,7 @@ beeline **住在盒子里**：`boxes/<box>/beeline.py`。
 位置和引用方式是两件事。
 
 将来如果真出现跨盒流程（一条发版路线串起 dev → test → ops），
-那应该另立一层（比如 `flows/`），不是把 `beelines/` 留在原地等它长大——
+那应该另立一层（比如 `flows/`），而不是把顶层那个独立目录留着等它长大——
 而且跨盒 beeline 需要先有模型支持：`Operation.input_from` 现在只接受
 `"external"` 或同一条 beeline 内的 op_id。
 
@@ -35,7 +35,7 @@ flowchart LR
     Beeline --> OpN[operation]
 ```
 
-## 布局
+## 布局（节选两例）
 
 ```
 boxes/
@@ -51,6 +51,8 @@ boxes/
     schemas.py
     baseline/                # 盒子自带的基线资产
 ```
+
+其余 7 只盒子同构：每只一个 `beeline.py`，目录清单见仓库根 README 的盒子表。
 
 ## 第一只 beeline：beeline_inventory_shortage_v3 (v12)
 

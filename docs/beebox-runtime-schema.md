@@ -1,5 +1,7 @@
 # BeeBox runtime schema
 
+> **这是接口规格，实现已经往前走。** 字段形状仍然有效，
+> 但仓库现状见 [README](../README.md)。
 > **状态**：v0.1 草稿 · 修订中
 > **日期**：2026-09-15
 > **对应**：[beebox-runtime-design.md](./beebox-runtime-design.md) · [beebox-design.md §1.6 运行关系](./beebox-design.md#16-运行关系) · §3.3 instance

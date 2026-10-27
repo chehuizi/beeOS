@@ -1,75 +1,97 @@
-# 业务建模履约盒（wms_design_box）
+# WMS 仓储建模履约盒（wms_design_box）
 
-> Software Line 第一只盒子——按结构化业务需求产出可机械验证的业务模型包。
+> 按结构化仓储需求产出可机械验证的 WMS 模型包——实体、约束、指标，外加可判定的预期。
 
 ## 业务定位
 
-承接**企业业务软件建设的"建模"业务责任**——从结构化业务需求产出可被业务方验收的业务模型包（含模型元素 + 5 项机械验证证据）。
+链条的第二环。它回答的是：**这条需求在 WMS 领域里到底是什么**。
 
-## 关键设计：5 项机械 acceptance（无主观项）
+产出分三块：
 
-业务建模盒的核心挑战是"建模质量难量化"。本盒通过把输入**结构化**（每条需求带 id / type / priority）和要求输出带**显式 traceability**（每个 model 元素记录 trace_to requirement_id），让验收规则全部可机器验证：
+- **模型元素**——WMS 实体（SKU / 货主 / 库位 / 库存 / 批次 / 波次 / 盘点）、
+  WMS 约束（库位占用唯一 / 先进先出 / 安全库存 / 波次合并…）、WMS 运营指标
+- **可判定的预期**（`expectations`）——每条需求落到哪个 WMS 概念上，
+  概念的标准表述是什么，业务原话的逐字证据在哪
+- **验证证据**——覆盖 / 一致性 / 引用 / 结构 / 指标五类
 
-| 验收项 | metric | op | value | 可验方式 |
+「预期」这一层是设计盒的产出，不是需求盒的：需求盒手里只有业务原话，
+做不出**可判定**的预期；而「怎么测」是测试盒的知识，不该由设计盒替它决定。
+
+## 判据与例外
+
+**8 条判据**，全部机械可判，没有「模型好不好」这种主观项：
+
+| # | 判据 | 口径 | op | value |
 |---|---|---|---|---|
-| 1 | requirement_coverage | gte | 100 | 所有 requirement_id 在 model 元素的 trace_to 中出现 |
-| 2 | rule_consistency | eq | true | 规则无矛盾（解析 + 静态分析）|
-| 3 | reference_integrity | eq | true | 引用全部解析成功 |
-| 4 | structural_compliance | eq | true | 结构符合建模标准 |
-| 5 | metrics_defined | eq | true | 每个 metric 有 target 值 |
+| 1 | `requirement_coverage` | 每条需求都被模型元素认领 | gte | 100 |
+| 2 | `rule_consistency` | 规则无矛盾（WMS 约束互斥表）| eq | true |
+| 3 | `reference_integrity` | 引用全部解析成功 | eq | true |
+| 4 | `structural_compliance` | 结构符合建模标准 | eq | true |
+| 5 | `metrics_defined` | 每个指标有 target 值 | eq | true |
+| 6 | `wms_binding` | 认得出这是 WMS 模型 | eq | true |
+| 7 | `wms_rule_binding` | 约束也认得出是 WMS 的 | eq | true |
+| 8 | `expectation_completeness` | 认出的每个 WMS 概念都变成一条预期 | eq | true |
 
-**没有"模型好不好"这种主观项**——所有验收都是可观察可机器验证的事实。
+后两条是 **WMS 专属的**：少了它们，一个纯通用的「当库存 > 0 时…」照样前 5 条全绿，
+而盒子挂着 WMS 的招牌。
+
+**4 条例外**：需求数超限 → 升级；`rule_consistency` 为假 → 回滚；
+没有业务负责人 → 不交付；有需求绑不上 WMS 概念 → 升级。
+
+## 已知盲区（如实声明）
+
+WMS 绑定是**关键词机械匹配**，认不出同义改写（「拣货」/「按订单取货」/「order picking」
+认作三个词）。认不出的需求会被 `wms_binding` 判红并点名——
+**宁可红，不要假装绑上了**。
+
+## beeline 7 ops
+
+```
+parse_requirements → classify_requirements → generate_model_elements →
+verify_coverage → check_consistency → generate_evidence → package_model
+```
+
+全部 ops 用 `idempotency.mode=required, key=set_id`，重复建模产出同模型。
 
 ## 数据形状
 
 ```mermaid
 flowchart TB
     Def[BeeBoxDefinition]
-    Def --> Schemas[schemas block - 7 schemas]
+    Def --> Schemas[schemas block - 11 schemas]
     Def --> Task[task Intent]
     Def --> Result[result Contract]
     Def --> Queen[queen Policy]
     Def --> Metrics[metrics]
 
     Schemas --> S1[requirement_set 输入]
-    Schemas --> S2[parsed_requirements]
-    Schemas --> S3[classified_requirements]
-    Schemas --> S4[model_elements]
-    Schemas --> S5[model_evidence]
-    Schemas --> S6[business_model_package 输出]
-    Schemas --> S7[requirement 内部]
+    Schemas --> S2[model_elements]
+    Schemas --> S3[model_expectations]
+    Schemas --> S4[model_evidence]
+    Schemas --> S5[business_model_package 输出]
 
     Task --> T1[handle_modeling_request]
     T1 --> BL[beeline_wms_design_v1]
 
-    Result --> R1[5 acceptance rules]
-    Result --> R2[3 exception rules]
+    Result --> R1[8 acceptance rules]
+    Result --> R2[4 exception rules]
 ```
 
-## beeline 7 ops 顺序链
+## 文件
 
-```
-parse_requirements → classify_requirements → generate_model_elements →
-verify_coverage → check_consistency → generate_evidence → package_model (terminal)
-```
-
-全部 ops 用 `idempotency.mode=required, key=set_id`，重复建模产出同模型。
-
-## 与 box #1（订单异常）的关键差异
-
-| 维度 | box #1 订单异常（运营线）| box #2 业务建模（软件线）|
-|---|---|---|
-| 产品线 | Business Operations Fulfillment | Business Software Fulfillment |
-| 输入 | 异常事件（半结构化）| 业务需求集（全结构化）|
-| 履约程序 | 4 个 try_* 优先级链 + 分支 | 7 ops 顺序链 |
-| Acceptance | 5 条（含 SLA / 通知 / 退款）| 5 条（全机械：无主观项）|
-| 异常类型 | 业务异常（库存/支付/物流）| 模型异常（矛盾/缺引用/超量）|
+- `__init__.py` — 入口（`get_definition`）
+- `schemas.py` — 11 个 schema
+- `definition.py` — BeeBoxDefinition 实例
+- `domain.py` — WMS 概念词表（实体 / 约束 / 指标 + 例词 + 代码落点）
+- `binder.py` — 需求 ↔ WMS 概念绑定
+- `runner.py` — 7 个 op 的 handler
+- `measure.py` — 指标采集
+- `beeline.py` — beeline_wms_design_v1
 
 ## 加载
 
 ```python
-from boxes.wms_design import get_definition
-from beelines.modeling import get_beeline
+from boxes.wms_design import get_definition, get_beeline
 from runtime import create_task_run, BeelineExecutor, evaluate_acceptance
 
 box = get_definition()
@@ -80,30 +102,11 @@ input_data = {
     "business_goal": "建模订单退款流程",
     "requirements": [
         {"requirement_id": "req_obj_1", "description": "订单实体", "requirement_type": "object", "priority": "must_have"},
-        # ...
     ],
 }
 
 task_run = create_task_run(...)
-task_run = BeelineExecutor().execute(task_run, beeline, input_data)
+task_run = BeelineExecutor(RUNNER).execute(task_run, beeline, input_data)
 eval_result = evaluate_acceptance(task_run, box.result)
-# → ACCEPTED (5/5 pass) / REJECTED / COMPENSATING_ACCEPTANCE
+# → ACCEPTED / REJECTED / COMPENSATING_ACCEPTANCE
 ```
-
-## Software Line 完整链路
-
-```
-业务建模盒 (建模)
-  ↓ Validated Business Model Package
-业务系统开发盒 (开发)
-  ↓ Software Release
-软件验收盒 (验收)
-  ↓ Accepted Release
-软件部署盒 (部署)
-  ↓ Running Instance
-软件运营盒 (运营)
-  ↓ SLA 履约报告
-  └─→ 反馈给业务建模（持续改进）
-```
-
-每段是独立 Business Fulfillment，盒子之间通过**已验收的业务结果**连接。

@@ -331,10 +331,72 @@ def _validate_edit(
     text = path.read_text(encoding="utf-8")
     count = text.count(old)
     if count == 0:
-        raise CodegenError(f"{rel}：找不到要替换的原文片段（old 逐字命中 0 次）")
+        # **缩进/行尾差异的容错**：模型是照着文件抄的，
+        # 抄歪一格缩进很常见——那不是「改错地方」，是「抄错」，
+        # 直接判它失败等于让它瞎猜。
+        # 归一化后**仍然要求唯一**：多处命中照样拒绝（不许瞎改）。
+        norm_old = _normalize(old)
+        norm_text = _normalize(text)
+        norm_count = norm_text.count(norm_old) if norm_old else 0
+        if norm_count == 1:
+            # 唯一命中：用原文里**真实的那一段**替换（保住原缩进）
+            span = _find_normalized_span(text, old)
+            if span is not None:
+                return path, text[span[0]:span[1]], new
+        if norm_count > 1:
+            # **多处命中 = 不许瞎改**：归一化之后仍不唯一，
+            # 说明模型挑的锚点本身就有歧义——那该换锚点，不是换地方。
+            raise CodegenError(
+                f"{rel}：要替换的原文片段（忽略缩进后）出现 {norm_count} 次（必须唯一）。\n"
+                f"**请换一个只出现一次的短锚点**（文件里长这样）：\n"
+                f"{_tail_for_error(text)}"
+            )
+        raise CodegenError(
+            f"{rel}：找不到要替换的原文片段（old 逐字命中 0 次）。\n"
+            f"**你要替换的那段原文，文件里现在长这样（从这里逐字复制）：**\n"
+            f"{_tail_for_error(text)}\n"
+            f"（old 必须逐字取自上面这段；抄不准就用一个**短锚点**，"
+            f"比如 `</mapper>` 这种只出现一次的行）"
+        )
     if count > 1:
-        raise CodegenError(f"{rel}：要替换的原文片段出现 {count} 次（必须唯一）")
+        raise CodegenError(
+            f"{rel}：要替换的原文片段出现 {count} 次（必须唯一）。\n"
+            f"**请换一个只出现一次的短锚点**（文件里长这样）：\n"
+            f"{_tail_for_error(text)}"
+        )
     return path, old, new
+
+
+def _normalize(text: str) -> str:
+    """归一化：逐行去掉首尾空白（只用于「抄歪了缩进」的容错比对）"""
+    return "\n".join(line.strip() for line in text.splitlines())
+
+
+def _find_normalized_span(text: str, old: str) -> Optional[tuple[int, int]]:
+    """在原文里找到「归一化后等于 old」的那一段的真实位置
+
+    逐行扫描：用归一化后的行序列去比，命中后再把原文那一段切出来。
+    """
+    old_lines = [line.strip() for line in old.splitlines()]
+    if not old_lines:
+        return None
+    src_lines = text.splitlines(keepends=True)
+    norm_src = [line.strip() for line in src_lines]
+    n = len(old_lines)
+    for i in range(len(norm_src) - n + 1):
+        if norm_src[i:i + n] == old_lines:
+            start = sum(len(l) for l in src_lines[:i])
+            end = sum(len(l) for l in src_lines[:i + n])
+            return start, end
+    return None
+
+
+def _tail_for_error(text: str, lines: int = 25) -> str:
+    """给模型看的文件末尾（报错要带材料，否则它只能瞎猜）"""
+    body = text.splitlines()
+    tail = body[-lines:]
+    prefix = "…（前面省略）\n" if len(body) > lines else ""
+    return prefix + "\n".join(tail)
 
 
 def apply_edits(

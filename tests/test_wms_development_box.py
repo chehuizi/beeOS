@@ -267,6 +267,55 @@ class TestEditsAreAppliedMechanically:
                 "file": "server/src/main/java/A.java", "old": "", "new": "x",
             }])
 
+    def test_the_error_carries_the_material_the_model_needs_to_fix_it(self, ws):
+        """报错必须带**文件内容**——不然模型只能瞎猜
+
+        2026-10-27 实测：模型要往 ReportMapper.xml 里加一条 <select>，
+        抄的 old 片段和原文差了一点缩进 → 命中 0 次 → 报错只说
+        「old 逐字命中 0 次」。它看不见文件长什么样，
+        三轮都在瞎抄，最后整个履约中止。
+
+        跟「编译器的错误是最好的回喂材料」同一条：
+        **报错要带着能修它的材料**，不是只说「错了」。
+        """
+        with pytest.raises(codegen.CodegenError) as err:
+            codegen.apply_edits(ws, [{
+                "file": "server/src/main/java/A.java",
+                "old": "int nope = 0;", "new": "x",
+            }])
+        message = str(err.value)
+        assert "server/src/main/java/A.java" in message
+        assert "int b = 2;" in message, (
+            "报错里必须带上文件里的真实内容，模型才有材料照着抄"
+        )
+
+    def test_indentation_slips_are_tolerated_when_the_match_is_unique(self, ws):
+        """抄歪一格缩进 ≠ 改错地方
+
+        模型是照着文件抄的，缩进抄歪很常见。
+        归一化后**仍然要求唯一命中**——多处命中照样拒绝（不许瞎改）。
+        """
+        applied = codegen.apply_edits(ws, [{
+            "file": "server/src/main/java/A.java",
+            # 原文是顶格的，这里抄成了带缩进的
+            "old": "    int b = 2;", "new": "    int b = 20;",
+        }])
+        assert applied == ["server/src/main/java/A.java"]
+        text = (ws / "server" / "src" / "main" / "java" / "A.java").read_text(encoding="utf-8")
+        assert "int b = 20;" in text
+        assert "int b = 2;" not in text
+
+    def test_an_ambiguous_indentation_slip_is_still_rejected(self, ws):
+        """归一化命中多处 → 照旧拒绝（不许瞎改）"""
+        (ws / "server" / "src" / "main" / "java" / "B.java").write_text(
+            "class B {\n    int a = 3;\n    int a = 3;\n}\n", encoding="utf-8",
+        )
+        with pytest.raises(codegen.CodegenError, match="必须唯一"):
+            codegen.apply_edits(ws, [{
+                "file": "server/src/main/java/B.java",
+                "old": "        int a = 3;", "new": "        int a = 1;",
+            }])
+
 
 class TestModelErrorsAreFedBack:
     def test_the_error_is_handed_back_to_the_model_and_it_can_fix_itself(self, ws):
@@ -337,6 +386,46 @@ class TestCodeMap:
     def test_an_unknown_concept_is_never_guessed(self):
         assert locations_for(["totally_made_up"]) == []
         assert unmapped_concepts(["totally_made_up"]) == ["totally_made_up"]
+
+
+class TestChangedFilesAreRealPaths:
+    """改动清单里的路径必须是**真的路径**
+
+    2026-10-27 实测撞出来的：porcelain 每行是 `XY path`，
+    解析时先 `strip()` 再取 `line[3:]` —— strip 把前导空格也去了，
+    于是路径少了第一个字符（"erver/src/..."）。
+
+    后果极其隐蔽：路径里仍然含 "mapper/ReportMapper" 这类位置片段，
+    「改动在不在范围内」的判断照样过，**没有任何东西报错**；
+    但拿路径去打开文件的检查会拿到不存在的路径，然后静默跳过——
+    本轮那条「新增 Mapper 方法必须有对应 SQL」的校验就是这么被废掉的。
+    """
+
+    def test_changed_files_returns_paths_that_exist(self, tmp_path):
+        import subprocess
+
+        from boxes.wms_development.codegen import changed_files
+
+        repo = tmp_path / "repo"
+        (repo / "server/src/main/java/com/wms/mapper").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+        target = repo / "server/src/main/java/com/wms/mapper/ReportMapper.java"
+        target.write_text("class ReportMapper {}\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+        target.write_text("class ReportMapper { int x; }\n", encoding="utf-8")
+
+        files = changed_files(repo)
+        assert files, "改动了文件却没列出来"
+        for rel in files:
+            assert rel.startswith("server/"), (
+                f"路径被切错了（少了开头）：{rel!r}"
+            )
+            assert (repo / rel).exists(), (
+                f"列出来的路径在仓里不存在：{rel!r}"
+            )
 
 
 class TestMapperBindingsAreChecked:

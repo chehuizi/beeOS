@@ -52,6 +52,10 @@ _ENUM_SEP = re.compile(r"、")
 # 存在性声明词：左侧是目标，右侧每项是业务事实
 _EXIST_WORDS = ("有", "包含", "包括", "分为", "涵盖", "涉及")
 _ENUM_MIN_LEN = 2
+# 枚举项独立成句时**不带主语**（「编辑」谁编辑？）。
+# 修法不是「并回上一句」（那会丢粒度：四件事变成一件），
+# 是给每句带上 `origin_text`（它从哪句原话切出来的）——
+# 下游拿原句当上下文，主语就回来了，粒度还在。
 
 # ---- 「名字」的样子（机械判 title 时的护栏）----
 #
@@ -179,6 +183,12 @@ def _split_sentences(narrative: str) -> list[dict[str, Any]]:
     **角色是句子的性质，不是它的位置**——所以 goal / fact / context 的最终判定
     交给 LLM（见 `_extract_roles`），机械层只保留 title 的判定权，
     并在 LLM 之上守下限（含要求表达的句必须进分母）。
+
+    **每句都带 `origin_text`：它是从哪句原话切出来的。**
+    「库区要能新增、编辑、删除、查询」按顿号切开 → 「编辑」这句
+    **丢了主语**（谁要编辑？编辑什么？）。碎片自己绑不上任何 WMS 概念，
+    但它的**原句**里有「库区」——原句是逐字原文，
+    下游拿它当上下文既不丢信息，也不会把编出来的词当证据。
     """
     raw = [s.strip() for s in _SENT_SPLIT.split(narrative) if s.strip()]
     if not raw:
@@ -186,12 +196,13 @@ def _split_sentences(narrative: str) -> list[dict[str, Any]]:
 
     sentences: list[dict[str, Any]] = []
 
-    def _add(text: str, role: str) -> None:
+    def _add(text: str, role: str, origin: str = "") -> None:
         if text:
             sentences.append({
                 "sentence_id": f"sent_{len(sentences) + 1}",
                 "text": text,
                 "role": role,
+                "origin_text": origin or text,
             })
 
     head, rest = raw[0], raw[1:]
@@ -219,11 +230,21 @@ def _split_sentences(narrative: str) -> list[dict[str, Any]]:
             break
         # 存在性词左边确实只剩一个名字 → title（不抽节点）
         # 找不到存在性词 → 首句仍可能是内容（「库存管理要支持入库」里就有「入库」）
-        _add(head_text, "title" if is_title else "goal")
+        _add(head_text, "title" if is_title else "goal", origin=head)
         for item in enum_items:
-            _add(item, "fact")
+            # 枚举项**照样独立成句**——粒度是业务要的
+            # （新增 / 编辑 / 删除 / 查询 是四件事，不该合成一件）。
+            #
+            # 但它**丢了主语**（「编辑」谁要编辑？），所以每句都带
+            # `origin_text` = 它是从哪句原话切出来的。
+            # 下游（设计盒）拿原句当上下文：原句是逐字原文，
+            # 既能把主语找回来，又不会把编出来的词当证据。
+            #
+            # 以前试过「太短的并回上一句」——那会让四件事变成一件，
+            # 粒度没了；碎片的问题应该在**上下文**上解，不在**粒度**上解。
+            _add(item, "fact", origin=head)
     else:
-        _add(head, "goal")
+        _add(head, "goal", origin=head)
 
     for s in rest:
         _add(s, "fact")

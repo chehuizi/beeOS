@@ -31,6 +31,7 @@ WMS 开发盒——**按设计包改代码**：读方案 → 定位源码 → �
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -40,11 +41,12 @@ from boxes.wms_development.build import (
     commit_range_files,
     reproducibility,
     run_build,
-    run_compile,
+    run_verify_build,
     unit_test_stats,
 )
 from boxes.wms_development.code_map import (
     implementation_state,
+    missing_evidence,
     implementation_states,
     implementation_evidence_description,
     locations_for,
@@ -53,7 +55,9 @@ from boxes.wms_development.code_map import (
 from boxes.wms_development.codegen import (
     CodegenError,
     changed_files,
+    collect_all_sources,
     collect_context,
+    collect_tree,
     commit_changes,
     generate_edits,
     prepare_workspace,
@@ -61,8 +65,46 @@ from boxes.wms_development.codegen import (
     repo_path,
     workspace_root,
 )
-from boxes.wms_development.mapper_binding import check_mapper_bindings
+from boxes.wms_development.mapper_binding import (
+    check_duplicate_classes,
+    check_mapper_bindings,
+    check_tests_not_shrunk,
+    check_migration_covers_tables,
+    check_migration_filenames,
+)
 from runtime.runner import HandlerRunner
+
+
+def _test_sources_for_feedback(ws: Path, test_errors: str) -> str:
+    """把出错的**测试文件原文**附在报错里
+
+    **为什么必须附上**：模型要改测试，就得能**逐字抄**出要替换的那一段。
+    而测试文件**不在它的上下文里**（上下文只扫 `server/src/main`）——
+    抄不出来，它就只能「整篇覆盖」（old 留空），
+    机械层会正确地拒绝（那不是改，是重写），于是它一轮轮空转
+    （实测连着两轮都是这个错）。
+
+    报错要带能修它的材料——测试文件原文就是那份材料。
+    """
+    names = set(re.findall(r"([A-Za-z0-9_]+Test)\.java", test_errors))
+    names |= set(re.findall(r"([A-Za-z0-9_]+Test)\b", test_errors))
+    if not names:
+        return ""
+    blocks: list[str] = []
+    for name in sorted(names)[:3]:
+        for path in sorted(
+            (ws / "server" / "src" / "test").rglob(f"{name}.java")
+        ):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+            blocks.append(
+                f"\n**出问题���测试文件现在长这样（从这里逐字复制要替换的那一段）**：\n"
+                f"===== {path.relative_to(ws)} =====\n{text}"
+            )
+            break
+    return "".join(blocks)
 
 
 def _base_ref(commit_range: Any) -> str:
@@ -202,12 +244,13 @@ def dev_code_handler(input_data: dict[str, Any]) -> dict[str, Any]:
         return collect_context(ws, locations)
 
     def _verify() -> list[str]:
-        """改完之后再核三遍：概念实现了没 + 代码编译得过吗 + SQL 绑得上吗
+        """完整核对：概念实现了没 + 代码编译得过吗 + SQL 绑得上吗 + 表建了没
 
-        **三样都是外部神谕**：
+        **四样都是外部神谕**：
         - 概念的实现证据（源码里有没有那个标识符，且在对的文件里）
         - 编译器（找不到符号就说明没写对）
         - MyBatis 的 SQL 绑定（接口方法在 XML 里有没有对应语句）
+        - 迁移覆盖（SQL 里的表有没有建表脚本）
 
         上一轮真跑就撞上了：模型把新 VO 用在了 Mapper 里，
         却忘了 import → 编译器说「找不到符号」。
@@ -218,36 +261,102 @@ def dev_code_handler(input_data: dict[str, Any]) -> dict[str, Any]:
         编译过、单测过（仓里根本没有报表测试），上线一调就 500。
         """
         problems: list[str] = []
-        after_files = collect_context(ws, locations)
-        after = "\n".join(after_files.values())
-        still = [
-            c for c, _ in missing
-            if implementation_state(c, after, after_files) != "implemented"
-        ]
-        if still:
-            return [
-                "这些概念的标识符在源码里仍然找不到："
-                f"{'、'.join(still)}——请用这些标识符命名你新增的实现"
-                "（看板类指标必须落在**看板 VO**上：业务方是在看板上看到它，"
-                "不是在你新加的接口里看到它）"
-            ]
-        comp = run_compile(ws)
+        problems.extend(_verify_evidence())
+        # **编译 + 测试都跑**：只编译的话测试挂了没人告诉模型，
+        # 它以为写完了，最后打包那步才炸——那时已经没有轮次可改了。
+        comp = run_verify_build(ws)
         if not comp.get("ok"):
-            problems.append(
-                "代码编译不过（编译器说的，不是我说的）：\n"
-                f"{comp.get('errors') or '（没摘到错误详情）'}"
-            )
-        # **SQL 绑定**：新增的 Mapper 方法必须有对应的语句
-        binding_problems = check_mapper_bindings(
-            ws, changed_files(ws), base_ref=base_ref,
-        )
-        problems.extend(binding_problems)
+            if comp.get("errors"):
+                problems.append(
+                    "代码编译不过（编译器说的，不是我说的）：\n"
+                    f"{comp.get('errors')}"
+                )
+            if comp.get("test_errors"):
+                problems.append(
+                    "仓里的测试跑不过（测试说的，不是我说的）：\n"
+                    f"{comp.get('test_errors')}\n"
+                    "——如果是代码的依赖变了导致老测试缺依赖"
+                    "（服务多了一个 Mapper，@InjectMocks 的老测试会 NPE），"
+                    "**给那个测试补上对应的 @Mock**（测试方法只许增不许减，"
+                    "不许删测例、不许削弱断言）"
+                    + _test_sources_for_feedback(ws, comp.get("test_errors") or "")
+                )
+            if not comp.get("errors") and not comp.get("test_errors"):
+                problems.append("构建没过，但没摘到错误详情——去看构建日志")
+        problems.extend(_verify_fast())
         return problems
+
+    def _verify_fast() -> list[str]:
+        """便宜的那部分检查：每写完一个文件就跑一次
+
+        **为什么这��不用等「写完了」**：SQL 绑定和迁移覆盖跟
+        「模块写完没有」无关——缺了就永远缺，早发现早回喂。
+        而**编译**必须等写完：模块分批写的时候中间状态本来就编译不过
+        （Controller 引用的类还没建），每写一个文件就编译等于逼模型
+        倒着写顺序——那是机械层在替它做设计决策。
+        """
+        problems: list[str] = []
+        # **SQL 绑定**：新增的 Mapper 方法必须有对应的语句
+        problems.extend(check_mapper_bindings(
+            ws, changed_files(ws), base_ref=base_ref,
+        ))
+        # **迁移覆盖**：SQL 里用到的表必须由迁移建出来
+        problems.extend(check_migration_covers_tables(ws, changed_files(ws)))
+        # **迁移文件名**：必须符合 Flyway 规范（V<n>__xxx.sql），
+        # 版本号还得比已有的大——写错了 Flyway 启动时直接拒绝，
+        # **服务根本起不来**（编译和单测都发现不了）。
+        problems.extend(check_migration_filenames(ws, changed_files(ws)))
+        # **重名类**：模型为了表达归属关系，会把实体复制一份到别的包里
+        # （实测：module/location/Zone.java + module/zone/Location.java）。
+        # 编译得过，坑却留在仓里——改一处、另一处不变，没人说得清数据从哪来。
+        problems.extend(check_duplicate_classes(ws, changed_files(ws)))
+        # **测试方法只许增不许减**——允许模型给老测试补 mock
+        # （服务加了依赖，@InjectMocks 的老测试会 NPE），
+        # 但不许它把红测试改成不红。
+        problems.extend(check_tests_not_shrunk(
+            ws, changed_files(ws), base_ref=base_ref,
+        ))
+        return problems
+
+    def _verify_evidence() -> list[str]:
+        """概念的实现证据（源码里有没有那个标识符，且在对的文件里）
+
+        **看整个工作区**，不是只看喂给模型的那份上下文——
+        上下文是截断的，模型新写的文件挤不进上下文的话，
+        机械层就看不见它 → 判「没实现」→ 模型被反复要求写同一个东西，
+        一轮轮空转到轮数上限（实测连着 8 轮）。
+
+        **报错要点名到具体哪一处**（哪个文件里缺哪个标识符）：
+        只说「zone 找不到」，模型不知道该写什么。
+        """
+        after_files = collect_all_sources(ws)
+        after = "\n".join(after_files.values())
+        gaps: list[str] = []
+        for concept, _desc in missing:
+            lacking = missing_evidence(concept, after_files, after)
+            if not lacking:
+                continue
+            detail = "、".join(
+                f"{hint} 里的 {tok}" for hint, tok in lacking
+            )
+            gaps.append(f"- {concept}：还缺 {detail}")
+        if not gaps:
+            return []
+        return [
+            "这些概念的标识符在源码里仍然找不到：\n"
+            + "\n".join(gaps)
+            + "\n——请按上面点名的位置补上（看板类指标必须落在**看板 VO**上："
+            "业务方是在看板的字段里看到它，不是在你新加的接口里看到它）"
+        ]
 
     applied, summary = generate_edits(
         ws, expectations, locations, files,
         concepts=concepts, must_implement=missing,
         verify=_verify, refresh=_refresh,
+        verify_fast=_verify_fast, verify_evidence=_verify_evidence,
+        # **路径清单**：模型得知道仓里的布局，
+        # 否则它会把实体写到 module/location/Location.java（实际在 entity/ 下）
+        tree=collect_tree(ws),
     )
     dirty = changed_files(ws)
     commit_sha: str | None = None

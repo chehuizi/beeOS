@@ -226,7 +226,10 @@ TEST_REPORT_SCHEMA = SchemaDef(
     fields=[
         FieldDef(name="scenario_count", type="integer", required=True),
         FieldDef(name="case_count", type="integer", required=True),
-        FieldDef(name="case_pass_rate", type="number", required=True),
+        # **三态**：一条都没验出来时是 n/a（没验到），不是 0%（全都没过）。
+        # 但它必须能过下游的交接校验（运维盒声明的形状是 number）——
+        # 所以类型是 number_or_na，不是 number。
+        FieldDef(name="case_pass_rate", type="number_or_na", required=True),
         FieldDef(name="open_defect_count", type="integer", required=True),
         FieldDef(name="requirement_case_coverage", type="boolean", required=True),
         FieldDef(name="scenario_coverage", type="boolean", required=True),

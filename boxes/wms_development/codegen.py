@@ -18,8 +18,10 @@ review 的人/判据都看不出来。**让它给「精确片段替换」**：
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -30,12 +32,42 @@ WMS_REPO_ENV = "BEEOS_WMS_REPO"        # WMS 仓路径（没配 = 没地方改�
 WORKSPACE_ENV = "BEEOS_DEV_WORKSPACE"   # 隔离工作区根目录
 
 # 给模型看的源码上下文字数上限
-MAX_CONTEXT_FILES = 12
-MAX_CONTEXT_BYTES = 40_000
+#
+# **为什么从 12 提到 20**（2026-10-27 实测）：
+# 原来 12 是「改一处」的量级——改一个指标只要看 DashboardVO + Mapper。
+# 但**新建一个模块**要同时看到：service 实现、controller、mapper 接口、
+# mapper XML、VO、DTO、迁移脚本，一整套模板。
+# 而 collect_context 是 `java` 先扫、`resources` **后扫**——
+# 文件数一超限，被挤掉的就是**最后**进来的那批：
+# XML 模板和迁移模板恰恰在里面。
+# 于是模型拿着「照着谁写」的答案写不出 SQL 和建表脚本——
+# 编译能过（SQL 是字符串），上线才炸（表根本不存在）。
+MAX_CONTEXT_FILES = 30
+MAX_CONTEXT_BYTES = 120_000
 MAX_FILE_BYTES = 12_000
 
 # 模型最多试几轮（每一轮失败都把错误原样喂回去）
 MAX_CODGEN_ATTEMPTS = 3
+
+# 一次交付要写多个文件时，模型分几轮写（每轮落盘后机械层再问下一个）
+#
+# **为什么不是一轮写完**：一次要交付的东西一多（新建一个模块 = 十几个文件），
+# 模型的输出会**超上限** → JSON 截断 → 解析失败 → 整个履约中止。
+# 分轮写，每轮输出都小；而且机械层能知道「写到哪个文件了」。
+# **轮数要够写完一个模块**：新建一个模块 = 实体 + Mapper + XML + 迁移 +
+# DTO + VO + Service + Controller + 库位那一侧的改动 = 十来个文件，
+# 按「一次 1-2 个文件」就是七八轮，再加上编译失败返工、证据不满足返工，
+# 12 轮不够用（实测：模型写完 11 个文件，轮数用完了，
+# 库位那一侧的需求**还没轮到它写**）。
+# 每轮只花几秒（LLM 调用 2-5 秒），轮数多一点不心疼。
+MAX_CODEGEN_ROUNDS = 30
+
+# 单次 LLM 调用的输出上限（token）
+#
+# 从 6000 提到 12000：一轮写 1-2 个文件用不了这么多，
+# 但**模型偶尔会一次吐很多**（规则里写了「最多 2 个文件」它也可能不听）。
+# 上限留够余量，它就不会在 JSON 中间被截断。
+MAX_CODGEN_TOKENS = 12_000
 
 # 残留工作区多久算过期（小时）——上一次崩在中间的工作区不许一直堆着
 STALE_WORKSPACE_HOURS = 12
@@ -43,6 +75,14 @@ STALE_WORKSPACE_HOURS = 12
 
 class CodegenError(RuntimeError):
     """改代码这一步做不下去（工作区/模型/应用任一环节失败）"""
+
+
+def _log(message: str) -> None:
+    """把进度打到 stderr——**一次开发盒要跑十几分钟**，不看进度就只能干等
+
+    不打 stdout：那是履约结果的通道，混进日志会污染 JSON 输出。
+    """
+    print(f"[codegen {time.strftime('%H:%M:%S')}] {message}", file=sys.stderr, flush=True)
 
 
 def _run(cmd: list[str], cwd: Optional[Path] = None, timeout: int = 300) -> subprocess.CompletedProcess:
@@ -143,30 +183,134 @@ def collect_context(ws: Path, locations: list[str]) -> dict[str, str]:
 
     **按位置片段挑文件**，再截断——整个仓 150 个源文件全塞进去，
     模型既看不动也容易改错地方。
+
+    **两个必须做对的点**（2026-10-28 实测撞出来的）：
+
+    1. **`.sql` 也要收**。迁移脚本以前根本不在上下文里 →
+       模型既**看不到仓里已有的 V1~V4**（于是自己起名 `V1__create_wms_core_tables.sql`，
+       版本号跟已有文件撞了，Flyway 启动时直接拒绝），
+       也**看不到自己上一轮刚建的那个迁移文件** →
+       它按记忆里的内容去替换，`old` 逐字命中 0 次 → **连着 12 轮都落不下去**。
+    2. **按落点轮转着收**，不能按目录顺序从头收到尾。
+       java 目录先扫，location/warehouse 这些落点就把额度占满了，
+       resources 里的 Mapper XML 和迁移脚本**一个都进不来**——
+       而它们恰恰是新建模块时最要紧的参考。
+       轮转着收 = 每个落点先各分到一份，再回头拿第二份。
     """
-    out: dict[str, str] = {}
+    buckets: dict[str, list[tuple[str, str]]] = {}
+    order: list[str] = []
     total = 0
     base = ws / "server" / "src" / "main"
     for root in (base / "java", base / "resources"):
         if not root.exists():
             continue
         for path in sorted(root.rglob("*")):
-            if not path.is_file() or path.suffix not in (".java", ".xml"):
+            if not path.is_file() or path.suffix not in (".java", ".xml", ".sql"):
                 continue
             rel = str(path.relative_to(ws))
-            if not any(loc in rel for loc in locations):
+            # **归给第一个命中的落点**——一个文件只放一份，
+            # 否则它会在好几个落点的桶里各占一格，白吃额度。
+            bucket_key = next((loc for loc in locations if loc in rel), "")
+            if not bucket_key:
                 continue
-            if len(out) >= MAX_CONTEXT_FILES or total >= MAX_CONTEXT_BYTES:
-                break
             try:
                 text = path.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError):
                 continue
             if len(text) > MAX_FILE_BYTES:
                 text = text[:MAX_FILE_BYTES] + "\n…（文件过长已截断）\n"
+            if bucket_key not in buckets:
+                buckets[bucket_key] = []
+                order.append(bucket_key)
+            buckets[bucket_key].append((rel, text))
+
+    # ---- 轮转着取：每个落点先各分一份，再回头拿第二份 ----
+    out: dict[str, str] = {}
+    cursors = {key: 0 for key in order}
+    while len(out) < MAX_CONTEXT_FILES and total < MAX_CONTEXT_BYTES:
+        progressed = False
+        for key in order:
+            if len(out) >= MAX_CONTEXT_FILES or total >= MAX_CONTEXT_BYTES:
+                break
+            items = buckets.get(key) or []
+            index = cursors.get(key, 0)
+            if index >= len(items):
+                continue
+            cursors[key] = index + 1
+            rel, text = items[index]
             out[rel] = text
             total += len(text)
+            progressed = True
+        if not progressed:
+            break
     return out
+
+
+def collect_tree(ws: Path) -> list[str]:
+    """仓里现有源码的**路径清单**（只有路径，没有内容）
+
+    **为什么要有它**（2026-10-28 实测撞出来的）：
+    模型想把库位实体改一下，写成了
+    `server/src/main/java/com/wms/module/location/Location.java`——
+    而仓里它其实在 `com/wms/entity/Location.java`。
+    机械层回「edit 指向的文件不存在」，模型**不知道正确的路径在哪**，
+    于是连着好几轮在同一个错路径上打转。
+
+    上下文里给的是**内容**，可它只覆盖一部分文件；
+    **布局**得靠全量路径清单给——那点字数很便宜（只有路径，没有正文）。
+    """
+    out: list[str] = []
+    base = ws / "server" / "src" / "main"
+    for root in (base / "java", base / "resources"):
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or path.suffix not in (".java", ".xml", ".sql"):
+                continue
+            out.append(str(path.relative_to(ws)))
+    return out
+
+
+def collect_all_sources(ws: Path) -> dict[str, str]:
+    """工作区里**全部**源码（给证据核对用，不给模型看）
+
+    **为什么证据核对不能只看「喂给模型的上下文」**：
+    上下文是**截断**的（文件数/字节数有上限，优先给各落点各一份）。
+    模型新写的文件如果挤不进上下文，机械层就**看不见它** →
+    证据判据判「没实现」→ 模型被反复要求写同一个东西 →
+    一轮轮空转到 12 轮上限。
+
+    证据核对要的是「代码里到底有没有」，那就该看整个工作区。
+    """
+    out: dict[str, str] = {}
+    base = ws / "server" / "src" / "main"
+    for root in (base / "java", base / "resources"):
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or path.suffix not in (".java", ".xml", ".sql"):
+                continue
+            try:
+                out[str(path.relative_to(ws))] = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+    return out
+
+
+def next_migration_version(files: dict[str, str]) -> int:
+    """仓里现有迁移的最大版本号 + 1（新建迁移该用的版本号）
+
+    **为什么要算它**：模型自己起名是「看着像就行」——
+    实测它起过 `V1__create_wms_core_tables.sql`，
+    而仓里已经有 V1~V4，版本号撞了 Flyway 启动时直接拒绝。
+    把下一个版本号**直接告诉它**，比事后判红再回喂省一轮。
+    """
+    versions = []
+    for rel in files:
+        match = re.search(r"db/migration/V(\d+)__", rel)
+        if match:
+            versions.append(int(match.group(1)))
+    return (max(versions) + 1) if versions else 1
 
 
 _CODE_PROMPT = """你在一个 Java（Spring Boot + MyBatis）仓储管理系统（WMS）里改代码。
@@ -191,13 +335,22 @@ _CODE_PROMPT = """你在一个 Java（Spring Boot + MyBatis）仓储管理系统
 **相关源码**：
 
 {files}
+
+**仓里现有源码的路径清单**（**只有路径，没有正文**——
+你要动某个文件时，先在这里确认它到底在哪个目录；
+上面的「相关源码」只覆盖一部分文件，其余的布局看这里）：
+
+{tree}
 {feedback}
 **你要做的**：按上面的需求改代码，让系统满足它。
 
 规则：
 1. 只用上面给出的源码里真实存在的片段。**不要编造 import、类名、方法名**
 2. 改动要**最小**：只动实现这条需求必需的地方
-3. 不许删测试、不许改测试来「让它过」——测试是判据的一部分
+3. **不许删测试、不许削弱测试的断言**——测试是判据的一部分。
+   但**代码的依赖变了，测试要跟着补**：比如服务多了一个 Mapper 依赖，
+   仓里用 `@InjectMocks` 的老测试就会因为拿不到 mock 而 NPE，
+   这时要给测试补一个对应的 `@Mock`（**测试方法只许增不许减**）
 4. 不许改与这条需求无关的文件
 5. **「必须新实现的概念」一条都不许漏**：每个都要在 edits 里给出它的实现
    （SQL / 字段 / 映射 / 装配，缺哪一环补哪一环）
@@ -210,7 +363,29 @@ _CODE_PROMPT = """你在一个 Java（Spring Boot + MyBatis）仓储管理系统
    少了 XML 语句，编译过、单测过（仓里没有报表测试），
    上线后一调那个接口就 `Invalid bound statement`，看板直接 500。
    用注解式 SQL（`@Select`）也可以，但那样就不需要 XML。
-
+8. **一次最多输出 2 个文件**，并且**按「先建骨架、后填内容」的顺序**：
+   实体 → Mapper 接口 → Mapper XML → 建表迁移 → Service → Controller。
+   机械层会把你的改动落盘，然后**再问你要下一个文件**——
+   所以这一轮只写你手上最该写的那个（别一次吐十个文件）。
+9. **全部写完了就交白卷**：edits 给空数组。机械层会跑完整核对
+   （实现证据 / 编译 / SQL 绑定 / 迁移覆盖），
+   不通过的话它会把问题原样回给你，你再改。
+10. **新建迁移脚本的文件名必须是 `V{migration_version}__<描述>.sql`**
+    （版本号见上；**不许跟仓里已有的版本号重复或更小**——
+    Flyway 遇到重复/倒序的版本会在启动时直接拒绝，服务起不来）。
+    建表迁移**只建你这一个模块要的表**，别把别的模块的表也搬进去。
+11. **实体类放 `server/src/main/java/com/wms/entity/`**（跟仓里其他实体一致），
+    **不要在业务模块目录里另建一份**。
+    新建模块时**照着 `module/warehouse` 那一套写**：
+    controller / service / serviceImpl + dto + vo + mapper + mapper XML + 迁移。
+12. **不要复制仓里已有的实体**（Location、Warehouse、Sku…）：
+    要表达归属关系，就用**外键字段**
+    （例如库位实体上放一个指向库区的编码/主键），
+    不要为了「让两边互相引用」把实体复制一份到别的包里——
+    同名类出现两份，机械核对会直接判红。
+13. **不许动方案没覆盖的文件**（例如库存看板的 VO `vo/DashboardVO`）：
+    这次需求跟看板无关，改到那儿会被判红。
+{done_files}
 输出格式（只输出 JSON，不要解释、不要复述）：
 
 {{"summary": "一句话说明改了什么",
@@ -228,6 +403,8 @@ def build_prompt(expectations: list[dict[str, Any]], locations: list[str],
                  files: dict[str, str], feedback: str = "",
                  concepts: Optional[list[str]] = None,
                  must_implement: Optional[list[tuple[str, str]]] = None,
+                 done_files: Optional[list[str]] = None,
+                 tree: Optional[list[str]] = None,
                  ) -> str:
     """把期望 + 落点 + 源码拼成 prompt"""
     exp_lines = []
@@ -258,13 +435,26 @@ def build_prompt(expectations: list[dict[str, Any]], locations: list[str],
             "业务方是在看板的字段里看到它，不是在你新加的接口里看到它）"
         )
     missing_text = "\n".join(missing_lines) or "（没有：本次涉及的每个概念源码里都已有实现）"
+    done = list(done_files or [])
+    done_text = (
+        "\n**已经写完的文件**（别重写它们，除非你要改）：\n"
+        + "\n".join(f"- {d}" for d in done)
+        + "\n\n"
+        if done else ""
+    )
     return _CODE_PROMPT.format(
         expectations="\n".join(exp_lines) or "（没有预期）",
         concepts="\n".join(concept_lines),
         missing=missing_text,
         locations="\n".join(loc_lines),
         files="\n".join(file_blocks) or "（没有相关源码）",
+        tree="\n".join(tree or []) or "（没有源码文件）",
         feedback=fb,
+        done_files=done_text,
+        # **下一个迁移版本号直接给它**——它自己起名是「看着像就行」，
+        # 实测起过 V1__create_wms_core_tables.sql，
+        # 而仓里已经有 V1~V4，版本号撞了 Flyway 启动时直接拒绝。
+        migration_version=next_migration_version(files),
     )
 
 
@@ -284,6 +474,34 @@ def _resolve_edit_path(ws: Path, rel: str) -> Path:
     if path != root and root not in path.parents:
         raise CodegenError(f"edit 指向工作区外：{rel}")
     return path
+
+
+def _near_miss_hint(ws: Path, rel: str) -> str:
+    """文件不存在时，**告诉它正确的路径在哪**
+
+    实测：模型把库位实体改成了
+    `server/src/main/java/com/wms/module/location/Location.java`——
+    而仓里它在 `com/wms/entity/Location.java`。
+    机械层只回一句「文件不存在」，模型**无从知道正确路径**，
+    于是连着几轮在同一个错路径上打转。
+    """
+    name = Path(rel).name
+    hits: list[str] = []
+    base = ws / "server" / "src" / "main"
+    for root in (base / "java", base / "resources"):
+        if not root.exists():
+            continue
+        for path in root.rglob(name):
+            hits.append(str(path.relative_to(ws)))
+            if len(hits) >= 5:
+                break
+    if not hits:
+        return ""
+    return (
+        "——仓里同名文件在："
+        + "、".join(hits)
+        + "（路径写错的话，按这个改；确实要新建就换一个仓里没有的文件名）"
+    )
 
 
 def _validate_edit(
@@ -327,7 +545,9 @@ def _validate_edit(
                 )
         return path, old, new
     if not path.exists():
-        raise CodegenError(f"edit 指向的文件不存在：{rel}")
+        raise CodegenError(
+            f"edit 指向的文件不存在：{rel}" + _near_miss_hint(ws, rel)
+        )
     text = path.read_text(encoding="utf-8")
     count = text.count(old)
     if count == 0:
@@ -350,6 +570,7 @@ def _validate_edit(
                 f"{rel}：要替换的原文片段（忽略缩进后）出现 {norm_count} 次（必须唯一）。\n"
                 f"**请换一个只出现一次的短锚点**（文件里长这样）：\n"
                 f"{_tail_for_error(text)}"
+                f"{_unique_line_hints(text)}"
             )
         raise CodegenError(
             f"{rel}：找不到要替换的原文片段（old 逐字命中 0 次）。\n"
@@ -357,14 +578,40 @@ def _validate_edit(
             f"{_tail_for_error(text)}\n"
             f"（old 必须逐字取自上面这段；抄不准就用一个**短锚点**，"
             f"比如 `</mapper>` 这种只出现一次的行）"
+            f"{_unique_line_hints(text)}"
         )
     if count > 1:
         raise CodegenError(
             f"{rel}：要替换的原文片段出现 {count} 次（必须唯一）。\n"
             f"**请换一个只出现一次的短锚点**（文件里长这样）：\n"
             f"{_tail_for_error(text)}"
+            f"{_unique_line_hints(text)}"
         )
     return path, old, new
+
+
+def _unique_line_hints(text: str, limit: int = 8) -> str:
+    """这个文件里**只出现一次**的行（可以拿其中一行当锚点）
+
+    **为什么给这个**：模型挑的锚点常常出现多次（`}`、`return vo;` 这种），
+    机械层只能拒绝。回一句「换个唯一锚点」它无从下手——
+    它不知道哪些行是唯一的。**报错要带能修它的材料**。
+    """
+    counts: dict[str, int] = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            counts[stripped] = counts.get(stripped, 0) + 1
+    unique = [line for line, n in counts.items() if n == 1]
+    if not unique:
+        return ""
+    # 长一点的行更像有意义的锚点（`}` 这种太短，没有定位力）
+    unique.sort(key=lambda line: -len(line))
+    shown = unique[:limit]
+    return (
+        "\n**这个文件里只出现一次的行（拿其中一行当锚点）：**\n"
+        + "\n".join(f"- {line}" for line in shown)
+    )
 
 
 def _normalize(text: str) -> str:
@@ -437,16 +684,38 @@ def generate_edits(
     locations: list[str],
     files: dict[str, str],
     llm_call: Optional[Callable[[str], Any]] = None,
-    max_attempts: int = MAX_CODGEN_ATTEMPTS,
+    max_attempts: int = MAX_CODEGEN_ROUNDS,
     concepts: Optional[list[str]] = None,
     must_implement: Optional[list[tuple[str, str]]] = None,
     verify: Optional[Callable[[], list[str]]] = None,
     refresh: Optional[Callable[[], dict[str, str]]] = None,
+    verify_fast: Optional[Callable[[], list[str]]] = None,
+    verify_evidence: Optional[Callable[[], list[str]]] = None,
+    tree: Optional[list[str]] = None,
 ) -> tuple[list[str], str]:
     """让模型出改动并落下去；落不下去就把错误原样回给它改
 
     **不降级**：模型连续几轮都改不动 → 履约中止。
     绝不「自己脑补一段差不多的代码」——那是假交付。
+
+    **「返回空 edits」是「我说写完了」的意思**（2026-10-28 实测撞出来的）：
+    一次要交付的东西多的时候（新建一个模块 = 十几个文件），
+    模型一次吐十个文件会**超出输出上限** → JSON 截断 → 解析失败 → 履约中止。
+    所以流程改成**多轮推进**：每轮写一两个文件，机械层落盘后
+    再问它下一个；它说「写完了」（edits 空数组）时，
+    机械层才跑**完整核对**（实现证据 + 编译 + SQL 绑定 + 迁移覆盖），
+    不通过就把问题原样回给它，它接着改。
+
+    **三层检查，各管一段**：
+    - `verify_fast`（每轮）：SQL 绑定 / 迁移覆盖。
+      跟「模块写完没有」无关，缺了就永远缺，早发现早回喂。
+    - `verify_evidence`（每轮）：概念的实现证据。
+      证据不足 = **还有文件没写** → 告诉它「接着写下一个」。
+    - `verify`（收尾）：完整核对（含编译）。
+      **编译必须等证据满足后才跑**：模块分批写的时候中间状态
+      本来就编译不过（Controller 引用的类还没建）；
+      每写一个文件就编译，等于逼着模型把顺序倒过来——
+      那是机械层在替它做设计决策。
 
     **「返回空 edits」不许是免费的出口**：如果机械查过有概念还没实现
     （must_implement 非空），模型交白卷就是没干活——把这件事原样回给它，
@@ -467,7 +736,7 @@ def generate_edits(
 
         def llm_call(prompt: str) -> Any:  # type: ignore[misc]
             return complete_json(
-                prompt, thinking="disabled", max_tokens=6000, timeout=180,
+                prompt, thinking="disabled", max_tokens=MAX_CODGEN_TOKENS, timeout=180,
             )
 
     feedback = ""
@@ -476,40 +745,73 @@ def generate_edits(
     # 模型每一轮重出整份计划，它会再次「新建」上一轮建好的文件——
     # 机械层要认得出那些是它自己建的（见 _validate_edit）。
     created: set[str] = set()
-    for attempt in range(max_attempts):
-        if attempt and refresh is not None:
+    applied_all: list[str] = []
+    done_files: list[str] = []
+    summary = ""
+    for round_no in range(max_attempts):
+        if round_no and refresh is not None:
             files = refresh()
+        _log(
+            f"第 {round_no + 1}/{max_attempts} 轮："
+            f"已写 {len(done_files)} 个文件，"
+            f"上次的问题：{(feedback or '（没有）')[:120]}"
+        )
         prompt = build_prompt(
             expectations, locations, files, feedback=feedback,
             concepts=concepts, must_implement=must_implement,
+            done_files=done_files, tree=tree,
         )
+        _log(f"第 {round_no + 1} 轮：问模型（上下文 {len(files)} 个文件）")
         raw = llm_call(prompt)
+        _log(f"第 {round_no + 1} 轮：模型答了")
         if not isinstance(raw, dict):
             last_error = f"模型输出不是一个对象：{type(raw).__name__}"
             feedback = last_error
             continue
         edits = raw.get("edits")
-        summary = str(raw.get("summary") or "")
+        summary = str(raw.get("summary") or summary)
         if not isinstance(edits, list):
             last_error = "输出里没有 edits 数组"
             feedback = last_error
             continue
-        if not edits and must_implement:
-            names = "、".join(c for c, _ in must_implement)
-            last_error = (
-                f"你返回了空的 edits，但这些概念在源码里查不到实现：{names}——"
-                "本次的任务就是把它们实现出来"
-            )
-            feedback = last_error
-            continue
+        if not edits:
+            # **模型说「我写完了」** → 跑完整核对
+            problems = verify() if verify is not None else None
+            if problems:
+                last_error = (
+                    "你说你写完了，但机械核对没过：\n"
+                    + "\n".join(problems)
+                    + "\n\n请按上面的问题继续改（工作区里已经保留了你之前的改动，"
+                    "下面的源码就是**当前**内容——old 要逐字取自当前内容）。"
+                )
+                feedback = last_error
+                continue
+            if must_implement:
+                # 没有核对能力可证明它做完了 → 按「交白卷」处理
+                names = "、".join(c for c, _ in must_implement)
+                last_error = (
+                    f"你返回了空的 edits，但这些概念在源码里查不到实现：{names}——"
+                    "本次的任务就是把它们实现出来"
+                )
+                feedback = last_error
+                continue
+            return applied_all, summary
         try:
             applied = apply_edits(ws, edits, created)
         except CodegenError as exc:
             last_error = str(exc)
             feedback = last_error
             continue
-        if verify is not None:
-            problems = verify()
+        for rel in applied:
+            # 同一个文件被改多次只记一次——
+            # 「改动清单」是**文件集合**，不是修改次数
+            if rel not in applied_all:
+                applied_all.append(rel)
+            if rel not in done_files:
+                done_files.append(rel)
+        # **便宜的检查每轮都跑**：它们跟「模块写完没有」无关
+        if verify_fast is not None:
+            problems = verify_fast()
             if problems:
                 last_error = (
                     "你这一轮的改动没通过机械核对：\n"
@@ -520,9 +822,34 @@ def generate_edits(
                 )
                 feedback = last_error
                 continue
-        return applied, summary
+        # **证据不足 = 还有文件没写**：告诉它接着写下一个
+        evidence_problems = verify_evidence() if verify_evidence is not None else []
+        if evidence_problems:
+            last_error = (
+                "你这一轮写完了，但这次要落地的概念**还没落地**：\n"
+                + "\n".join(evidence_problems)
+                + "\n\n**接着写下一个文件**（一次 1-2 个）："
+                "还没写的部分就是上面点名的那几处。"
+            )
+            feedback = last_error
+            continue
+        # **证据齐了 → 跑完整核对（含编译）**。
+        # 编译不过时，编译器会指名缺什么（"找不到符号 ZoneQuery"），
+        # 模型照着补就行——**这是编译器当神谕**，不是机械层替它做设计。
+        problems = verify() if verify is not None else []
+        if problems:
+            last_error = (
+                "你这一轮的改动没通过机械核对：\n"
+                + "\n".join(problems)
+                + "\n\n请按上面的问题修正后，重新给出完整的 edits 数组。"
+                "\n（工作区里已经保留了你上一轮的改动，下面的源码就是**当前**内容——"
+                "请在当前内容上做增量修改，old 要逐字取自当前内容。）"
+            )
+            feedback = last_error
+            continue
+        return applied_all, summary
     raise CodegenError(
-        f"模型连续 {max_attempts} 次给出的改动都落不下去：{last_error}"
+        f"模型连续 {max_attempts} 轮给出的改动都落不下去：{last_error}"
     )
 
 

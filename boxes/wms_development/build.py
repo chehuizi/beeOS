@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import re
 import subprocess
+import sys
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -82,6 +83,10 @@ def run_build(ws: Path, log_dir: Optional[Path] = None, timeout: int = 900,
 
     cmd = mvn_cmd() + ["-o", "-B", "package"]
     started = time.time()
+    print(
+        f"[build {time.strftime('%H:%M:%S')}] 开始编译 {ws.name}（{cmd[0]}）",
+        file=sys.stderr, flush=True,
+    )
     try:
         proc = subprocess.run(
             cmd, cwd=str(d), capture_output=True, text=True, timeout=timeout,
@@ -93,6 +98,11 @@ def run_build(ws: Path, log_dir: Optional[Path] = None, timeout: int = 900,
     except subprocess.TimeoutExpired as exc:
         raise BuildError(f"构建超时（{timeout}s）") from exc
     duration = round(time.time() - started, 2)
+    print(
+        f"[build {time.strftime('%H:%M:%S')}] 编译结束，用了 {duration}s"
+        f"（{'失败' if rc != 0 else '成功'}），日志 {log_path}",
+        file=sys.stderr, flush=True,
+    )
     log_path.write_text(out, encoding="utf-8")
 
     return {
@@ -127,6 +137,69 @@ def run_compile(ws: Path, timeout: int = 900) -> dict[str, Any]:
         "ok": proc.returncode == 0,
         "exit_code": proc.returncode,
         "errors": extract_compile_errors(out),
+    }
+
+
+_TEST_ERROR_BLOCK = re.compile(
+    r"\[ERROR\]\s+(?:Errors|Failures):.*?(?=\[INFO\]\s+Tests run:|\Z)", re.S
+)
+
+
+def extract_test_errors(output: str, limit: int = 40) -> str:
+    """从 maven 输出里摘出**测试失败**那一段
+
+    **为什么要单独摘**：编译错误和测试失败要修的东西不一样。
+    测试失败最常见的一种是「代码加了依赖，老测试没跟上」
+    （@InjectMocks 拿不到新 mock → NPE）——
+    那要修的是**测试**（补一个 mock），不是业务代码。
+    把两者混在一句「编译不过」里，模型会去改业务代码，
+    越改越乱（实测：连着 3 轮都在改业务代码，没人告诉它测试挂了）。
+    """
+    m = _TEST_ERROR_BLOCK.search(output)
+    if not m:
+        return ""
+    lines = [ln for ln in m.group(0).splitlines() if ln.strip()][:limit]
+    return "\n".join(lines)
+
+
+def run_verify_build(ws: Path, timeout: int = 900) -> dict[str, Any]:
+    """跑一次完整构建（编译 + 测试）——给 codegen 那一跳当反馈用
+
+    **为什么不能只编译**：只编译的话，测试挂了没人告诉模型——
+    它以为「我写完了」，机械层也以为编译过了，
+    直到最后打包那一步才炸（build_failed=true），
+    而那时候**已经没有轮次可以改了**。
+    实测：服务多了一个 Mapper 依赖，仓里 @InjectMocks 的老测试 NPE，
+    模型连着几轮都在改业务代码，因为没人告诉它错在测试上。
+    """
+    d = server_dir(ws)
+    cmd = mvn_cmd() + ["-o", "-B", "package"]
+    started = time.time()
+    print(
+        f"[build {time.strftime('%H:%M:%S')}] 开始构建 {ws.name}（编译 + 测试）",
+        file=sys.stderr, flush=True,
+    )
+    try:
+        proc = subprocess.run(
+            cmd, cwd=str(d), capture_output=True, text=True, timeout=timeout,
+        )
+    except FileNotFoundError as exc:
+        raise BuildError(f"找不到构建命令 {cmd[0]}：{exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise BuildError(f"构建超时（{timeout}s）") from exc
+    out = (proc.stdout or "") + (proc.stderr or "")
+    duration = round(time.time() - started, 2)
+    print(
+        f"[build {time.strftime('%H:%M:%S')}] 构建结束，用了 {duration}s"
+        f"（{'失败' if proc.returncode else '成功'}）",
+        file=sys.stderr, flush=True,
+    )
+    return {
+        "ok": proc.returncode == 0,
+        "exit_code": proc.returncode,
+        "errors": extract_compile_errors(out),
+        "test_errors": extract_test_errors(out),
+        "duration_s": duration,
     }
 
 

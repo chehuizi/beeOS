@@ -68,7 +68,8 @@ OPS_VERIFICATION_INPUT_SCHEMA = SchemaDef(
     description="运维盒要消费的验收报告（形状由运维盒自己声明）",
     fields=[
         FieldDef(name="test_task_id", type="string", required=False),
-        FieldDef(name="case_pass_rate", type="number", required=False),
+        # 三态，跟测试盒对齐：没验出来时是 n/a，不是 0%
+        FieldDef(name="case_pass_rate", type="number_or_na", required=False),
         FieldDef(name="open_defect_count", type="integer", required=False),
         FieldDef(name="no_blocking_defect", type="boolean", required=False),
         FieldDef(name="verification_determined", type="boolean", required=False),

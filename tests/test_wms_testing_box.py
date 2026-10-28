@@ -114,6 +114,29 @@ def _ctx() -> ProbeContext:
     return ProbeContext(client=None, mode="verification", today=TODAY)
 
 
+def _zone_facts() -> dict:
+    """库区场景「全部对」时的事实（跟探针 prepare 产出的形状一致）"""
+    return {
+        "zone_api_missing": False,
+        "warehouse_id": 1,
+        "zone_code": "PROBE-ZONE-ABC123",
+        "zone_id": 9,
+        "zone": {"id": 9, "code": "PROBE-ZONE-ABC123", "name": "探针库区-ABC123"},
+        "listed_codes": ["PROBE-ZONE-ABC123"],
+        "found_in_list": True,
+        "update_ok": True,
+        "updated": {"id": 9, "name": "探针库区-改-ABC123"},
+        "reread_name": "探针库区-改-ABC123",
+        "location_code": "PROBE-LOC-ABC123",
+        "location_id": 11,
+        "location_created": True,
+        "bogus_zone_rejected": True,
+        "delete_with_location_rejected": True,
+        "location_cleaned": True,
+        "zone_cleaned": True,
+    }
+
+
 # ============================================================
 # 判据：量纲 / 假绿 / 红灯带定位
 # ============================================================
@@ -544,6 +567,61 @@ class TestTheProbesTellTheTruth:
             found = find_probe(concept)
             assert found is not None, f"概念 {concept} 找不到探针"
 
+    def test_the_zone_probe_passes_when_the_whole_flow_works(self):
+        """库区管理全对 → 判绿（别把判据写成永远红）"""
+        from boxes.wms_testing.probes import _check_zone_management
+
+        result = _check_zone_management(_ctx(), _zone_facts())
+        assert result.outcome == OUTCOME_PASS, result.summary
+
+    def test_the_zone_probe_fails_when_a_location_can_hang_on_a_bogus_zone(self):
+        """库位挂到不存在的库区居然建成了 → 判红
+
+        「库位归属在库区上」不是一句说明，是**要被校验的**。
+        """
+        from boxes.wms_testing.probes import _check_zone_management
+
+        facts = _zone_facts()
+        facts["bogus_zone_rejected"] = False
+        result = _check_zone_management(_ctx(), facts)
+        assert result.outcome == OUTCOME_FAIL
+        assert "不存在的库区" in result.summary
+
+    def test_the_zone_probe_fails_when_a_zone_with_locations_can_be_deleted(self):
+        """库区下还有库位时删得掉 → 判红（删了留下悬空库位）"""
+        from boxes.wms_testing.probes import _check_zone_management
+
+        facts = _zone_facts()
+        facts["delete_with_location_rejected"] = False
+        result = _check_zone_management(_ctx(), facts)
+        assert result.outcome == OUTCOME_FAIL
+        assert "悬空的库位" in result.summary
+
+    def test_the_zone_probe_is_indeterminate_when_the_api_is_not_there(self):
+        """接口还没有（404）→ **indeterminate**，不是 fail、不是 pass
+
+        「现场没条件」和「业务没做对」是两件事——
+        混成一个结论，看板上就分不清该做什么。
+        """
+        from boxes.wms_testing.probes import _check_zone_management
+
+        result = _check_zone_management(
+            _ctx(), {"zone_api_missing": True, "detail": "HTTP 404"},
+        )
+        assert result.outcome == OUTCOME_INDETERMINATE
+
+    def test_the_client_separates_http_errors_from_business_errors(self):
+        """HTTP 404（接口没有）要跟业务拒绝（code != 0）分得开
+
+        分不开的话，探针分不出「功能没实现」和「业务拒绝」，
+        于是要么把没实现的功能判成失败，要么把服务故障当成通过。
+        """
+        from boxes.wms_testing.wms_client import WmsError, WmsHttpError
+
+        assert issubclass(WmsHttpError, WmsError)
+        err = WmsHttpError("GET /zones → HTTP 404", status=404)
+        assert err.status == 404
+
     def test_the_client_turns_a_business_error_into_an_exception(self, monkeypatch):
         """WMS 返回 `code != 0` → **抛异常**，不当成成功
 
@@ -583,4 +661,17 @@ class TestTheProbesTellTheTruth:
 
         隔离：这条只查注册表。
         """
-        assert find_probe("warehouse") is None
+        # 「wave」在词表里（实体），但没有探针——没写就是没写
+        assert find_probe("wave") is None
+
+    def test_the_zone_concepts_all_have_probes(self):
+        """库区这件事牵到的三个概念都得有探针
+
+        「库区是仓库下的分区」「库位归属在库区上」——
+        这两句各自是一个概念，缺了探针它们就显示成
+        「没有针对这个概念的探针」，而**业务方那两句话就没被验过**。
+        """
+        for concept in ("zone", "warehouse", "location"):
+            assert find_probe(concept) is not None, (
+                f"概念 {concept} 没有探针——需求里那句话就没人验"
+            )

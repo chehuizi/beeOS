@@ -158,11 +158,14 @@ _BIND_PROMPT = """你是 WMS（仓储管理）领域建模助手。下面每条�
    「这句话讲的是哪个 WMS 概念」，不是「它出现在流程图的哪个位置」。
    一句被放在流程里的规则，照样可以是一条 WMS 约束
 1. `kind` 必须逐字来自上面的概念 id。**自造 id 会被判为幻觉，作废**
-2. `evidence` 必须**逐字**出现在那条需求的描述里——不能改写、不能翻译、不能补充说明
+2. `evidence` 必须**逐字**出现在那条需求的描述或原句里——不能改写、不能翻译、不能补充说明
 3. 一条需求可能同时对应多个概念（比如一句话里藏了两件事）
 4. 真的对不上就给空列表 `[]`。**宁可空着，也不要硬凑**——空列表会被判据打回，
    那是正常结果；硬凑出来的绑定会让模型说它没说的话
-5. 需求列表里每一条都要在输出里出现（对不上就给空列表），不要漏"""
+5. 需求列表里每一条都要在输出里出现（对不上就给空列表），不要漏
+6. 描述是**从原句里切出来的片段**时，用「原句」找主语：
+   描述「编辑」+ 原句「库区要能新增、编辑、删除、查询」→ 讲的是 `zone`，
+   evidence 取原句里逐字出现的那个词（「库区」）"""
 
 
 def _build_prompt(requirements: list[dict[str, Any]]) -> str:
@@ -182,11 +185,17 @@ def _build_prompt(requirements: list[dict[str, Any]]) -> str:
     req_lines = []
     for r in requirements:
         rtype = r.get("requirement_type", "")
-        req_lines.append(
+        description = str(r.get("description") or "")
+        context = str(r.get("context_text") or "")
+        line = (
             f"- id={r.get('requirement_id', '')} "
             f"type={rtype}（它在业务流里的位置：{_TYPE_HINT.get(rtype, rtype)}） "
-            f"描述：{r.get('description', '')}"
+            f"描述：{description}"
         )
+        # **原句只在跟描述不同时才给**——一样时是重复，白白烧 token。
+        if context and context != description:
+            line += f"（原句：{context}）"
+        req_lines.append(line)
     return _BIND_PROMPT.format(catalog=catalog, requirements="\n".join(req_lines))
 
 
@@ -205,6 +214,25 @@ def _metric_examples(kind: str) -> list[str]:
         if m["name"] == kind:
             return list(m["keywords"])
     return []
+
+
+def _evidence_in_source(evidence: str, requirement: dict[str, Any]) -> bool:
+    """证据必须逐字出现在需求的描述**或原句**里
+
+    **原句也是逐字原文**（需求盒按句末标点切的），所以拿它当证据池
+    不给幻觉开后门；但它能救回碎片需求的主语——
+    描述「编辑」+ 原句「库区要能新增、编辑、删除、查询」→ 证据「库区」成立。
+
+    以前只认描述，碎片一律绑不上 → `wms_binding` 判红，
+    而红的原因离现场隔着三层（需求盒切句 → 设计盒绑定 → 判据）。
+    """
+    if not evidence:
+        return False
+    description = str(requirement.get("description") or "")
+    if evidence in description:
+        return True
+    context = str(requirement.get("context_text") or "")
+    return bool(context) and evidence in context
 
 
 def _complete_report_metrics(
@@ -230,7 +258,10 @@ def _complete_report_metrics(
     for rid, bs in list(out.items()):
         req = by_id.get(rid) or {}
         description = str(req.get("description") or "")
-        if not description:
+        context = str(req.get("context_text") or "")
+        # **证据池 = 描述 + 原句**（两者都是逐字原文）
+        pool = f"{description}\n{context}" if context else description
+        if not pool.strip():
             continue
         for b in bs:
             report = WMS_REPORTS.get(b.get("kind", ""))
@@ -239,9 +270,9 @@ def _complete_report_metrics(
             for metric_kind in report.get("carries_metrics", []):
                 if any(x["kind"] == metric_kind for x in bs):
                     continue
-                # 证据 = 指标例词里**最长**的那个出现在需求描述里的
+                # 证据 = 指标例词里**最长**的那个出现在证据池里的
                 # （「临期 30 天」比「临期」更像证据）
-                hits = [kw for kw in _metric_examples(metric_kind) if kw in description]
+                hits = [kw for kw in _metric_examples(metric_kind) if kw in pool]
                 if not hits:
                     continue
                 bs.append({"kind": metric_kind, "evidence": max(hits, key=len)})
@@ -319,10 +350,10 @@ def bind_requirements(
                     "reason": f"概念 {kind!r} 不在 WMS 概念表里（自造的概念）",
                 })
                 continue
-            if not evidence or evidence not in description:
+            if not evidence or not _evidence_in_source(evidence, req):
                 errors.append({
                     "requirement_id": rid,
-                    "reason": f"证据 {evidence!r} 不是需求描述里的原文",
+                    "reason": f"证据 {evidence!r} 不是需求描述或原句里的原文",
                 })
                 continue
             if any(x["kind"] == kind for x in kept):

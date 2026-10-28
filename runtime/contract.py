@@ -42,6 +42,20 @@ _PY_TYPE_CHECKS: dict[str, Any] = {
     # 看不出来。只有确实会出现三态的字段才声明 boolean_or_na，
     # 声明它就是在说「这条判据有可能不适用」，这句话要显式。
     "boolean_or_na": lambda v: isinstance(v, bool) or is_not_applicable(v),
+    # 三态数字：数字 / "n/a"（这次这个量用不上）。
+    #
+    # 跟 boolean_or_na 同一个道理，单独开一个类型：
+    # 让 "number" 顺带放行 "n/a"，会把**全系统**每一个数值的口径都放松。
+    #
+    # 为什么需要它：`case_pass_rate` 的分母是「有确定结论的观测数」，
+    # 一条都没验出来时分母是 0 —— 那是 **n/a**（没验到），
+    # 不是 0%（全都没过）。可它**必须是个数字**才能过下游的交接校验
+    # （运维盒声明的形状是 number）——「n/a」字符串会让交接直接失败，
+    # 而失败原因离现场隔着两层。
+    "number_or_na": (
+        lambda v: (isinstance(v, (int, float)) and not isinstance(v, bool))
+        or is_not_applicable(v)
+    ),
 }
 
 

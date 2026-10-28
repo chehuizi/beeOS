@@ -13,6 +13,7 @@ Software Line 第一只盒子——按结构化需求产出可验证的业务模
 - reference_integrity == true    （引用一致）
 - structural_compliance == true  （结构合规）
 - metrics_defined == true        （指标明确）
+                                 ——没有指标需求的批次是 n/a，不是 false
 
 业务语义是真的（结构化需求 → 模型元素 + 证据）；
 基础设施可以是假的（每个 op 是 mock，下一阶段实现真实 modeling engine）。

@@ -61,6 +61,13 @@ def _simulate_parse_requirements(input_data: dict[str, Any]) -> dict[str, Any]:
     """解析业务需求集：结构校验 + 透传有效需求载荷
 
     无效需求（缺 id / type 不在枚举内）记入 parse_errors 并从有效集剔除。
+
+    **顺带把「原句上下文」挂到每条需求上**（context_text）：
+    需求描述可能是从原句切出来的碎片（「编辑」——谁要编辑？编辑什么？），
+    碎片自己绑不上任何 WMS 概念，绑不上 → `wms_binding` 判红，
+    而红的原因离现场隔着三层。
+    它的**原句**里有主语（「库区要能新增、编辑、删除、查询」），
+    而且原句是逐字原文——拿它当上下文不丢信息，也不给幻觉开后门。
     """
     req_set = _requirement_set_of(input_data)
     valid = []
@@ -79,9 +86,31 @@ def _simulate_parse_requirements(input_data: dict[str, Any]) -> dict[str, Any]:
         "business_goal": req_set.get("business_goal", ""),
         "requirement_count": len(valid),
         "valid_ids": [r["requirement_id"] for r in valid],
-        "requirements": valid,
+        "requirements": [_with_context(r, req_set) for r in valid],
         "parse_errors": parse_errors,
     }
+
+
+def _with_context(
+    requirement: dict[str, Any], req_set: dict[str, Any]
+) -> dict[str, Any]:
+    """给一条需求补上它来自的原句（context_text）
+
+    找不到原句就用描述自己——**不猜**，也不因此拒绝这条需求。
+    """
+    out = dict(requirement)
+    sentences = req_set.get("source_sentences") or []
+    by_id = {
+        s.get("sentence_id"): s for s in sentences if s.get("sentence_id")
+    }
+    origin = ""
+    sid = requirement.get("trace_to")
+    if sid and sid in by_id:
+        s = by_id[sid]
+        origin = str(s.get("origin_text") or s.get("text") or "")
+    description = str(requirement.get("description") or "")
+    out["context_text"] = origin or description
+    return out
 
 
 def _simulate_classify_requirements(input_data: dict[str, Any]) -> dict[str, Any]:
@@ -502,6 +531,32 @@ def _simulate_check_consistency(input_data: dict[str, Any]) -> dict[str, Any]:
     }
     expectation_completeness = binding_keys == expectation_keys
 
+    # ---- 「模型里定义了指标」：三态 ----
+    #
+    # 「这批需求需不需要指标」和「模型里有没有指标」是两个问题，
+    # 以前混成一个布尔：这批需求一个指标都没定义 → False → 判红。
+    # 但纯主数据需求（「增加库区管理功能」）**本来就没有指标**——
+    # 判据却要求模型必须定义一个指标，于是每批主数据需求都判红。
+    # 判据假定了「每批需求都该有指标」，跟当初
+    # 「每张票都有小计栏」是同一种病。
+    #
+    # 分母 = **需求盒判定为 metric 型的需求**（原文明确说要度量什么）
+    #      ∪ 已经绑到 WMS 指标概念的需求。
+    # 分母为 0 → 这条判据用不上（n/a），不是「没过」。
+    #
+    # 分母非 0 时**要求指标型需求逐条都绑上了指标概念**：
+    # 漏一条，那条需求就不会变成可判定的预期，测试盒不会去验它，
+    # **业务价值从没被验证**——而这正是判据要拦的那件事。
+    # 宁可红：红的证据里点着是哪几条。
+    metric_typed = {el.get("trace_to") for el in metrics if el.get("trace_to")}
+    metric_missed = sorted(metric_typed - metric_bound)
+    if metric_typed:
+        metrics_defined = not metric_missed
+    elif metric_bound:
+        metrics_defined = True
+    else:
+        metrics_defined = NOT_APPLICABLE
+
     return {
         # 同一条链上第三个「吃了不传」的腿（coverage / consistency / evidence）。
         # 每一处单看都跑得通，接起来分母就成 0，然后安安静静判出一个
@@ -537,11 +592,25 @@ def _simulate_check_consistency(input_data: dict[str, Any]) -> dict[str, Any]:
         "__broken_references__": broken,
         "__structural_compliance__": not violations,
         "__structure_violations__": violations,
-        # 「模型里定义了指标」= **有需求绑到了 WMS 指标概念**。
-        # 以前是 len(metrics) > 0（元素类型是 metric 的个数）——
-        # 那是位置推断的结果：需求被放在流程上时，模型里就一个指标都没有，
-        # 而模型其实谈的就是「临期 SKU 数」。判据在假设需求的形状。
-        "__metrics_defined__": len(metric_bound) > 0,
+        # 「模型里定义了指标」——**三态，不是两态**。
+        #
+        # 「这批需求需不需要指标」和「模型里有没有指标」是两个问题，
+        # 以前混成一个布尔：这批需求一个指标都没定义 → False → 判红。
+        # 但纯主数据需求（「增加库区管理功能」）**本来就没有指标**——
+        # 判据却要求模型必须定义一个指标，于是每批主数据需求都判红。
+        # 判据假定了「每批需求都该有指标」，跟当初
+        # 「每张票都有小计栏」是同一种病。
+        #
+        # 分母 = **需求盒判定为 metric 型的需求**（原文明确说要度量什么）
+        #      ∪ 已经绑到 WMS 指标概念的需求。
+        # 分母为 0 → 这条判据用不上（n/a），不是「没过」。
+        #
+        # 分母非 0 时**要求指标型需求逐条都绑上了指标概念**：
+        # 漏一条，那条需求就不会变成可判定的预期，测试盒不会去验它，
+        # **业务价值从没被验证**——而这正是判据要拦的那件事。
+        # 宁可红：红的证据里点着是哪几条。
+        "__metrics_defined__": metrics_defined,
+        "__metric_requirements_without_binding__": metric_missed,
         "__metrics_without_target__": metrics_without_target,
     }
 
@@ -565,6 +634,9 @@ def _simulate_generate_evidence(input_data: dict[str, Any]) -> dict[str, Any]:
         "metrics_defined": input_data.get("__metrics_defined__", False),
         "wms_binding": input_data.get("__wms_binding__", False),
         "wms_rule_binding": input_data.get("__wms_rule_binding__", False),
+        # 指标判据的三态信息也往下一跳带（打包腿要能看见 n/a）
+        "metric_requirements_without_binding": input_data.get(
+            "__metric_requirements_without_binding__", []),
         # ---- 可判定的预期 ----
         "expectations": input_data.get("expectations", []),
         "expectation_completeness": input_data.get(
@@ -586,6 +658,10 @@ def _simulate_generate_evidence(input_data: dict[str, Any]) -> dict[str, Any]:
             # 读者只知道「WMS 绑定没过」，得回头自己一条条翻。
             "requirements_without_wms_binding": input_data.get(
                 "__requirements_without_wms_binding__", []),
+            # 指标型需求漏绑——判红时点名到具体哪几条，
+            # 不然读者只看到「模型里没有指标」，不知道该去看哪句需求。
+            "metric_requirements_without_binding": input_data.get(
+                "__metric_requirements_without_binding__", []),
             "unbound_requirements": input_data.get("__uncovered__", []),
             # 绑定作废的原因（自造概念 / 证据不是原文 / 类别不匹配）。
             # **没有它，读者只看到「没绑上」，不知道是模型没认出来

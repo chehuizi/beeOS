@@ -30,7 +30,7 @@ from datetime import date, timedelta
 from typing import Any, Callable, Optional
 from uuid import uuid4
 
-from boxes.wms_testing.wms_client import WmsClient, WmsError
+from boxes.wms_testing.wms_client import WmsClient, WmsError, WmsHttpError
 
 
 OUTCOME_PASS = "pass"
@@ -570,6 +570,383 @@ def _check_inventory_dashboard(ctx: ProbeContext, facts: dict[str, Any]) -> Prob
     )
 
 
+# ============================================================
+# 场景：库区管理（仓库下的分区；库位挂在它上面）
+# ============================================================
+
+# 探针用的库区/库位编码前缀——跟批次一样用专用前缀，
+# 免得跟仓里已有的主数据（真实库位）撞上。
+ZONE_CODE_PREFIX = "PROBE-ZONE-"
+LOCATION_CODE_PREFIX = "PROBE-LOC-"
+# 故意指向一个**不存在的库区**——用来验「库位不能挂在不存在的库区上」
+BOGUS_ZONE_CODE = "PROBE-ZONE-NOT-EXIST"
+
+
+def _prepare_zone(ctx: ProbeContext) -> dict[str, Any]:
+    """在验证实例上真跑一遍库区管理
+
+    跑的五件事（对应需求里的五句话）：
+    1. 新增库区
+    2. 查得到（列表里有它）
+    3. 改得了（改名后读出来是新名字）
+    4. **库位挂在这个库区上**（存库位时校验库区存在）
+    5. **库区下还有库位时不允许删除**
+
+    **接口还没有的时候不许抛异常**：那是「现场没条件」，
+    不是「业务没做对」——两者混成一个结论，报告就没法看了。
+    """
+    facts: dict[str, Any] = {"zone_api_missing": False}
+
+    # ---- 先看接口在不在 ----
+    try:
+        ctx.client.list_zones()
+    except WmsHttpError as exc:
+        if exc.status == 404:
+            facts["zone_api_missing"] = True
+            facts["detail"] = str(exc)
+            return facts
+        raise
+
+    warehouses = ctx.client.list_warehouses()
+    if not warehouses:
+        facts["no_warehouse"] = True
+        return facts
+    # **必须挑一个「启用」的仓库**：
+    # 仓里的库位/库区服务都要求仓库是启用的（停用的仓库连库位都建不了）。
+    # 探针要是挑了停用的那个，报错会变成
+    # 「仓库已停用」——那是**探针挑错了数据**，不是功能没实现，
+    # 而它会让真正的结论被淹没（实测：库位挂不上 → 后面「库区能删」也跟着假失败）。
+    active = [
+        w for w in warehouses
+        if w.get("status") in (1, "1", True)
+    ]
+    facts["warehouse_pool"] = [
+        {"id": w.get("id"), "code": w.get("code"), "status": w.get("status")}
+        for w in warehouses
+    ]
+    if not active:
+        facts["no_active_warehouse"] = True
+        return facts
+    warehouse_id = active[0].get("id")
+    facts["warehouse_code"] = active[0].get("code")
+
+    suffix = uuid4().hex[:6].upper()
+    zone_code = f"{ZONE_CODE_PREFIX}{suffix}"
+    zone_name = f"探针库区-{suffix}"
+    facts["warehouse_id"] = warehouse_id
+    facts["zone_code"] = zone_code
+
+    # ---- 1. 新增 ----
+    try:
+        zone = ctx.client.create_zone({
+            "warehouseId": warehouse_id,
+            "code": zone_code,
+            "name": zone_name,
+        })
+    except WmsError as exc:
+        facts["create_failed"] = str(exc)
+        return facts
+    facts["zone"] = zone
+    zone_id = zone.get("id") if isinstance(zone, dict) else None
+    facts["zone_id"] = zone_id
+    if not zone_id:
+        facts["create_failed"] = f"新增库区没返回 id：{zone!r}"
+        return facts
+
+    # ---- 2. 查得到 ----
+    try:
+        zones = ctx.client.list_zones()
+    except WmsError as exc:
+        facts["list_failed"] = str(exc)
+        zones = []
+    facts["listed_codes"] = sorted(
+        str(z.get("code")) for z in zones if isinstance(z, dict)
+    )
+    facts["found_in_list"] = zone_code in facts["listed_codes"]
+
+    # ---- 3. 改得了 ----
+    new_name = f"探针库区-改-{suffix}"
+    try:
+        updated = ctx.client.update_zone(zone_id, {
+            "warehouseId": warehouse_id,
+            "code": zone_code,
+            "name": new_name,
+        })
+        facts["updated"] = updated
+        facts["update_ok"] = True
+    except WmsError as exc:
+        facts["update_ok"] = False
+        facts["update_error"] = str(exc)
+        new_name = zone_name
+    try:
+        reread = ctx.client.get_zone(zone_id)
+        facts["reread_name"] = (
+            reread.get("name") if isinstance(reread, dict) else None
+        )
+    except WmsError as exc:
+        facts["reread_name"] = None
+        facts["reread_error"] = str(exc)
+
+    # ---- 4. 库位挂在库区上 ----
+    loc_code = f"{LOCATION_CODE_PREFIX}{suffix}"
+    facts["location_code"] = loc_code
+    try:
+        location = ctx.client.create_location({
+            "warehouseId": warehouse_id,
+            "code": loc_code,
+            "zone": zone_code,
+            "locationType": 1,
+        })
+        facts["location"] = location
+        facts["location_id"] = (
+            location.get("id") if isinstance(location, dict) else None
+        )
+        facts["location_created"] = True
+    except WmsError as exc:
+        facts["location_created"] = False
+        facts["location_error"] = str(exc)
+        facts["location_id"] = None
+
+    # ---- 4b. 挂在不存在的库区上要被拒 ----
+    try:
+        bogus = ctx.client.create_location({
+            "warehouseId": warehouse_id,
+            "code": f"{LOCATION_CODE_PREFIX}B{suffix}",
+            "zone": BOGUS_ZONE_CODE,
+            "locationType": 1,
+        })
+        facts["bogus_zone_rejected"] = False
+        facts["bogus_zone_accepted"] = bogus
+        # 建出来了就顺手删掉，别留垃圾
+        if isinstance(bogus, dict) and bogus.get("id"):
+            try:
+                ctx.client.delete_location(bogus["id"])
+            except WmsError:
+                pass
+    except WmsError as exc:
+        facts["bogus_zone_rejected"] = True
+        facts["bogus_zone_error"] = str(exc)
+
+    # ---- 5. 库区下还有库位时不允许删 ----
+    try:
+        ctx.client.delete_zone(zone_id)
+        facts["delete_with_location_rejected"] = False
+        facts["delete_with_location_succeeded"] = True
+        zone_deleted = True
+    except WmsError as exc:
+        facts["delete_with_location_rejected"] = True
+        facts["delete_with_location_error"] = str(exc)
+        zone_deleted = False
+
+    # ---- 收尾：把探针造的数据清掉 ----
+    if facts.get("location_id"):
+        try:
+            ctx.client.delete_location(facts["location_id"])
+            facts["location_cleaned"] = True
+        except WmsError as exc:
+            facts["location_cleaned"] = False
+            facts["location_clean_error"] = str(exc)
+    if not zone_deleted:
+        try:
+            ctx.client.delete_zone(zone_id)
+            facts["zone_cleaned"] = True
+        except WmsError as exc:
+            facts["zone_cleaned"] = False
+            facts["zone_clean_error"] = str(exc)
+    else:
+        facts["zone_cleaned"] = True
+    return facts
+
+
+def _check_zone_management(ctx: ProbeContext, facts: dict[str, Any]) -> ProbeResult:
+    """库区管理：能增删改查，且**库位真的挂在库区上**
+
+    判据是需求里那几句话逐条对上：
+    - 「能新增」→ 建得出来
+    - 「能查询」→ 列表里有它
+    - 「能编辑」→ 改完读出来是新值
+    - 「库位归属在库区上」→ 库位能挂上去；**挂到不存在的库区要被拒**
+    - 「能删除」→ 库区下没库位时删得掉；**有库位时删不掉**
+    """
+    if facts.get("zone_api_missing"):
+        return ProbeResult(
+            OUTCOME_INDETERMINATE,
+            "验证实例上还没有库区接口（404）——这次验不了，"
+            "不能拿「没验到」当「做到了」",
+            {"detail": facts.get("detail", "")},
+        )
+    if facts.get("no_warehouse"):
+        return ProbeResult(
+            OUTCOME_INDETERMINATE,
+            "验证实例上没有仓库——库区挂在仓库下面，造不出场景",
+            {},
+        )
+    if facts.get("no_active_warehouse"):
+        return ProbeResult(
+            OUTCOME_INDETERMINATE,
+            "验证实例上没有**启用**的仓库——库位和库区都要挂在启用的仓库上，"
+            "造不出场景",
+            {"warehouses": facts.get("warehouse_pool") or []},
+        )
+    if facts.get("create_failed"):
+        return ProbeResult(
+            OUTCOME_FAIL,
+            f"新增库区失败：{facts.get('create_failed')}",
+            {"zone_code": facts.get("zone_code", "")},
+        )
+
+    problems: list[str] = []
+    if not facts.get("found_in_list"):
+        problems.append(
+            f"新增的库区 {facts.get('zone_code')} 在列表里查不到"
+        )
+    if not facts.get("update_ok"):
+        problems.append(f"编辑库区失败：{facts.get('update_error')}")
+    else:
+        updated = facts.get("updated")
+        expected_name = updated.get("name") if isinstance(updated, dict) else None
+        if expected_name is not None and facts.get("reread_name") != expected_name:
+            problems.append(
+                f"编辑后读回来的名字是 {facts.get('reread_name')!r}，"
+                f"跟改成的 {expected_name!r} 不一样"
+            )
+    if not facts.get("location_created"):
+        problems.append(
+            f"库位挂不到库区上：{facts.get('location_error')}"
+        )
+    if facts.get("bogus_zone_rejected") is False:
+        problems.append(
+            f"库位挂到不存在的库区（{BOGUS_ZONE_CODE}）居然建成了——"
+            "「库位归属在库区上」没有真的被校验"
+        )
+    if facts.get("delete_with_location_rejected") is False:
+        problems.append(
+            "库区下还有库位时居然删得掉——删掉就留下悬空的库位了"
+        )
+
+    details = {
+        "zone_code": facts.get("zone_code", ""),
+        "zone_id": facts.get("zone_id"),
+        "found_in_list": facts.get("found_in_list"),
+        "reread_name": facts.get("reread_name"),
+        "location_code": facts.get("location_code", ""),
+        "location_created": facts.get("location_created"),
+        "bogus_zone_rejected": facts.get("bogus_zone_rejected"),
+        "delete_with_location_rejected": facts.get(
+            "delete_with_location_rejected"),
+        "cleanup": {
+            "location_cleaned": facts.get("location_cleaned"),
+            "zone_cleaned": facts.get("zone_cleaned"),
+        },
+    }
+    if problems:
+        return ProbeResult(
+            OUTCOME_FAIL,
+            "库区管理有 " + str(len(problems)) + " 处没对上：" + "；".join(problems),
+            details,
+        )
+    return ProbeResult(
+        OUTCOME_PASS,
+        "库区能增删改查，库位挂上了库区，不存在的库区被拒，"
+        "库区下有库位时删不掉",
+        details,
+    )
+
+
+def _check_zone_under_warehouse(ctx: ProbeContext, facts: dict[str, Any]) -> ProbeResult:
+    """库区挂在**某个仓库**下面（库区不是悬空的）
+
+    需求第一句就是「库区是仓库下的分区」——
+    这条要验的是**归属关系**：库区得真的属于一个仓库。
+    """
+    if facts.get("zone_api_missing"):
+        return ProbeResult(
+            OUTCOME_INDETERMINATE,
+            "验证实例上还没有库区接口（404）——这次验不了",
+            {"detail": facts.get("detail", "")},
+        )
+    zone = facts.get("zone") or {}
+    if not isinstance(zone, dict) or not zone.get("id"):
+        return ProbeResult(
+            OUTCOME_FAIL,
+            f"没拿到库区：{facts.get('create_failed')}",
+            {},
+        )
+    zone_warehouse = zone.get("warehouseId")
+    if zone_warehouse is None:
+        return ProbeResult(
+            OUTCOME_FAIL,
+            "库区没有 warehouseId——它不挂在任何仓库下面",
+            {"zone": zone},
+        )
+    if zone_warehouse != facts.get("warehouse_id"):
+        return ProbeResult(
+            OUTCOME_FAIL,
+            f"库区挂在仓库 {zone_warehouse} 下，"
+            f"不是这次指定的仓库 {facts.get('warehouse_id')}",
+            {"zone": zone},
+        )
+    return ProbeResult(
+        OUTCOME_PASS,
+        f"库区 {facts.get('zone_code')} 挂在仓库 {zone_warehouse} 下面",
+        {"zone_code": facts.get("zone_code"), "warehouse_id": zone_warehouse},
+    )
+
+
+def _check_location_ownership(ctx: ProbeContext, facts: dict[str, Any]) -> ProbeResult:
+    """库位归属在库区上：挂得上，且**挂到不存在的库区要被拒**
+
+    「库位归属在库区上」不是一句说明，是**要被校验的**：
+    - 挂到真库区 → 成功
+    - 挂到不存在的库区 → **必须被拒**
+      （不拒的话，「归属」就只是一段随便写的字符串）
+    """
+    if facts.get("zone_api_missing"):
+        return ProbeResult(
+            OUTCOME_INDETERMINATE,
+            "验证实例上还没有库区接口（404）——这次验不了",
+            {"detail": facts.get("detail", "")},
+        )
+    problems: list[str] = []
+    if not facts.get("location_created"):
+        problems.append(f"库位挂不到库区上：{facts.get('location_error')}")
+    if facts.get("bogus_zone_rejected") is False:
+        problems.append(
+            f"库位挂到不存在的库区（{BOGUS_ZONE_CODE}）居然建成了——"
+            "「库位归属在库区上」没有真的被校验"
+        )
+    details = {
+        "zone_code": facts.get("zone_code", ""),
+        "location_code": facts.get("location_code", ""),
+        "location_created": facts.get("location_created"),
+        "bogus_zone_rejected": facts.get("bogus_zone_rejected"),
+    }
+    if problems:
+        return ProbeResult(
+            OUTCOME_FAIL,
+            "；".join(problems),
+            details,
+        )
+    return ProbeResult(
+        OUTCOME_PASS,
+        f"库位 {facts.get('location_code')} 挂在库区 {facts.get('zone_code')} 上，"
+        "挂到不存在的库区被拒",
+        details,
+    )
+
+
+ZONE_MANAGEMENT_SCENARIO = Scenario(
+    scenario_id="zone_management",
+    mutates=True,
+    prepare=_prepare_zone,
+    probes=[
+        Probe("zone", "zone_management", _check_zone_management),
+        Probe("warehouse", "zone_management", _check_zone_under_warehouse),
+        Probe("location", "zone_management", _check_location_ownership),
+    ],
+)
+
+
 BATCH_EXPIRY_SCENARIO = Scenario(
     scenario_id="batch_expiry_allocation",
     mutates=True,
@@ -587,6 +964,7 @@ BATCH_EXPIRY_SCENARIO = Scenario(
 
 SCENARIOS: dict[str, Scenario] = {
     BATCH_EXPIRY_SCENARIO.scenario_id: BATCH_EXPIRY_SCENARIO,
+    ZONE_MANAGEMENT_SCENARIO.scenario_id: ZONE_MANAGEMENT_SCENARIO,
 }
 
 

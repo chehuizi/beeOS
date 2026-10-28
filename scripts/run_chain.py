@@ -51,6 +51,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -58,9 +59,19 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from kanban.trigger import trigger_task  # noqa: E402
 from runtime.store import TaskRunStore  # noqa: E402
+from boxes.wms_testing.probes import SCENARIOS  # noqa: E402
 
 
 DEFAULT_VERIFY_BASE_URL = "http://127.0.0.1:8081/api/v1"
+
+# 验证实例的启动参数（**可配**——机器不同，端口/库/用户也不同）
+VERIFY_DB_URL_ENV = "BEEOS_VERIFY_DB_URL"
+VERIFY_DB_USER_ENV = "BEEOS_VERIFY_DB_USER"
+VERIFY_DB_PASSWORD_ENV = "BEEOS_VERIFY_DB_PASSWORD"
+VERIFY_JAVA_ENV = "BEEOS_VERIFY_JAVA"
+VERIFY_LOG_ENV = "BEEOS_VERIFY_LOG"
+VERIFY_DEPLOY_ENV = "BEEOS_VERIFY_DEPLOY"
+VERIFY_RESET_DB_ENV = "BEEOS_VERIFY_RESET_DB"
 
 
 def _read_narrative(args: argparse.Namespace) -> str:
@@ -76,6 +87,154 @@ def _git_head(repo: str) -> str:
         ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True,
     )
     return proc.stdout.strip()
+
+
+def _port_of(base_url: str) -> int:
+    """从 API 根里取出端口"""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(base_url)
+    if parsed.port:
+        return parsed.port
+    return 443 if parsed.scheme == "https" else 80
+
+
+def _port_open(port: int) -> bool:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(1.0)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _stop_instance(port: int) -> list[int]:
+    """把占着端口的进程停掉（验证实例要换成新构建）"""
+    pids: list[int] = []
+    try:
+        out = subprocess.run(
+            ["lsof", "-ti", f"tcp:{port}"],
+            capture_output=True, text=True, timeout=30,
+        ).stdout
+        pids = [int(x) for x in out.split() if x.strip().isdigit()]
+    except Exception:  # noqa: BLE001 - 没有 lsof 就当没找到进程
+        pids = []
+    for pid in pids:
+        subprocess.run(["kill", str(pid)], check=False)
+    for _ in range(60):
+        if not _port_open(port):
+            break
+        time.sleep(0.5)
+    return pids
+
+
+def _reset_verify_db(db_url: str, db_user: str) -> str:
+    """把验证实例的库重置（Flyway 会重新跑一遍迁移，含种子数据）
+
+    **为什么每次链跑都要重置**：开发盒的迁移版本号是按**仓库基线**算的
+    （仓里到 V4 → 新建 V5）。可验证实例的库里可能已经有**上一次实验**
+    留下的 V5 —— 内容还不一样（模型每次写出来的 SQL 不一样）→
+    Flyway 报 `Migration checksum mismatch` → **服务根本起不来**。
+
+    验证实例本来就是一次性的实验环境，重置它才对。
+    生产库不归这条链管（运维盒只读它）。
+    """
+    if os.environ.get(VERIFY_RESET_DB_ENV, "1") == "0":
+        return "（按配置跳过了重置）"
+    # jdbc:postgresql://host:port/db → psql 参数
+    raw = db_url.replace("jdbc:", "")
+    if not raw.startswith("postgresql://"):
+        return f"（看不懂的数据库地址 {db_url!r}，没重置）"
+    rest = raw[len("postgresql://"):]
+    hostport, _, dbname = rest.partition("/")
+    host, _, port = hostport.partition(":")
+    cmd = [
+        "psql", "-h", host or "127.0.0.1", "-p", port or "5432",
+        "-U", db_user or os.environ.get("USER", "postgres"),
+        "-d", dbname, "-v", "ON_ERROR_STOP=1",
+        "-c", "DROP SCHEMA public CASCADE",
+        "-c", "CREATE SCHEMA public",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    if proc.returncode != 0:
+        return f"（重置失败：{(proc.stderr or proc.stdout).strip()[:200]}）"
+    return f"已重置 {dbname}（Flyway 会重新跑迁移 + 种子数据）"
+
+
+def _deploy_to_verify_instance(
+    dev_result: dict, verify_url: str
+) -> str:
+    """把**开发盒交付的那份构建**部署到验证实例
+
+    **为什么这一步不能省**：不做它，测试盒对着**跑着的旧实例**跑，
+    然后报告说「验过了」——**测的不是被测的那个**。
+    开发盒交的是新构建，测试盒量的是旧代码，
+    链上却显示成「已验证」。这是这条链上最贵的一种假绿。
+
+    部署不了就**中止**（退出码 2），不降级成「对着现役实例跑」——
+    降级之后没人看得出那份报告量的不是新构建。
+    """
+    if os.environ.get(VERIFY_DEPLOY_ENV, "1") == "0":
+        return (
+            f"⚠️  跳过了部署（{VERIFY_DEPLOY_ENV}=0）："
+            "测试盒量的是**跑着的那个实例**，不保证是开发盒刚交的那份构建"
+        )
+
+    # **制品在制品库里**（工作区拆了，jar_path 那条路已经没了）
+    jar = str(dev_result.get("artifact_path") or dev_result.get("jar_path") or "")
+    if not jar or not Path(jar).exists():
+        raise SystemExit(
+            "开发盒没交付可部署的构建（artifact_path="
+            f"{dev_result.get('artifact_path')!r}）——链不能继续："
+            "否则测试盒会对着旧实例跑，报告却说验过了"
+        )
+
+    port = _port_of(verify_url)
+    stopped = _stop_instance(port)
+
+    # **先把验证库重置**：上一次实验留下的迁移（内容还不一样）
+    # 会让 Flyway 报 checksum mismatch，服务起不来
+    reset_note = _reset_verify_db(
+        os.environ.get(VERIFY_DB_URL_ENV, ""),
+        os.environ.get(VERIFY_DB_USER_ENV, ""),
+    )
+
+    java = os.environ.get(VERIFY_JAVA_ENV, "java")
+    db_url = os.environ.get(VERIFY_DB_URL_ENV, "")
+    db_user = os.environ.get(VERIFY_DB_USER_ENV, "")
+    db_password = os.environ.get(VERIFY_DB_PASSWORD_ENV, "")
+    log_path = os.environ.get(
+        VERIFY_LOG_ENV, f"/tmp/beeos-verify-{port}.log"
+    )
+    cmd = [java, "-jar", jar, f"--server.port={port}"]
+    if db_url:
+        cmd.append(f"--spring.datasource.url={db_url}")
+    if db_user:
+        cmd.append(f"--spring.datasource.username={db_user}")
+    if db_password:
+        cmd.append(f"--spring.datasource.password={db_password}")
+
+    with open(log_path, "ab") as log:
+        log.write(
+            f"\n===== 部署验证实例 {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n"
+            f"jar: {jar}\ncmd: {' '.join(cmd)}\n".encode()
+        )
+        log.flush()
+        subprocess.Popen(
+            cmd, stdout=log, stderr=log, start_new_session=True,
+        )
+
+    # 等它真的能应答（Flyway 迁移也在这个过程里跑）
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        if _port_open(port):
+            return (
+                f"验证实例已换成开发盒交付的构建（jar={Path(jar).name}，"
+                f"停掉旧进程 {stopped or '无'}，{reset_note}，日志 {log_path}）"
+            )
+        time.sleep(1.0)
+    raise SystemExit(
+        f"新构建起来了但 120 秒内没应答（端口 {port}）——看日志 {log_path}"
+    )
 
 
 def main() -> int:
@@ -132,12 +291,21 @@ def main() -> int:
     }, store, handoff={"design_package_ref": design["task_run_id"]})
     dev_result = dev.get("result") or {}
 
+    # ---- 3.5) 把开发盒交付的那份构建部署到验证实例 ----
+    #
+    # 不做这一步，测试盒量的是**旧代码**，报告却说「验过了」。
+    deploy_note = _deploy_to_verify_instance(dev_result, verify_url)
+    print(f"[deploy] {deploy_note}", file=sys.stderr)
+
     # ---- 4) 测试盒（制品 + 需求 + 预期 全部接力）----
     os.environ["BEEOS_WMS_BASE_URL"] = verify_url
     os.environ["BEEOS_WMS_MODE"] = "verification"
     test = trigger_task("wms_testing_box", "handle_testing_request", {
         "test_task_id": f"tt_{cap['task_run_id'][:8]}",
-        "scenarios": ["batch_expiry_allocation"],
+        # **场景清单 = 盒子里登记的全部场景**——
+        # 写死一个的话，新登记的场景永远不会被跑到，
+        # 而「没跑到」和「没通过」在报告上长得一样。
+        "scenarios": sorted(SCENARIOS.keys()),
     }, store, handoff={
         "requirement_ref": cap["task_run_id"],
         "expectation_ref": design["task_run_id"],

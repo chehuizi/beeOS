@@ -28,6 +28,27 @@ class WmsError(RuntimeError):
     """WMS 调用失败（连不上 / 非 200 / 业务 code 非 0）"""
 
 
+class WmsHttpError(WmsError):
+    """WMS 回了 HTTP 错误（404 / 400 / 500）
+
+    **为什么要跟业务错误分开**：两者对探针的含义完全不同。
+
+    - 业务错误（`code != 0`，HTTP 200）= **WMS 明确拒绝了这次请求**
+      → 这往往正是要验的东西（比如「库区下还有库位时删除库区」要被拒绝）
+    - HTTP 错误 = **接口不存在 / 契约对不上 / 服务炸了**
+      → 404 说明**这个功能压根没有**，那是「现场没条件」，
+        不是「业务没做对」；500 说明服务坏了，得先修服务。
+
+    混成一个 WmsError 的话，探针分不出「接口没有」和「业务拒绝」，
+    于是要么把没实现的功能判成失败，要么把服务故障当成通过。
+    """
+
+    def __init__(self, message: str, status: int = 0):
+        super().__init__(message)
+        #: HTTP 状态码（0 = 不是 HTTP 层错误）
+        self.status = status
+
+
 class WmsClient:
     """WMS API 客户端
 
@@ -53,7 +74,9 @@ class WmsClient:
                 raw = resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:300]
-            raise WmsError(f"{method} {path} → HTTP {exc.code}: {detail}") from exc
+            raise WmsHttpError(
+                f"{method} {path} → HTTP {exc.code}: {detail}", status=exc.code,
+            ) from exc
         except Exception as exc:  # noqa: BLE001 - 连接类错误统一变成 WmsError
             raise WmsError(f"{method} {path} → 连不上 WMS：{exc}") from exc
 
@@ -99,6 +122,38 @@ class WmsClient:
 
     def list_locations(self) -> list[dict[str, Any]]:
         return self._list("/locations")
+
+    # ---- 库区（仓库下的分区；库位挂在它上面）----
+    #
+    # **接口形状是仓里的约定**（跟仓库模块一致）：
+    # GET    /zones      查询（分页）
+    # POST   /zones      新增
+    # PUT    /zones/{id} 编辑
+    # DELETE /zones/{id} 删除
+    def list_zones(self) -> list[dict[str, Any]]:
+        return self._list("/zones")
+
+    def create_zone(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._call("POST", "/zones", payload)
+
+    def get_zone(self, zone_id: int) -> dict[str, Any]:
+        return self._call("GET", f"/zones/{zone_id}")
+
+    def update_zone(self, zone_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._call("PUT", f"/zones/{zone_id}", payload)
+
+    def delete_zone(self, zone_id: int) -> dict[str, Any]:
+        return self._call("DELETE", f"/zones/{zone_id}")
+
+    # ---- 库位（挂库区靠它）----
+    def create_location(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._call("POST", "/locations", payload)
+
+    def get_location(self, location_id: int) -> dict[str, Any]:
+        return self._call("GET", f"/locations/{location_id}")
+
+    def delete_location(self, location_id: int) -> dict[str, Any]:
+        return self._call("DELETE", f"/locations/{location_id}")
 
     def list_warehouses(self) -> list[dict[str, Any]]:
         return self._list("/warehouses")

@@ -403,6 +403,28 @@ class TestSentenceSplitting:
         assert s[0]["role"] == "goal"
         assert [x["role"] for x in s[1:]] == ["fact", "fact"]
 
+    def test_枚举项带原句_碎片不丢主语(self):
+        """枚举项独立成句，但每句都带着它来自的原句
+
+        「库区要能新增、编辑、删除、查询」按顿号切开 → 「编辑」这句
+        **丢了主语**（谁要编辑？编辑什么？）。碎片自己绑不上任何 WMS 概念，
+        但原句里有主语，而且原句是**逐字原文**。
+
+        修法不是把四项并回一句（那会丢粒度：四件事变成一件），
+        是给每句带上 origin_text。
+        """
+        s = _split_sentences("库区要能新增、编辑、删除、查询")
+        assert [x["text"] for x in s] == [
+            "库区要能新增", "编辑", "删除", "查询",
+        ]
+        assert all(
+            x["origin_text"] == "库区要能新增、编辑、删除、查询" for x in s
+        ), [x["origin_text"] for x in s]
+
+    def test_普通句的原句就是它自己(self):
+        s = _split_sentences("库位要能新增。库区要能查询。")
+        assert all(x["origin_text"] == x["text"] for x in s)
+
     def test_sentence_ids_are_sequential(self):
         s = _split_sentences("第一句。第二句。第三句。")
         assert [x["sentence_id"] for x in s] == ["sent_1", "sent_2", "sent_3"]

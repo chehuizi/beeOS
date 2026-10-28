@@ -122,6 +122,9 @@ WMS_DESIGN_BOX = BeeBoxDefinition(
                 metric="metrics_defined",
                 op="eq",
                 value=True,
+                # 这批需求本来就没有指标时，产出是 n/a（不是 false），
+                # runtime 会把它记进 not_applicable_rules——既不挡通过，
+                # 也不谎称通过。纯主数据需求（「增加库区管理功能」）不该被指标判据拦下。
             ),
             # ---- WMS 域专属 ----
             #

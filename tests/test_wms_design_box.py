@@ -19,6 +19,7 @@ from boxes.wms_design.measure import COMPUTERS as MODEL_COMPUTERS
 from boxes.wms_design.schemas import REQUIREMENT_TYPES
 from boxes.wms_design.beeline import WMS_DESIGN_BEELINE, get_beeline
 from core import metrics as m
+from core.models import NOT_APPLICABLE
 from runtime import (
     BeelineExecutor,
     AcceptanceStatus,
@@ -325,7 +326,7 @@ class TestModelingEndToEnd:
         # acceptance 字段必须不同
         req_metrics = {a.metric for a in req_def.result.acceptance}
         mod_metrics = {a.metric for a in mod_def.result.acceptance}
-        assert "source_coverage" in req_metrics        # 需求盒特征
+        assert "source_coverage" in req_metrics   # 需求盒特征
         assert "requirement_coverage" in mod_metrics   # 建模盒特征
         # 不能混入
         assert "source_coverage" not in mod_metrics
@@ -445,15 +446,121 @@ class TestModelingMockSemantics:
         out = task_run.operations["classify_requirements"].output
         assert validate_payload(out, schema) == []
 
-    def test_no_metric_requirement_rejected(self):
-        """无 metric 类需求 → metrics_defined=False → REJECTED"""
+    def test_no_metric_requirement_is_not_applicable_not_failed(self):
+        """这批需求本来就没有指标 → metrics_defined=n/a，不是 false
+
+        「增加库区管理功能」这种纯主数据需求，一条指标都没有——
+        判据以前要求模型必须定义一个指标，于是每批主数据需求都判红。
+        **判据假定了「每批需求都该有指标」**，跟「每张票都有小计栏」同一种病。
+        """
         box = get_definition()
         task_run = self._run([
-            {"requirement_id": "r_obj", "description": "x", "requirement_type": "object", "priority": "must_have"},
+            {"requirement_id": "r_obj", "description": "库区是仓库下的分区",
+             "requirement_type": "object", "priority": "must_have"},
         ])
-        assert task_run.result["requirement_coverage"] == 100.0
+        assert task_run.result["metrics_defined"] == NOT_APPLICABLE
+        eval_result = evaluate_acceptance(task_run, box.result)
+        # n/a 不进 failed_rules，也不进 passed_rules
+        assert "metrics_defined" in eval_result.not_applicable_rules
+        assert all(f["metric"] != "metrics_defined" for f in eval_result.failed_rules)
+
+    def test_metric_requirement_without_binding_is_failed(self):
+        """有指标型需求但模型里没定义指标 → metrics_defined=False → 判红
+
+        这是「宁可红」的那一侧：**指标型需求漏绑了指标概念**，
+        那条需求就不会变成可判定的预期，测试盒不会去验它，
+        业务价值从没被验证——判据要拦的正是这个。
+        """
+        box = get_definition()
+        task_run = self._run([
+            {"requirement_id": "r_met", "description": "每天要统计处理的单据数量",
+             "requirement_type": "metric", "priority": "must_have"},
+        ])
         assert task_run.result["metrics_defined"] is False
-        assert evaluate_acceptance(task_run, box.result).status == AcceptanceStatus.REJECTED
+        # 红的证据里点着是哪一条
+        detail = task_run.result["evidence"]["evidence_detail"]
+        assert detail["metric_requirements_without_binding"] == ["r_met"]
+        eval_result = evaluate_acceptance(task_run, box.result)
+        assert eval_result.status == AcceptanceStatus.REJECTED
+        assert any(f["metric"] == "metrics_defined" for f in eval_result.failed_rules)
+
+    def test_metric_requirement_bound_is_true(self):
+        """指标型需求绑上了指标概念 → metrics_defined=True"""
+        task_run = self._run([
+            {"requirement_id": "r_met", "description": "拣货准确率要能算出来",
+             "requirement_type": "metric", "priority": "must_have"},
+        ])
+        assert task_run.result["metrics_defined"] is True
+
+    def test_需求带着原句进来_碎片能拿到上下文(self):
+        """需求集带 source_sentences 时，每条需求都拿到它的原句
+
+        「编辑」这种碎片描述自己绑不上 zone，但它来自的原句里有「库区」。
+        没有这一步，碎片需求在下游一律绑不上 → `wms_binding` 判红，
+        而红的原因离现场隔着三层。
+        """
+        box = get_definition()
+        beeline = get_beeline()
+        task_run = create_task_run(
+            "pm", "handle_modeling_request", box.result.result_schema,
+            f"{box.id}@v{box.version}", beeline.id, beeline.version,
+            "rt", "in",
+        )
+        run = BeelineExecutor(MODELING_RUNNER).execute(
+            task_run, beeline,
+            {
+                "set_id": "req_ctx",
+                "business_goal": "g",
+                "source_sentences": [
+                    {
+                        "sentence_id": "sent_1",
+                        "text": "编辑",
+                        "role": "fact",
+                        "origin_text": "库区要能新增、编辑、删除、查询",
+                    },
+                ],
+                "requirements": [
+                    {
+                        "requirement_id": "r_frag",
+                        "description": "编辑",
+                        "requirement_type": "process",
+                        "priority": "must_have",
+                        "trace_to": "sent_1",
+                    },
+                ],
+            },
+        )
+        parsed = run.operations["parse_requirements"].output
+        assert parsed["requirements"][0]["context_text"] == (
+            "库区要能新增、编辑、删除、查询"
+        )
+
+    def test_没有原句的需求_上下文就是它自己(self):
+        """找不到原句就用描述自己——不猜，也不因此拒绝这条需求"""
+        box = get_definition()
+        beeline = get_beeline()
+        task_run = create_task_run(
+            "pm", "handle_modeling_request", box.result.result_schema,
+            f"{box.id}@v{box.version}", beeline.id, beeline.version,
+            "rt", "in",
+        )
+        run = BeelineExecutor(MODELING_RUNNER).execute(
+            task_run, beeline,
+            {
+                "set_id": "req_noctx",
+                "business_goal": "g",
+                "requirements": [
+                    {
+                        "requirement_id": "r_plain",
+                        "description": "库区要能查询",
+                        "requirement_type": "process",
+                        "priority": "must_have",
+                    },
+                ],
+            },
+        )
+        parsed = run.operations["parse_requirements"].output
+        assert parsed["requirements"][0]["context_text"] == "库区要能查询"
 
     def test_invalid_type_excluded_from_coverage(self):
         """type 非法的需求被 parse 剔除，不进覆盖率分母"""

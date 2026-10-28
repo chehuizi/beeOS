@@ -103,6 +103,8 @@ def _verification_ok(verification: dict[str, Any]) -> tuple[bool, str]:
             f"{verification.get('open_defect_count')}）"
         )
     rate = verification.get("case_pass_rate")
+    if rate is None or (isinstance(rate, str) and rate.strip() == "n/a"):
+        return False, "验收报告没给通过率（没验出东西，通过率用不上）"
     if not isinstance(rate, (int, float)) or rate < VERIFICATION_PASS_RATE:
         return False, f"验收通过率 {rate}，不到 {VERIFICATION_PASS_RATE}"
     return True, f"验收通过（case_pass_rate={rate}）"

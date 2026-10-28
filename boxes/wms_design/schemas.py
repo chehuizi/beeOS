@@ -96,6 +96,22 @@ BUSINESS_REQUIREMENT_SET = SchemaDef(
         FieldDef(name="set_id", type="string"),
         FieldDef(name="business_goal", type="string"),
         FieldDef(name="context", type="string", required=False),
+        # 原句表（本盒消费它做上下文，见 schema_requirement_set_input 的说明）
+        FieldDef(
+            name="source_sentences",
+            type="array",
+            required=False,
+            items=FieldDef(
+                name="sentence",
+                type="object",
+                properties=[
+                    FieldDef(name="sentence_id", type="string"),
+                    FieldDef(name="text", type="string"),
+                    FieldDef(name="role", type="string", required=False),
+                    FieldDef(name="origin_text", type="string", required=False),
+                ],
+            ),
+        ),
         FieldDef(
             name="requirements",
             type="array",
@@ -108,6 +124,8 @@ BUSINESS_REQUIREMENT_SET = SchemaDef(
                     FieldDef(name="requirement_type", type="enum", values=list(REQUIREMENT_TYPES)),
                     FieldDef(name="priority", type="enum", values=list(REQUIREMENT_PRIORITIES)),
                     FieldDef(name="traceable_to", type="string", required=False),
+                    # 指回原句的那一句 id——本盒用它取上下文
+                    FieldDef(name="trace_to", type="string", required=False),
                 ],
             ),
         ),
@@ -422,7 +440,10 @@ MODEL_EVIDENCE = SchemaDef(
         FieldDef(name="rule_consistency", type="boolean"),
         FieldDef(name="reference_integrity", type="boolean"),
         FieldDef(name="structural_compliance", type="boolean"),
-        FieldDef(name="metrics_defined", type="boolean"),
+        # **三态**：这批需求本来就没有指标时，这条判据**用不上**（n/a），
+        # 不是「没过」。声明 boolean 会把 n/a 判成类型错误——
+        # 纯主数据需求（「增加库区管理功能」）本来就不该被指标判据拦下。
+        FieldDef(name="metrics_defined", type="boolean_or_na"),
         # ---- 可判定的预期 ----
         # 「判了就要带出来」：判据读的就是这份载体，
         # 不带出来的话，下游（测试盒 / 分析盒）根本不知道该验什么。
@@ -447,6 +468,24 @@ MODEL_EVIDENCE = SchemaDef(
                     name="unbound_requirements",
                     type="array",
                     items=FieldDef(name="r", type="string")),
+                # 指标型需求漏绑（判红时点名到哪几条）
+                FieldDef(
+                    name="metric_requirements_without_binding",
+                    type="array",
+                    items=FieldDef(name="r", type="string")),
+                # 绑定作废的原因（自造概念 / 证据不是原文）
+                FieldDef(
+                    name="binding_errors",
+                    type="array",
+                    items=FieldDef(
+                        name="binding_error",
+                        type="object",
+                        properties=[
+                            FieldDef(name="requirement_id", type="string"),
+                            FieldDef(name="reason", type="string"),
+                        ],
+                    ),
+                ),
             ],
         ),
     ],
@@ -478,7 +517,8 @@ BUSINESS_MODEL_PACKAGE = SchemaDef(
         FieldDef(name="rule_consistency", type="boolean"),
         FieldDef(name="reference_integrity", type="boolean"),
         FieldDef(name="structural_compliance", type="boolean"),
-        FieldDef(name="metrics_defined", type="boolean"),
+        # 三态，同上：没有指标需求的批次这里是 n/a，不是 false
+        FieldDef(name="metrics_defined", type="boolean_or_na"),
         # ---- 可判定的预期（需求侧的预期载体）----
         #
         # 「验证业务价值」得先有**可判定的东西**：
@@ -640,12 +680,34 @@ REQUIREMENT_SET_INPUT_SCHEMA = SchemaDef(
         FieldDef(name="set_id", type="string", required=True),
         FieldDef(name="business_goal", type="string", required=False),
         FieldDef(name="context", type="string", required=False),
+        # **原句表**——本盒现在要消费它了：
+        # 需求描述可能是从原句里切出来的碎片（「编辑」——谁要编辑？），
+        # 碎片自己绑不上任何 WMS 概念，但它的**原句**里有主语（「库区」）。
+        # 原句是逐字原文，拿它当上下文既能把主语找回来，
+        # 又不会给「编出来的词」开后门。
+        FieldDef(
+            name="source_sentences",
+            type="array",
+            required=False,
+            items=FieldDef(
+                name="sentence",
+                type="object",
+                properties=[
+                    FieldDef(name="sentence_id", type="string"),
+                    FieldDef(name="text", type="string"),
+                    FieldDef(name="role", type="string", required=False),
+                    FieldDef(name="origin_text", type="string", required=False),
+                ],
+            ),
+        ),
         FieldDef(name="requirements", type="array", required=True, items=FieldDef(
             name="requirement", type="object", properties=[
                 FieldDef(name="requirement_id", type="string"),
                 FieldDef(name="description", type="string"),
                 FieldDef(name="requirement_type", type="string"),
                 FieldDef(name="priority", type="string"),
+                # 指回原句的那一句 id——本盒用它取上下文
+                FieldDef(name="trace_to", type="string", required=False),
             ],
         )),
     ],

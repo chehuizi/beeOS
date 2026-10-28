@@ -661,3 +661,78 @@ class TestTheMetricVocabularyIsNotCopiedTwice:
             assert len(entry["examples"]) > 2, f"{m['name']} 的目录条目没有例词"
             assert "临期" in " ".join(
                 entry["examples"]) or m["name"] != "wms_expiring_soon_sku_count"
+
+
+# ============================================================
+# 碎片需求 + 原句上下文
+# ============================================================
+
+FRAGMENT_REQS = [
+    {
+        "requirement_id": "r_frag",
+        "requirement_type": "process",
+        "description": "编辑",
+        "context_text": "库区要能新增、编辑、删除、查询",
+    },
+]
+
+
+class TestFragmentRequirementUsesItsOriginSentence:
+    """描述是从原句切出来的碎片时，用原句当证据池
+
+    「库区要能新增、编辑、删除、查询」按顿号切开 → 「编辑」这句
+    **丢了主语**（谁要编辑？编辑什么？）。碎片自己绑不上任何 WMS 概念 →
+    `wms_binding` 判红，而红的原因离现场隔着三层
+    （需求盒切句 → 设计盒绑定 → 判据）。
+
+    修法不是把四项并回一句（那会丢粒度），是给碎片带上它的原句：
+    原句是**逐字原文**，拿它当证据池不给幻觉开后门。
+    """
+
+    def test_evidence_may_come_from_the_origin_sentence(self, monkeypatch):
+        monkeypatch.setattr(llm, "complete_json", _stub({"bindings": [
+            {"requirement_id": "r_frag",
+             "kinds": [{"kind": "zone", "evidence": "库区"}]},
+        ]}))
+        bindings, errors = bind_requirements(FRAGMENT_REQS)
+        assert bindings.get("r_frag") == [{"kind": "zone", "evidence": "库区"}]
+        assert errors == []
+
+    def test_evidence_outside_both_is_still_rejected(self, monkeypatch):
+        """证据池以外的词照样作废——上下文不是后门
+
+        「货架」既不在描述里也不在原句里 → 概念是模型编的 → 不绑。
+        """
+        monkeypatch.setattr(llm, "complete_json", _stub({"bindings": [
+            {"requirement_id": "r_frag",
+             "kinds": [{"kind": "zone", "evidence": "货架"}]},
+        ]}))
+        bindings, errors = bind_requirements(FRAGMENT_REQS)
+        assert "r_frag" not in bindings
+        reasons = [e["reason"] for e in errors if e["requirement_id"] == "r_frag"]
+        assert any("不是需求描述或原句里的原文" in r for r in reasons), reasons
+
+    def test_prompt_carries_the_origin_sentence(self, monkeypatch):
+        """原句要真的进 prompt——不给模型看，它无从知道主语是谁"""
+        seen = {}
+
+        def fake(prompt, **kw):
+            seen["prompt"] = prompt
+            return {"bindings": []}
+
+        monkeypatch.setattr(llm, "complete_json", fake)
+        bind_requirements(FRAGMENT_REQS)
+        assert "原句：库区要能新增、编辑、删除、查询" in seen["prompt"]
+
+    def test_no_context_means_description_only(self, monkeypatch):
+        """没有原句的碎片，行为跟以前一样（只认描述）——不猜"""
+        monkeypatch.setattr(llm, "complete_json", _stub({"bindings": [
+            {"requirement_id": "r_frag",
+             "kinds": [{"kind": "zone", "evidence": "库区"}]},
+        ]}))
+        bindings, errors = bind_requirements([
+            {"requirement_id": "r_frag", "requirement_type": "process",
+             "description": "编辑"},
+        ])
+        assert "r_frag" not in bindings
+        assert errors

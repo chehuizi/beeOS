@@ -89,6 +89,14 @@ _SOURCE_SENTENCE = FieldDef(
         # goal / fact / context 由 **LLM** 判（有没有独立的要求是语义问题），
         # 机械层在 LLM 之上守下限：含要求表达的句必须进分母。
         FieldDef(name="role", type="enum", values=["title", "goal", "fact", "context"]),
+        # **这句是从哪句原话切出来的**（逐字原文）。
+        #
+        # 枚举项独立成句时会丢主语：「库区要能新增、编辑、删除、查询」
+        # 切出来的「编辑」不知道是谁要编辑。
+        # 修法不是把四项并回一句（那会丢粒度），
+        # 是让每句带上它来自哪句原话——下游拿原句当上下文，
+        # 主语就回来了；原句是逐字原文，不会成为编造证据的后门。
+        FieldDef(name="origin_text", type="string", required=False),
     ],
 )
 

@@ -428,6 +428,83 @@ class TestChangedFilesAreRealPaths:
             )
 
 
+class TestMultiRoundDelivery:
+    """一次要写多个文件时，模型分轮写（2026-10-28 实测撞出来的）
+
+    实测：开发盒要新建一个模块（十几个文件），模型一次吐十个文件 →
+    **输出超上限** → JSON 截断 → 解析失败 → 整个履约中止。
+    所以流程改成：每轮写一两个文件，机械层落盘后再问下一个。
+    """
+
+    def test_the_model_is_asked_for_the_next_file_after_each_round(self, ws):
+        """写完一个文件后，机械层会带着「已完成的文件」再问一次"""
+        prompts: list[str] = []
+
+        def llm(prompt: str):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return {"summary": "写实体", "edits": [{
+                    "file": "server/src/main/java/Zone.java", "old": "",
+                    "new": "class Zone {}\n",
+                }]}
+            if len(prompts) == 2:
+                return {"summary": "写控制器", "edits": [{
+                    "file": "server/src/main/java/ZoneController.java", "old": "",
+                    "new": "class ZoneController {}\n",
+                }]}
+            return {"summary": "写完了", "edits": []}
+
+        applied, _summary = codegen.generate_edits(
+            ws, [], [], {}, llm_call=llm,
+            concepts=["zone"],
+            must_implement=[("zone", "entity/Zone 里的 class Zone")],
+            # 证据在第二轮就满足了（Zone.java 有了）
+            verify_evidence=lambda: [],
+            # 说「写完了」时的完整核对：两个文件都在就过
+            verify=lambda: [] if (
+                (ws / "server/src/main/java/Zone.java").exists()
+                and (ws / "server/src/main/java/ZoneController.java").exists()
+            ) else ["还没写完"],
+        )
+        assert applied == [
+            "server/src/main/java/Zone.java",
+            "server/src/main/java/ZoneController.java",
+        ]
+        # 第二轮是在**第一轮的基础上**继续（带着「已经写完的文件」）
+        assert len(prompts) == 2
+        assert "Zone.java" in prompts[1]
+        assert "已经写完的文件" in prompts[1]
+
+    def test_a_model_that_says_it_is_done_gets_the_full_check(self, ws):
+        """模型说「写完了」→ 机械层才跑完整核对
+
+        不通过就把问题原样回给它，它接着改。
+        """
+        prompts: list[str] = []
+
+        def llm(prompt: str):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return {"summary": "写完了", "edits": []}
+            return {"summary": "补上了", "edits": [{
+                "file": "server/src/main/java/Zone.java", "old": "",
+                "new": "class Zone {}\n",
+            }]}
+
+        def verify():
+            return [] if (ws / "server/src/main/java/Zone.java").exists() else ["还缺 Zone"]
+
+        applied, _summary = codegen.generate_edits(
+            ws, [], [], {}, llm_call=llm,
+            concepts=["zone"],
+            must_implement=[("zone", "entity/Zone 里的 class Zone")],
+            verify=verify,
+        )
+        assert applied == ["server/src/main/java/Zone.java"]
+        assert len(prompts) == 2
+        assert "还没落地" in prompts[1] or "机械核对" in prompts[1]
+
+
 class TestMapperBindingsAreChecked:
     """新增的 Mapper 方法必须有对应的 SQL（MyBatis 是运行期绑定）
 
@@ -510,6 +587,453 @@ class TestMapperBindingsAreChecked:
         assert check_mapper_bindings(
             tmp_path,
             ["server/src/main/java/com/wms/mapper/ReportMapper.java"],
+        ) == []
+
+
+class TestZoneEvidenceCoversTheOwnershipLink:
+    """库区概念的证据必须覆盖「库位归属在库区上」
+
+    2026-10-28 实测：开发盒把库区做齐了（实体/Mapper/Service/Controller），
+    可需求里还有一句「库位归属在库区上」——
+    那句话**没有被任何证据覆盖**，于是它既没实现，也**没人发现它没实现**。
+    判据全绿，交付物里少了一半业务价值。
+    """
+
+    def test_证据要求库位这一侧引用库区(self):
+        """落点要精确到**服务**——写成「module/location 里有 Zone」的话，
+        模型把 Zone 实体复制一份到 location 包里也就算过了
+        （实测真这么干：两份重名实体，编译过、单测过，坑留在仓里）。
+        """
+        from boxes.wms_development.code_map import implementation_evidence
+
+        pairs = implementation_evidence("zone")
+        assert any(
+            "LocationServiceImpl" in h and t == "Zone" for h, t, *_ in pairs
+        ), "库位这一侧不引用库区 = 归属关系是断的"
+
+    def test_库位侧的证据要求真用上_不能只import(self):
+        """**一个没用到的 import 骗过了证据**（实测）
+
+        模型为了满足证据，`import` 了 ZoneMapper、注入成字段，
+        **一行都没用**——证据是绿的，
+        可「库位挂到不存在的库区要被拒」压根没实现。
+        所以这条证据是 `usage` 模式：只 import / 只注入字段不算数。
+        """
+        from boxes.wms_development.code_map import implementation_evidence
+
+        pairs = implementation_evidence("zone")
+        modes = [
+            (h, t, rest[0] if rest else "any") for h, t, *rest in pairs
+        ]
+        assert any(
+            "LocationServiceImpl" in h and mode == "usage" for h, _t, mode in modes
+        ), "库位侧的证据必须是 usage 模式——只 import 不算数"
+
+    def test_证据要求库区这一侧引用库位(self):
+        from boxes.wms_development.code_map import implementation_evidence
+
+        pairs = implementation_evidence("zone")
+        assert any(
+            "module/zone" in h and "Location" in t for h, t, *_ in pairs
+        ), "库区下还有库位时不允许删除——库区这一侧必须看得到库位"
+
+    def test_只有库区自己那三样_判不了归属(self):
+        """证据少一条 → 归属这件事就没被任何判据看着"""
+        from boxes.wms_development.code_map import implementation_evidence
+
+        assert len(implementation_evidence("zone")) >= 5
+
+
+class TestTheUsageModeEvidence:
+    """`usage` 模式的证据：只 import / 只注入字段**不算数**
+
+    实测：模型为了满足「库位这一侧要引用库区」的证据，
+    import 了 ZoneMapper、注入成字段，**一行都没用**——
+    证据是绿的，可「库位挂到不存在的库区要被拒」压根没实现。
+    这种假实现比没实现更坏：判据说落地了，业务其实没落地。
+    """
+
+    def _svc(self, body: str) -> str:
+        return (
+            "package com.wms.module.location.service;\n"
+            "import com.wms.entity.Zone;\n"
+            "import com.wms.mapper.ZoneMapper;\n"
+            "public class LocationServiceImpl {\n"
+            "    private final ZoneMapper zoneMapper;\n"
+            + body +
+            "}\n"
+        )
+
+    def test_an_unused_import_does_not_count(self):
+        from boxes.wms_development.code_map import _token_found
+
+        text = self._svc("")
+        assert _token_found(text, "Zone", "usage") is False, (
+            "只 import、只注入字段就判「用上了」——那是假实现"
+        )
+
+    def test_an_injected_field_does_not_count(self):
+        from boxes.wms_development.code_map import _token_found
+
+        text = self._svc(
+            "    public LocationServiceImpl(ZoneMapper zoneMapper) {\n"
+            "        this.zoneMapper = zoneMapper;\n"
+            "    }\n"
+        )
+        assert _token_found(text, "Zone", "usage") is False
+
+    def test_a_real_call_counts(self):
+        from boxes.wms_development.code_map import _token_found
+
+        text = self._svc(
+            "    private void requireZone(String zoneCode) {\n"
+            "        Zone zone = zoneMapper.selectByCode(zoneCode);\n"
+            "        if (zone == null) { throw new IllegalArgumentException(\"库区不存在\"); }\n"
+            "    }\n"
+        )
+        assert _token_found(text, "Zone", "usage") is True
+
+    def test_any_mode_still_accepts_an_import(self):
+        """默认模式不变——有的概念要的只是「文件里提到它」"""
+        from boxes.wms_development.code_map import _token_found
+
+        text = self._svc("")
+        assert _token_found(text, "Zone", "any") is True
+
+
+class TestTheTestFailureReachesTheModel:
+    """测试挂了要**回到模型手里**
+
+    实测：服务多了一个 Mapper 依赖 → 仓里 @InjectMocks 的老测试 NPE。
+    核对只跑编译的话，模型以为「我写完了」，
+    连着几轮都在改业务代码——因为没人告诉它错在测试上。
+    """
+
+    def test_测试错误能被摘出来(self):
+        from boxes.wms_development.build import extract_test_errors
+
+        log = (
+            "[INFO] Results:\n"
+            "[ERROR] Errors: \n"
+            "[ERROR]   LocationServiceImplTest.shouldCreate:91 » NullPointer "
+            'because "this.zoneMapper" is null\n'
+            "[INFO] \n"
+            "[INFO] Tests run: 62, Failures: 0, Errors: 1, Skipped: 0\n"
+        )
+        errors = extract_test_errors(log)
+        assert "LocationServiceImplTest" in errors, (
+            "测试失败没摘出来——模型看不到自己挂在哪儿"
+        )
+        assert "zoneMapper" in errors
+
+    def test_编译错误和测试错误是分开的两段(self):
+        from boxes.wms_development.build import (
+            extract_compile_errors,
+            extract_test_errors,
+        )
+
+        log = (
+            "[ERROR] COMPILATION ERROR : \n"
+            "[ERROR] /wms/Foo.java:[3,5] cannot find symbol\n"
+            "[INFO] 1 error\n"
+            "[INFO] BUILD FAILURE\n"
+        )
+        assert "cannot find symbol" in extract_compile_errors(log)
+        assert extract_test_errors(log) == ""
+
+
+class TestDuplicateClassesAreRejected:
+    """同一个类只能有一份
+
+    2026-10-28 实测：模型为了表达「库位归属在库区上」，
+    在 `module/location/` 下又建了一份 Zone 实体，
+    在 `module/zone/` 下又建了一份 Location 实体——
+    跟 `com/wms/entity/` 里原有的那份重名。
+    编译过、单测过（没人碰这两个类），可仓里从此有两份「库区实体」：
+    改一处、另一处不变，没人说得清数据从哪来。
+    """
+
+    def _repo(self, tmp_path):
+        java = tmp_path / "server" / "src" / "main" / "java" / "com" / "wms"
+        (java / "entity").mkdir(parents=True)
+        (java / "module" / "location").mkdir(parents=True)
+        (java / "module" / "zone").mkdir(parents=True)
+        return java
+
+    def test_a_copied_entity_is_reported(self, tmp_path):
+        from boxes.wms_development.mapper_binding import check_duplicate_classes
+
+        java = self._repo(tmp_path)
+        (java / "entity" / "Location.java").write_text(
+            "package com.wms.entity;\npublic class Location {}\n", encoding="utf-8",
+        )
+        (java / "module" / "zone" / "Location.java").write_text(
+            "package com.wms.module.zone;\npublic class Location {}\n",
+            encoding="utf-8",
+        )
+        problems = check_duplicate_classes(tmp_path, [
+            "server/src/main/java/com/wms/module/zone/Location.java",
+        ])
+        assert problems, "复制一份实体必须被报出来"
+        assert "Location" in problems[0]
+
+    def test_a_new_class_is_not_a_duplicate(self, tmp_path):
+        from boxes.wms_development.mapper_binding import check_duplicate_classes
+
+        java = self._repo(tmp_path)
+        (java / "entity" / "Location.java").write_text(
+            "package com.wms.entity;\npublic class Location {}\n", encoding="utf-8",
+        )
+        (java / "entity" / "Zone.java").write_text(
+            "package com.wms.entity;\npublic class Zone {}\n", encoding="utf-8",
+        )
+        assert check_duplicate_classes(tmp_path, [
+            "server/src/main/java/com/wms/entity/Zone.java",
+        ]) == []
+
+
+class TestTheModelSeesTheFilesItNeeds:
+    """上下文要收得齐、收得公平
+
+    2026-10-28 实测：开发盒连着 **12 轮**改动都落不下去，
+    原因是它「按记忆」去改一个迁移文件——
+    而那个文件**从来没出现在它的上下文里**：
+    1. `.sql` 根本不收（只收 .java/.xml）→ 模型看不到仓里已有的 V1~V4，
+       自己起名 `V1__create_wms_core_tables.sql`（版本号撞了）
+    2. 也看不到**自己上一轮刚建**的那个文件 → old 逐字命中 0 次
+    """
+
+    def _ws(self, tmp_path):
+        base = tmp_path / "server" / "src" / "main"
+        (base / "java" / "com" / "wms" / "module" / "location").mkdir(parents=True)
+        (base / "resources" / "mapper").mkdir(parents=True)
+        (base / "resources" / "db" / "migration").mkdir(parents=True)
+        return base
+
+    def test_迁移脚本要进上下文(self, tmp_path):
+        from boxes.wms_development.codegen import collect_context
+
+        base = self._ws(tmp_path)
+        (base / "resources" / "db" / "migration" / "V4__putaway.sql").write_text(
+            "CREATE TABLE t (id BIGINT);\n", encoding="utf-8",
+        )
+        files = collect_context(tmp_path, ["db/migration"])
+        assert any("V4__putaway.sql" in rel for rel in files), (
+            "迁移脚本不在上下文里 → 模型只能凭记忆改它，old 永远命中 0 次"
+        )
+
+    def test_每个落点都先分到一份(self, tmp_path):
+        """额度不许被前面的落点吃光
+
+        java 目录先扫，location/warehouse 就把额度占满了，
+        resources 里的 Mapper XML 和迁移脚本一个都进不来——
+        而它们恰恰是新建模块时最要紧的参考。
+        """
+        from boxes.wms_development.codegen import collect_context
+
+        base = self._ws(tmp_path)
+        for i in range(30):
+            (base / "java" / "com" / "wms" / "module" / "location"
+             / f"Loc{i}.java").write_text("class A {}\n", encoding="utf-8")
+        (base / "resources" / "mapper" / "ZoneMapper.xml").write_text(
+            "<mapper/>\n", encoding="utf-8",
+        )
+        (base / "resources" / "db" / "migration" / "V5__zone.sql").write_text(
+            "CREATE TABLE z (id BIGINT);\n", encoding="utf-8",
+        )
+        files = collect_context(tmp_path, [
+            "module/location", "mapper/ZoneMapper", "db/migration",
+        ])
+        assert any("ZoneMapper.xml" in rel for rel in files), (
+            "Mapper XML 被 java 目录挤掉了"
+        )
+        assert any("V5__zone.sql" in rel for rel in files), (
+            "迁移脚本被 java 目录挤掉了"
+        )
+
+    def test_下一个迁移版本号(self, tmp_path):
+        from boxes.wms_development.codegen import next_migration_version
+
+        assert next_migration_version({
+            "server/src/main/resources/db/migration/V1__init.sql": "",
+            "server/src/main/resources/db/migration/V4__putaway.sql": "",
+        }) == 5
+        assert next_migration_version({}) == 1
+
+    def test_prompt_里写明下一个迁移版本号(self, tmp_path):
+        """版本号直接给它——它自己起名是「看着像就行」"""
+        from boxes.wms_development.codegen import build_prompt
+
+        prompt = build_prompt(
+            expectations=[{"wms_kind": "zone", "statement": "s", "evidence": "e"}],
+            locations=["db/migration"],
+            files={
+                "server/src/main/resources/db/migration/V4__putaway.sql": "x",
+            },
+        )
+        assert "V5__" in prompt, "prompt 没告诉它该用哪个版本号"
+
+
+class TestMigrationFilenamesAreChecked:
+    """迁移脚本的文件名必须符合 Flyway 规范
+
+    2026-10-28 实测：开发盒建表时写出 `V__create_wms_zone.sql`——
+    **没有版本号**。编译过、单测绿、判据全绿，
+    可 Flyway 启动时直接拒绝（Invalid version separator），
+    **整个服务起不来**。
+    """
+
+    def _mig(self, tmp_path):
+        mig = tmp_path / "server" / "src" / "main" / "resources" / "db" / "migration"
+        mig.mkdir(parents=True)
+        return mig
+
+    def test_a_migration_without_a_version_is_reported(self, tmp_path):
+        from boxes.wms_development.mapper_binding import check_migration_filenames
+
+        mig = self._mig(tmp_path)
+        (mig / "V1__init.sql").write_text("SELECT 1;\n", encoding="utf-8")
+        (mig / "V__create_wms_zone.sql").write_text(
+            "CREATE TABLE wms_zone (id BIGSERIAL PRIMARY KEY);\n", encoding="utf-8",
+        )
+        problems = check_migration_filenames(tmp_path, [
+            "server/src/main/resources/db/migration/V__create_wms_zone.sql",
+        ])
+        assert problems, "没有版本号的迁移文件必须被报出来"
+        assert any("V__create_wms_zone.sql" in p for p in problems)
+        assert any("V5__create_wms_zone.sql" in p for p in problems), (
+            "报错要带能修它的材料：给出正确的文件名长什么样"
+        )
+
+    def test_a_version_below_the_existing_max_is_reported(self, tmp_path):
+        """版本号撞了/倒退了，Flyway 启动时也会拒绝"""
+        from boxes.wms_development.mapper_binding import check_migration_filenames
+
+        mig = self._mig(tmp_path)
+        (mig / "V1__init.sql").write_text("SELECT 1;\n", encoding="utf-8")
+        (mig / "V4__putaway.sql").write_text("SELECT 1;\n", encoding="utf-8")
+        (mig / "V3__zone.sql").write_text("SELECT 1;\n", encoding="utf-8")
+        problems = check_migration_filenames(tmp_path, [
+            "server/src/main/resources/db/migration/V3__zone.sql",
+        ])
+        assert problems, "版本号倒退必须被报出来"
+        assert any("V3__zone.sql" in p for p in problems)
+
+    def test_a_correct_migration_is_not_reported(self, tmp_path):
+        from boxes.wms_development.mapper_binding import check_migration_filenames
+
+        mig = self._mig(tmp_path)
+        (mig / "V1__init.sql").write_text("SELECT 1;\n", encoding="utf-8")
+        (mig / "V4__putaway.sql").write_text("SELECT 1;\n", encoding="utf-8")
+        (mig / "V5__create_wms_zone.sql").write_text(
+            "CREATE TABLE wms_zone (id BIGSERIAL PRIMARY KEY);\n", encoding="utf-8",
+        )
+        assert check_migration_filenames(tmp_path, [
+            "server/src/main/resources/db/migration/V5__create_wms_zone.sql",
+        ]) == []
+
+    def test_duplicate_versions_are_reported(self, tmp_path):
+        from boxes.wms_development.mapper_binding import check_migration_filenames
+
+        mig = self._mig(tmp_path)
+        (mig / "V1__init.sql").write_text("SELECT 1;\n", encoding="utf-8")
+        (mig / "V5__a.sql").write_text("SELECT 1;\n", encoding="utf-8")
+        (mig / "V5__b.sql").write_text("SELECT 1;\n", encoding="utf-8")
+        problems = check_migration_filenames(tmp_path, [
+            "server/src/main/resources/db/migration/V5__b.sql",
+        ])
+        assert any("重复" in p for p in problems), problems
+
+    def test_repeatable_migration_is_allowed(self, tmp_path):
+        """R__ 开头的是可重复脚本，本来就没有版本号"""
+        from boxes.wms_development.mapper_binding import check_migration_filenames
+
+        mig = self._mig(tmp_path)
+        (mig / "V1__init.sql").write_text("SELECT 1;\n", encoding="utf-8")
+        (mig / "R__views.sql").write_text("SELECT 1;\n", encoding="utf-8")
+        assert check_migration_filenames(tmp_path, [
+            "server/src/main/resources/db/migration/R__views.sql",
+        ]) == []
+
+
+class TestMigrationCoverageIsChecked:
+    """SQL 里用到的表，必须有迁移建出来
+
+    2026-10-27 实测：开发盒新建模块时漏了建表脚本——
+    编译过、单测过（没碰那张表），上线一调就
+    `relation does not exist`，接口直接 500。
+    """
+
+    def _repo(self, tmp_path):
+        res = tmp_path / "server" / "src" / "main" / "resources" / "mapper"
+        mig = tmp_path / "server" / "src" / "main" / "resources" / "db" / "migration"
+        res.mkdir(parents=True)
+        mig.mkdir(parents=True)
+        return res, mig
+
+    def test_a_table_without_a_migration_is_reported(self, tmp_path):
+        from boxes.wms_development.mapper_binding import check_migration_covers_tables
+
+        res, mig = self._repo(tmp_path)
+        (mig / "V1__init.sql").write_text(
+            "CREATE TABLE wms_location (id BIGSERIAL PRIMARY KEY);\n", encoding="utf-8",
+        )
+        (res / "ZoneMapper.xml").write_text(
+            '<mapper namespace="com.wms.mapper.ZoneMapper">\n'
+            '  <select id="selectPage" resultType="X">\n'
+            '    SELECT id FROM wms_zone\n'
+            '  </select>\n'
+            '</mapper>\n',
+            encoding="utf-8",
+        )
+        problems = check_migration_covers_tables(
+            tmp_path, ["server/src/main/resources/mapper/ZoneMapper.xml"],
+        )
+        assert problems, "用了没有迁移的表必须被报出来"
+        assert "wms_zone" in problems[0]
+
+    def test_a_table_with_a_migration_is_not_reported(self, tmp_path):
+        from boxes.wms_development.mapper_binding import check_migration_covers_tables
+
+        res, mig = self._repo(tmp_path)
+        (mig / "V1__init.sql").write_text(
+            "CREATE TABLE wms_zone (id BIGSERIAL PRIMARY KEY);\n", encoding="utf-8",
+        )
+        (res / "ZoneMapper.xml").write_text(
+            '<mapper namespace="com.wms.mapper.ZoneMapper">\n'
+            '  <select id="selectPage" resultType="X">\n'
+            '    SELECT id FROM wms_zone\n'
+            '  </select>\n'
+            '</mapper>\n',
+            encoding="utf-8",
+        )
+        assert check_migration_covers_tables(
+            tmp_path, ["server/src/main/resources/mapper/ZoneMapper.xml"],
+        ) == []
+
+    def test_an_xml_attribute_is_not_mistaken_for_a_table(self, tmp_path):
+        """`<update id="...">` 里的 `id` 是属性名，不是表名
+
+        踩过：把「表 id」报成「缺建表迁移」，
+        于是模型收到一条**根本不成立**的错误，
+        三轮都在追一个不存在的问题。
+        """
+        from boxes.wms_development.mapper_binding import check_migration_covers_tables
+
+        res, mig = self._repo(tmp_path)
+        (mig / "V1__init.sql").write_text(
+            "CREATE TABLE wms_location (id BIGSERIAL PRIMARY KEY);\n", encoding="utf-8",
+        )
+        (res / "LocationMapper.xml").write_text(
+            '<mapper namespace="com.wms.mapper.LocationMapper">\n'
+            '  <update id="softDeleteById">\n'
+            '    UPDATE wms_location SET deleted = 1 WHERE id = #{id}\n'
+            '  </update>\n'
+            '</mapper>\n',
+            encoding="utf-8",
+        )
+        assert check_migration_covers_tables(
+            tmp_path, ["server/src/main/resources/mapper/LocationMapper.xml"],
         ) == []
 
 

@@ -172,10 +172,40 @@ def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[s
         # 不在这里另写一遍——复制聚合逻辑等于埋一个「两处口径迟早漂」的雷
         metrics_store = store.view(set(live_box_ids))
 
+    # ---- 每只盒子最近一次的 op 轨迹（右侧「操作轨迹」面板用）----
+    #
+    # 口径在**服务端**算，不在前端从 recent 里刨：
+    # recent 只有 10 条，翻不到每只盒子的最新一次；
+    # 「每只盒子最近一次」这个口径在前端再写一遍 = 第二份口径，
+    # 迟早跟看板对不上。
+    #
+    # 轨迹本身来自落盘（runtime/store.py 的 op_trace）。加落盘之前跑的
+    # 记录没有轨迹——那就**照实显示「没有轨迹」**，不拿别的数来凑。
+    op_trails = []
+    for b in target_boxes:
+        b_records = [r for r in store._cache if r["box_id"] == b]
+        latest = next(
+            (r for r in sorted(b_records, key=lambda x: x["created_at"], reverse=True)),
+            None,
+        )
+        if latest is None:
+            continue
+        ops = latest.get("op_trace") or []
+        op_trails.append({
+            "box_id": b,
+            "display_name": (box_meta(b) or {}).get("display_name") or b,
+            "task_run_id": latest.get("task_run_id"),
+            "status": latest.get("status"),
+            "acceptance_status": latest.get("acceptance_status"),
+            "at": latest.get("created_at"),
+            "ops": ops,
+        })
+
     return {
         "box_filter": box_filter,
         "boxes": boxes,
         "box_stats": box_stats,
+        "op_trails": op_trails,
         "domains": box_domains(all_boxes),
         # 键是**范围**，不是域：除了每个真域，还带一条「全部域」。
         # 以前只有真域，所以「全部域」在布局表里查不到，前端只能据此
@@ -234,6 +264,13 @@ HTML_PAGE = f"""<!DOCTYPE html>
     gap: 24px; margin-bottom: 20px;
     padding: 14px 20px;
     background: #fff; border: 1px solid #dbe3ec; border-radius: 12px;
+    /* **固定在视口顶部**：往下滚时不跟着走。
+       以前它是普通流里的第一块，一滚就滚出视野——而它恰好是
+       「这是 beeOS 看板 / 上次刷新是什么时候」这两句话唯一的位置。
+       读者往拓扑图下面翻的时候，看板还开着，但那两句话没了。
+       z-index 要高于内容与两侧栏：它们都可能在 header 下面滑动。 */
+    position: sticky; top: 0; z-index: 40;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
   }}
   .head-right {{
     display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
@@ -264,11 +301,72 @@ HTML_PAGE = f"""<!DOCTYPE html>
      拆开之后，「WMS 的网格」和「WMS 的拓扑」才都能拿到。 */
   .page-body {{ display: flex; gap: 20px; align-items: flex-start; }}
   .sidebar {{
-    flex: 0 0 232px; position: sticky; top: 28px;
+    flex: 0 0 232px; position: sticky;
+    /* 侧栏的吸顶位置要让开固定的头部——否则它会滑到 header 底下，
+       两个固定元素叠在一起，头部盖住侧栏顶部那一条。 */
+    top: calc(var(--head-h, 64px) + 14px);
     display: flex; flex-direction: column; gap: 18px;
     padding: 14px;
     background: #fff; border: 1px solid #dbe3ec; border-radius: 12px;
   }}
+  /* ===== 右侧「操作轨迹」面板 =====
+     跟左侧盒子列表同一个角色：一个常驻的、跟主画面并排的读数区。
+     左边回答「有哪些盒子」，右边回答「它们刚才跑了哪几步」。
+
+     高度上限跟着视口走：面板自己内部滚动，不把整页撑长。 */
+  .rail {{
+    flex: 0 0 280px; position: sticky;
+    top: calc(var(--head-h, 64px) + 14px);
+    max-height: calc(100vh - var(--head-h, 64px) - 42px);
+    display: flex; flex-direction: column; gap: 10px;
+    padding: 14px;
+    background: #fff; border: 1px solid #dbe3ec; border-radius: 12px;
+    overflow: hidden;
+  }}
+  .rail-title {{
+    font-size: 10px; color: #94a3b8; letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }}
+  .rail-sub {{ font-size: 11px; color: #64748b; margin-top: -6px; }}
+  .rail-list {{
+    display: flex; flex-direction: column; gap: 10px;
+    overflow-y: auto; min-height: 0; padding-right: 2px;
+  }}
+  .rail-box {{
+    border: 1px solid #e2e8f0; border-radius: 9px; padding: 8px 9px;
+  }}
+  .rail-box-head {{
+    display: flex; align-items: center; gap: 6px; margin-bottom: 6px;
+  }}
+  .rail-box-name {{
+    font-size: 12px; font-weight: 600; color: #0f172a;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }}
+  .rail-box-time {{
+    margin-left: auto; font-size: 10px; color: #94a3b8;
+    font-variant-numeric: tabular-nums;
+  }}
+  .rail-ops {{ display: flex; flex-direction: column; gap: 2px; }}
+  .rail-op {{
+    display: flex; align-items: baseline; gap: 6px;
+    font-size: 11px; color: #475569; line-height: 1.5;
+  }}
+  .rail-op-id {{
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }}
+  .rail-op-status {{ flex: 0 0 auto; font-weight: 700; }}
+  .rail-op.ok .rail-op-status {{ color: #16a34a; }}
+  .rail-op.bad .rail-op-status {{ color: #dc2626; }}
+  .rail-op.wait .rail-op-status {{ color: #94a3b8; }}
+  .rail-op-err {{
+    color: #b91c1c; font-size: 10px; overflow-wrap: anywhere;
+  }}
+  .rail-empty {{
+    font-size: 12px; color: #94a3b8; line-height: 1.6;
+  }}
+  /* 单盒详情页是「一屏四栏」的密排布局，右栏放不下也不该抢位置 */
+  body.single-box .rail {{ display: none; }}
   /* 右侧内容区：第三块。**只给总览页加卡片**——单盒详情页是
      `height:100vh; overflow:hidden` 的整屏 flex 四栏，外面再套一层卡片
      会凭空多吃掉 32px padding，矮屏上把四栏挤破。 */
@@ -367,7 +465,18 @@ HTML_PAGE = f"""<!DOCTYPE html>
   }}
 
   /* ===== 环形视图 ===== */
-  .radial {{ position: relative; margin: 0 auto 30px; }}
+  .radial {{ position: relative; margin: 0 auto; }}
+  /* 画布宿主：宽度不够时**横向滚动**，而不是把画布裁掉。
+     拓扑画布的宽度是算出来的（固定 px），容器一变窄它不会自己缩——
+     缩放交给 fitRadial（见 JS），这里只负责兜住「缩到下限还塞不下」的情况。 */
+  .radial-host {{ overflow-x: auto; overflow-y: hidden; }}
+  /* 缩放层：**布局盒跟视觉尺寸一致**。
+     只写 transform: scale() 的话，视觉缩了但布局盒没缩——
+     宿主按未缩放的宽度裁切，于是画布右边被切掉一截（而缩放看着是对的）。
+     所以这里由 JS 把这一层的宽高设成 W*k / H*k，视觉与占位始终一致。
+     overflow:hidden 把未缩放的原画布关在这一层里。
+     **transform 加在画布上，不加在这一层上**（加错层 = 缩两次 + 裁切）。 */
+  .radial-scale {{ overflow: hidden; margin: 0 auto 30px; }}
   .radial-edges {{ position: absolute; inset: 0; pointer-events: none; }}
   .radial .box-card {{
     position: absolute; width: 204px; height: 170px; overflow: visible;
@@ -392,6 +501,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .radial-legend {{
     display: flex; gap: 20px; justify-content: center; align-items: center;
     font-size: 11px; color: #475569; margin: 4px 0 10px;
+    flex-wrap: wrap;   /* 容器变窄时换行，别把图例挤成一条 */
   }}
   .radial-legend span {{ display: inline-flex; align-items: center; gap: 6px; }}
   .radial-legend .muted {{ color: #94a3b8; }}
@@ -1202,6 +1312,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
   <div class="page-body">
     <aside class="sidebar" id="sidebar"></aside>
     <div id="content">Loading...</div>
+    <aside class="rail" id="rail"></aside>
   </div>
 
 <script>
@@ -1449,9 +1560,135 @@ function ensureSidebar(el, data, current) {{
   }}
 }}
 
+// ===== 固定头部的吸顶位置 =====
+//
+// 侧栏 / 右栏都要让开固定的头部。它们吸顶的偏移量取一个 CSS 变量
+// `--head-h`——**在 JS 里量**，不写死一个数：头部高度会变
+// （单盒详情页多一行返回链接），写死的偏移会让侧栏滑到 header 底下，
+// 两层叠在一起，谁也盖不住谁。
+function syncHeadHeight() {{
+  const head = document.querySelector('.page-head');
+  if (!head) return;
+  document.documentElement.style.setProperty('--head-h', head.offsetHeight + 'px');
+}}
+
+// ===== 右侧「操作轨迹」面板 =====
+//
+// 数据来自服务端给的 op_trails：**每只盒子最近一次履约的 op 执行顺序**。
+//
+// 为什么不自己从 recent 里刨：recent 只有 10 条，翻不到每只盒子的最新一次；
+// 而且「每只盒子最近一次」这个口径本来就该服务端算——
+// 前端再算一遍就是第二份口径，迟早跟看板对不上。
+//
+// **轨迹来自落盘**（runtime/store.py 的 op_trace）。以前它只活在 trigger
+// 那一瞬间的 HTTP 响应里：请求一关就没了，刷新一下页面就再也问不出
+// 「这只盒子刚才跑了哪几步」。
+function renderRail(data) {{
+  const trails = data.op_trails || [];
+  let html = '<div class="rail-title">操作轨迹</div>';
+  html += '<div class="rail-sub">每只盒子最近一次履约的 op 执行顺序</div>';
+  if (!trails.length) {{
+    html += '<div class="rail-empty">还没有运行记录。触发一次履约，'
+      + '这里就会列出每个 op 的执行痕迹。</div>';
+    return html;
+  }}
+  html += '<div class="rail-list">';
+  for (const t of trails) {{
+    const name = t.display_name || t.box_id;
+    html += '<div class="rail-box">';
+    html += '<div class="rail-box-head">'
+      + '<span class="rail-box-name">' + esc(name) + '</span>'
+      + '<span class="rail-box-time">' + esc(fmtClock(t.at)) + '</span>'
+      + '</div>';
+    if (!t.ops || !t.ops.length) {{
+      // **旧记录没有轨迹就说没有**——不拿别的数来凑。
+      html += '<div class="rail-empty">这条记录没有 op 轨迹（加落盘之前跑的）。</div>';
+    }} else {{
+      html += '<div class="rail-ops">';
+      for (const op of t.ops) {{
+        const st = op.status || 'pending';
+        const cls = st === 'completed' ? 'ok' : (st === 'failed' ? 'bad' : 'wait');
+        const mark = st === 'completed' ? '✓' : (st === 'failed' ? '✕' : '·');
+        html += '<div class="rail-op ' + cls + '">'
+          + '<span class="rail-op-status">' + mark + '</span>'
+          + '<span class="rail-op-id">' + esc(op.op_id) + '</span>'
+          + '</div>';
+        if (op.error) {{
+          html += '<div class="rail-op-err">' + esc(op.error) + '</div>';
+        }}
+      }}
+      html += '</div>';
+    }}
+    html += '</div>';
+  }}
+  html += '</div>';
+  return html;
+}}
+
+function fmtClock(iso) {{
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso).slice(11, 19);
+  return d.toLocaleTimeString();
+}}
+
+// 轨迹面板每 2 秒跟着数据走，但**结构没变就不重建**：
+// 重建会把滚动位置弹回顶部，读者正在看的那条 op 会跳走。
+function ensureRail(el, data) {{
+  const sig = JSON.stringify((data.op_trails || []).map(t => [
+    t.box_id, t.task_run_id, (t.ops || []).map(o => o.op_id + ':' + o.status).join(','),
+  ]));
+  if (el.dataset.sig !== sig) {{
+    el.innerHTML = renderRail(data);
+    el.dataset.sig = sig;
+  }}
+}}
+
 function esc(s) {{
   return String(s).replace(/[&<>"]/g, c => (
     {{ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }}[c]));
+}}
+
+// ===== 拓扑画布缩放适配 =====
+//
+// 拓扑画布的宽度是**算出来的固定像素**（环半径 + 卡片宽度）。
+// 右边加了一条轨迹栏之后，内容列变窄了，画布不会自己缩——
+// 它会从右边溢出，把轨迹栏挤出屏幕（页面多出一条横向滚动条）。
+//
+// 缩放不能只写 `transform: scale()`：**transform 不改布局盒**——
+// 视觉缩了，占位还是原来那么宽，宿主按原宽度裁切，
+// 于是画布右边被切掉一截（而缩放本身看着是对的，最难查）。
+// 所以这里把整张画布放进一个「缩放层」，并把这一层的宽高设成 W*k / H*k：
+// 视觉尺寸与占位始终一致。
+//
+// 下限 0.6：再小就读不清了。那种情况下宁可让宿主**横向滚动**
+// （.radial-host 的 overflow-x），也不把拓扑压成看不清的一团。
+function fitRadial() {{
+  const radial = document.querySelector('.radial');
+  if (!radial) return;
+  const scaler = radial.parentElement;
+  const host = radial.closest('.radial-host');
+  if (!scaler || !host) return;
+  const W = parseFloat(radial.style.width) || 0;
+  const H = parseFloat(radial.style.height) || 0;
+  if (!W || !H) return;
+  const avail = host.clientWidth;
+  const k = Math.max(0.6, Math.min(1, avail / W));
+  if (k < 1) {{
+    // **缩放加在画布上，不是加在这一层上**。
+    // 这一层已经按 W*k / H*k 收窄了，再对它做 scale 就等于缩两次：
+    // 视觉宽度变成 W*k*k，而它的 overflow:hidden 仍在 W*k 处裁切
+    // ——画布右边于是被切掉一截（缩放看着是对的，最难查）。
+    scaler.style.width = (W * k) + 'px';
+    scaler.style.height = (H * k) + 'px';
+    radial.style.transform = 'scale(' + k + ')';
+    radial.style.transformOrigin = 'top left';
+  }} else {{
+    scaler.style.width = '';
+    scaler.style.height = '';
+    radial.style.transform = '';
+    radial.style.transformOrigin = '';
+  }}
 }}
 
 // 域切换：纯显示过滤，不改服务端口径。
@@ -1978,7 +2215,9 @@ function renderRadial(layout, stats) {{
       <span><svg width="26" height="10"><line x1="1" y1="5" x2="25" y2="5" class="edge edge-feedback"/></svg>反馈：上一轮结论变成新一轮输入</span>
       <span class="muted">环序 = 生命周期顺序，箭头顺着环走</span>
     </div>
-    <div class="radial" style="width:${{W}}px;height:${{H}}px">
+    <div class="radial-host">
+      <div class="radial-scale">
+      <div class="radial" style="width:${{W}}px;height:${{H}}px">
       <svg class="radial-edges" width="${{W}}" height="${{H}}" viewBox="0 0 ${{W}} ${{H}}">
         <defs>
           <marker id="arrow-handoff" viewBox="0 0 10 10" refX="9" refY="5"
@@ -1997,6 +2236,8 @@ function renderRadial(layout, stats) {{
         ${{edges.join('')}}
       </svg>
       ${{cards}}
+      </div>
+      </div>
     </div>`;
 }}
 
@@ -3217,6 +3458,10 @@ function render(data) {{
 
   const side = document.getElementById('sidebar');
   if (side) ensureSidebar(side, data, box);
+  const rail = document.getElementById('rail');
+  if (rail) ensureRail(rail, data);
+  // 头部高度变了（返回链接出现 / 窗口改宽）就让两侧栏重算吸顶偏移
+  syncHeadHeight();
   document.getElementById('last-refresh').textContent =
     'refreshed ' + new Date().toLocaleTimeString();
   updateBackLink(
@@ -3319,6 +3564,9 @@ function render(data) {{
   }}
   bindTilt();
   snapRadialEdges();
+  // 画布要在 DOM 落地**之后**才能量宽度（容器宽度这时才是真的）。
+  // 右侧多了一条轨迹栏，内容列会变窄 —— 画布不缩就溢出。
+  fitRadial();
 }}
 
 async function tick() {{
@@ -3333,6 +3581,11 @@ async function tick() {{
 
 tick();
 setInterval(tick, 2000);
+window.addEventListener('resize', () => {{
+  syncHeadHeight();
+  fitRadial();
+}});
+syncHeadHeight();
 </script>
 </body>
 </html>

@@ -128,6 +128,10 @@ class TestDashboardData:
             "excluded_skeleton_boxes",
             "recent",
             "exceptions",
+            # op_trails：每只盒子最近一次履约的 op 执行顺序。
+            # 以前 op 轨迹只活在 trigger 那一瞬间的响应里——刷新就没了，
+            # 右侧「操作轨迹」面板因此没有数据源。
+            "op_trails",
         }
 
     def test_the_all_domains_scope_is_in_the_layout_table(self, tmp_path: Path):
@@ -1807,4 +1811,103 @@ class TestABoxIsAQueryableUnit:
         )
         assert "requirement_count" not in body, (
             "HTTP 层硬编码了某只盒子的产出字段——产出是盒子自己的契约"
+        )
+
+
+# ============================================================
+# 固定头部 + 右侧「操作轨迹」面板
+# ============================================================
+
+
+class TestTheHeaderStaysAndTheTrailPanelSitsOnTheRight:
+    """两件都是读者一直在找的东西：
+
+    - **头部不跟着滚动跑掉**——它是「这是 beeOS 看板 / 上次刷新是什么时候」
+      这两句话唯一的位置。读者往拓扑图下面翻的时候，看板还开着，
+      但那两句话没了。
+    - **右侧常驻一条操作轨迹**，跟左侧盒子列表并排：左边回答「有哪些盒子」，
+      右边回答「它们刚才跑了哪几步」。
+    """
+
+    @staticmethod
+    def _rule(selector: str) -> str:
+        start = HTML_PAGE.find(selector)
+        assert start != -1, f"HTML_PAGE 里找不到 {selector}"
+        brace = HTML_PAGE.find("{", start)
+        depth = 0
+        for i in range(brace, len(HTML_PAGE)):
+            if HTML_PAGE[i] == "{":
+                depth += 1
+            elif HTML_PAGE[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    return HTML_PAGE[brace : i + 1]
+        raise AssertionError(f"{selector} 的规则体没闭合")
+
+    def test_the_header_is_sticky_at_the_top(self):
+        body = self._rule(".page-head")
+        assert "position: sticky" in body, (
+            "头部不固定 = 往下滚两屏就看不见「这是 beeOS 看板」和刷新时间了"
+        )
+        assert "top: 0" in body, "头部要吸在视口顶端"
+        assert "z-index" in body, (
+            "头部没有 z-index 会被两侧栏 / 内容盖住——它是固定层，得压在上面"
+        )
+
+    def test_the_side_panels_clear_the_sticky_header(self):
+        """两侧栏的吸顶位置要让开固定的头部
+
+        写死一个像素值不行：头部高度会变（单盒详情页多一行返回链接），
+        写死的偏移会让侧栏滑到 header 底下，两层叠在一起。
+        """
+        for selector in (".sidebar", ".rail"):
+            body = self._rule(selector)
+            assert "--head-h" in body, (
+                f"{selector} 的吸顶偏移必须跟着头部实际高度走（--head-h），"
+                "不能写死一个数"
+            )
+
+    def test_the_rail_is_a_real_element_sitting_on_the_right(self):
+        html = HTML_PAGE
+        assert '<aside class="rail" id="rail">' in html, "右侧没有轨迹面板"
+        # DOM 顺序 = 视觉顺序：左（盒子）→ 中（内容）→ 右（轨迹）
+        assert html.index('id="sidebar"') < html.index('id="content"')
+        assert html.index('id="content"') < html.index('id="rail"')
+
+    def test_the_rail_renders_the_server_side_trail(self):
+        """轨迹数据来自服务端（op_trails），前端不自己从 recent 刨
+
+        前端再算一遍「每只盒子最近一次」= 第二份口径，迟早跟看板对不上。
+        """
+        html = HTML_PAGE
+        assert "function renderRail(data)" in html
+        assert "data.op_trails" in html
+        assert "ensureRail" in html, "轨迹面板每 2 秒跟着数据走"
+
+    def test_the_panel_says_so_when_there_is_no_trail(self):
+        """旧记录没有轨迹 → 照实说没有，不拿别的数来凑"""
+        assert "这条记录没有 op 轨迹" in HTML_PAGE
+
+    def test_the_rail_yields_to_the_single_box_layout(self):
+        """单盒详情页是「一屏四栏」的密排布局，右栏放不下也不该抢位置"""
+        assert "body.single-box .rail" in HTML_PAGE
+
+    def test_the_canvas_scales_on_the_canvas_not_on_the_wrapper(self):
+        """缩放必须加在**画布**上，不能加在收窄后的那层
+
+        实测踩过的坑：收窄层已经按 W*k 设了宽，再对它 scale 就是缩两次——
+        视觉宽度变成 W*k*k，而它的 overflow:hidden 仍在 W*k 处裁切，
+        于是画布右边被切掉一截。**缩放本身看着是对的**，最难查。
+        """
+        html = HTML_PAGE
+        assert 'class="radial-host"' in html, "画布宿主没了"
+        assert 'class="radial-scale"' in html, "缩放层没了"
+        assert "radial.style.transform = 'scale(' + k + ')'" in html, (
+            "缩放必须加在画布（radial）上"
+        )
+        assert "scaler.style.transform" not in html, (
+            "缩放加在了收窄层上 = 缩两次 + 裁切，画布右边会被切掉"
+        )
+        assert "scaler.style.width = (W * k) + 'px'" in html, (
+            "收窄层的布局盒必须跟着缩放走（否则宿主按原宽度裁切）"
         )

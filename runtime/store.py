@@ -118,6 +118,26 @@ def task_run_to_record(
         "beeline_version": task_run.identity.beeline_version,
         "intent": task_run.identity.intent,
         "originator": task_run.identity.originator,
+        # 每个 op 的执行轨迹（按执行顺序）。
+        #
+        # **以前不落盘**：op_trace 只活在 trigger 那一瞬间的 HTTP 响应里，
+        # 请求一关就没了——于是「这只盒子刚才跑了哪几步、哪一步挂了、
+        # 挂在什么设施上」这件事，刷新一下页面就再也问不出来。
+        # 跟产出本体不落盘是同一族病（那边已有注释说明为什么必须落盘）。
+        #
+        # 只存**事实**（op_id / 状态 / 错误 / 时间），不存 output——
+        # output 的体积在产出本体里已经有了，这里再存一份就是抄两份。
+        "op_trace": [
+            {
+                "op_id": rec.op_id,
+                "status": rec.status,
+                "error": rec.error or "",
+                "error_kind": rec.error_kind or "",
+                "started_at": rec.started_at.isoformat() if rec.started_at else None,
+                "finished_at": rec.finished_at.isoformat() if rec.finished_at else None,
+            }
+            for rec in task_run.operations.values()
+        ],
         # 业务对象标识：归档按它把履约归到工作单元（需求 / 运维任务）。
         # 索引字段——它在 payload 里刨不出来，所以必须是记录的一等公民。
         "subject_ref": task_run.identity.subject_ref,

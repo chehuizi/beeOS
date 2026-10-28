@@ -104,13 +104,26 @@ class TestTheDirectoryNameMatchesTheBox:
     def test_no_directory_still_uses_the_old_names(self):
         """老目录名不许复活
 
-        改名前是 boxes/modeling + boxes/requirement_capture。
+        改名前是 boxes/modeling + boxes/requirement_capture；
+        2026-10-28 又删掉了 boxes/inventory_shortage（订单异常样例盒）。
         留着它们 = 同一只盒子有两套地址 = 迟早有人 import 错的那个。
         """
-        for old in ("modeling", "requirement_capture"):
+        for old in ("modeling", "requirement_capture", "inventory_shortage"):
             assert not (BOXES_DIR / old).exists(), (
-                f"boxes/{old} 又出现了——它现在住的是 WMS 域的盒子"
+                f"boxes/{old} 又出现了——它不是产品，删掉的东西不该回来"
             )
+
+    def test_the_retired_sample_box_is_not_registered(self):
+        """退役的样例盒不许回到注册表
+
+        订单异常盒（order_exception_box）2026-10-28 删除：它是样例不是产品，
+        op 全是模拟返回值。它的回归只能靠测试层的合成夹具盒，
+        而不是把样例重新挂上看板。
+        """
+        from kanban.trigger import BOX_REGISTRY
+
+        assert "order_exception_box" not in BOX_REGISTRY
+        assert "inventory_shortage" not in BOX_REGISTRY
 
     def test_nothing_still_imports_the_old_paths(self):
         """全仓不许还 import 老路径

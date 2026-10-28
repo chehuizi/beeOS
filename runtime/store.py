@@ -147,7 +147,7 @@ class TaskRunStore:
 
     用法：
         store = TaskRunStore(path="logs/task_runs.jsonl")
-        store.append(task_run, box_id="inventory_shortage", acceptance_status="accepted")
+        store.append(task_run, box_id="wms_design_box", acceptance_status="accepted")
         recent = store.list_recent(limit=10)
     """
 

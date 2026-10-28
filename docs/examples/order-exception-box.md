@@ -1,9 +1,14 @@
 # 示例：订单异常履约盒（Order Exception Fulfillment Box）
 
-> **这是 v0.1 示例，本仓的 `boxes/inventory_shortage/` 已与它分家。**
-> 示例里描述的是最早的订单异常盒；当前代码以
-> [`boxes/inventory_shortage/`](../../boxes/inventory_shortage/README.md) 为准
-> （该盒**未注册**进看板，代码保留）。
+> **这只盒子已经不在仓库里了（2026-10-28 删除）。**
+> 它是 beeOS 的第一只盒子（2026-09），从未注册进 `BOX_REGISTRY`——
+> 看板不显示、投料口不接收，op 全是确定性模拟返回值。
+> 删它的原因：它是**样例**而不是产品，留着会让人以为「仓库里还挂着一只
+> 运营线盒子」；而它同时还是运行时测试的样板盒——测机制和测某只盒子
+> 混成了一件事，那只盒子退役时测试也跟着退役。
+> 现在：产品层只剩 8 只真盒子；运行时机制改用测试层的合成夹具盒
+> （`tests/fixtures/sample_box/`）。
+> **本文只作为历史设计稿保留**，不再对应任何代码。
 > **状态**：v0.1 示例
 > **日期**：2026-09-18
 > **对应**：[beebox-design.md](./beebox-design.md) · [beebox-gtm.md §2 Catalog](./beeos-gtm.md#2-履约盒子-catalog) · [beebox-definition-schema.md](./beebox-definition-schema.md) · [beebox-beeline-schema.md](./beebox-beeline-schema.md)

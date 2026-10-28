@@ -79,16 +79,29 @@ def _code_strings_and_names(path: pathlib.Path) -> tuple[list[str], list[str]]:
     return strings, names
 
 
-# 任何盒子出现过的 op 名（从三只盒子的 runner 里读出来，不手抄——手抄会漂）
+# 任何盒子出现过的 op 名（从**已注册盒子的 beeline** 里读出来，不手抄——手抄会漂）
 def _all_box_op_types() -> set[str]:
-    from boxes.inventory_shortage.runner import INVENTORY_HANDLERS
-    from boxes.wms_design.runner import MODEL_HANDLERS
-    from boxes.wms_requirement.runner import CAPTURE_HANDLERS
-    return set(INVENTORY_HANDLERS) | set(MODEL_HANDLERS) | set(CAPTURE_HANDLERS)
+    """所有已注册盒子的 beeline 里出现过的 op.type
+
+    以前这里是手抄三只盒子的 handler 表——盒子一增一删就得改这里，
+    而漏改的后果是「新增的 op 名没被内核检查」，检查静默失效。
+    现在从注册表 + beeline 推，盒子增删都不影响它。
+    """
+    from kanban.trigger import BOX_REGISTRY
+
+    ops: set[str] = set()
+    for _box_id, (_get_def, beeline_loaders) in BOX_REGISTRY.items():
+        for loader in beeline_loaders.values():
+            for op in loader().operations:
+                ops.add(op.type)
+    return ops
 
 
 # 业务词表：出现在内核里就说明业务语义漏下去了。
 # 刻意选「业务概念」而不是「变量名」——变量名可以中性，业务概念不行。
+#
+# 其中几个词现在已不属于任何在跑的盒子（订单异常盒 2026-10-28 删了）：
+# 它们留在这里当**历史哨兵**——哪天有人把同名的业务重新塞回内核，这里会红。
 BUSINESS_WORDS = (
     "DDD_PATTERNS",
     "domain_service",
@@ -167,20 +180,18 @@ class TestKernelHasNoBusinessKnowledge:
 
 class TestBoxIsSelfContained:
     def test_each_runner_carries_its_own_ops(self):
-        """每只盒子都带得走自己的 op 实现"""
-        from boxes.inventory_shortage.runner import INVENTORY_HANDLERS, RUNNER as INV
-        from boxes.wms_design.runner import MODEL_HANDLERS, RUNNER as MOD
-        from boxes.wms_requirement.runner import CAPTURE_HANDLERS, RUNNER as CAP
+        """每只盒子都带得走自己的 op 实现
 
-        for handlers, runner, name in [
-            (INVENTORY_HANDLERS, INV, "inventory_shortage"),
-            (MODEL_HANDLERS, MOD, "wms_design_box"),
-            (CAPTURE_HANDLERS, CAP, "wms_requirement_box"),
-        ]:
-            assert handlers, f"{name} 没有 op 实现"
-            assert runner.owner == name
-            for op in handlers:
-                assert runner.supports(op), f"{name} 的 RUNNER 不认自己的 op {op}"
+        runner.owner 必须说清这张表属于谁——它出现在错误信息里，
+        是定位「哪只盒子缺实现」的第一条线索。
+        """
+        from kanban.trigger import BOX_REGISTRY, RUNNER_REGISTRY
+
+        for box_id, (_get_def, beeline_loaders) in BOX_REGISTRY.items():
+            runner = RUNNER_REGISTRY[box_id]
+            assert runner.owner == box_id, (
+                f"{box_id} 的 runner.owner 是 {runner.owner!r}，不是自己的 box_id"
+            )
 
     def test_a_box_does_not_import_another_box(self):
         """盒子之间不许出现未登记的互相 import

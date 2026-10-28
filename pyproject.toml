@@ -34,7 +34,6 @@ build-backend = "setuptools.build_meta"
 packages = [
     "core",
     "boxes",
-    "boxes.inventory_shortage",
     "boxes.receipt",
     "boxes.wms_analysis",
     "boxes.wms_design",

@@ -13,9 +13,9 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from boxes.inventory_shortage import get_definition
-from boxes.inventory_shortage.runner import RUNNER as INVENTORY_RUNNER
-from boxes.inventory_shortage.beeline import get_beeline as get_inventory_shortage_beeline
+from tests.fixtures.sample_box import get_definition
+from tests.fixtures.sample_box.runner import RUNNER as SAMPLE_RUNNER
+from tests.fixtures.sample_box.beeline import get_beeline as get_sample_beeline
 from core.beeline_models import Beeline, Bee, NextRef, Operation
 from core.models import AcceptanceRule, ExceptionRule, ResultDef
 from runtime import (
@@ -99,46 +99,42 @@ class TestTaskRunStateMachine:
 
 class TestHandlerRunner:
     def test_supports_known_op_types(self):
-        runner = INVENTORY_RUNNER
+        runner = SAMPLE_RUNNER
         for op_type in [
-            "validate_exception",
-            "warehouse_inventory_lookup",
-            "inter_warehouse_transfer",
-            "replenishment_check",
-            "product_substitution",
-            "compensation_calc",
-            "customer_notification",
-            "human_escalation",
+            "sample_classify",
+            "sample_resolve",
+            "sample_notify",
+            "sample_escalate",
         ]:
             assert runner.supports(op_type), f"missing {op_type}"
 
-    def test_diagnose_exception_returns_classification(self):
-        runner = INVENTORY_RUNNER
-        out = runner.run("validate_exception", {
-            "exception_type": "inventory_shortage",
+    def test_classify_returns_classification(self):
+        runner = SAMPLE_RUNNER
+        out = runner.run("sample_classify", {
+            "sample_id": "s1",
+            "kind": "demo",
             "amount": 100,
-            "context": {"severity": "high", "customer_tier": "vip"},
         })
-        assert out["exception_type"] == "inventory_shortage"
-        assert out["severity"] == "high"
-        assert out["customer_tier"] == "vip"
+        assert out["sample_id"] == "s1"
+        assert out["kind"] == "demo"
+        assert out["amount"] == 100
 
-    def test_alternative_warehouse_returns_fulfilled(self):
-        runner = INVENTORY_RUNNER
-        out = runner.run("warehouse_inventory_lookup", {})
-        assert out["resolution_type"] == "fulfilled"
-        assert out["customer_notified"] is False  # 未通知，等 notify_customer
+    def test_resolve_returns_resolved(self):
+        runner = SAMPLE_RUNNER
+        out = runner.run("sample_resolve", {"sample_id": "s1"})
+        assert out["sample_state"] == "resolved"
+        assert out["notified"] is False  # 未通知，等 sample_notify
 
-    def test_notify_marks_customer_notified(self):
-        runner = INVENTORY_RUNNER
-        out = runner.run("customer_notification", {
-            "resolution_type": "fulfilled",
-            "actions_taken": [],
+    def test_notify_marks_notified(self):
+        runner = SAMPLE_RUNNER
+        out = runner.run("sample_notify", {
+            "sample_state": "resolved",
+            "steps": ["resolve"],
         })
-        assert out["customer_notified"] is True
+        assert out["notified"] is True
 
     def test_unknown_op_type_raises(self):
-        runner = INVENTORY_RUNNER
+        runner = SAMPLE_RUNNER
         with pytest.raises(NotImplementedError):
             runner.run("nonexistent_op_type", {})
 
@@ -157,7 +153,7 @@ def _make_simple_beeline() -> Beeline:
         operations=[
             Operation(
                 op_id="a",
-                type="warehouse_inventory_lookup",  # mock 能识别
+                type="sample_classify",  # 夹具盒的 runner 认得
                 input_from="external",
                 input="schema_in",
                 output="schema_a_out",
@@ -166,7 +162,7 @@ def _make_simple_beeline() -> Beeline:
             ),
             Operation(
                 op_id="b",
-                type="customer_notification",  # mock 能识别
+                type="sample_notify",  # 夹具盒的 runner 认得
                 input_from="a",
                 input="schema_a_out",
                 output="schema_b_out",
@@ -175,7 +171,7 @@ def _make_simple_beeline() -> Beeline:
             ),
             Operation(
                 op_id="c",
-                type="human_escalation",  # mock 能识别
+                type="sample_escalate",  # 夹具盒的 runner 认得
                 input_from="b",
                 input="schema_b_out",
                 output="schema_c_out",
@@ -195,19 +191,19 @@ def _make_branched_beeline() -> Beeline:
         operations=[
             Operation(
                 op_id="a",
-                type="warehouse_inventory_lookup",  # 输出 fulfilled
+                type="sample_resolve",  # 输出 sample_state=resolved
                 input_from="external",
                 input="s",
                 output="s",
                 next=[
-                    NextRef(op_id="b", when="resolution_type == fulfilled"),
+                    NextRef(op_id="b", when="sample_state == resolved"),
                     NextRef(op_id="c"),
                 ],
                 bee=Bee(type="t"),
             ),
             Operation(
                 op_id="b",
-                type="customer_notification",
+                type="sample_notify",
                 input_from="a",
                 input="s",
                 output="s",
@@ -216,7 +212,7 @@ def _make_branched_beeline() -> Beeline:
             ),
             Operation(
                 op_id="c",
-                type="human_escalation",
+                type="sample_escalate",
                 input_from="a",
                 input="s",
                 output="s",
@@ -232,7 +228,7 @@ class TestBeelineExecutor:
         beeline = _make_simple_beeline()
         task_run = create_task_run("o", "i", "c", "r", beeline.id, 1, "rt", "in")
 
-        executor = BeelineExecutor(INVENTORY_RUNNER)
+        executor = BeelineExecutor(SAMPLE_RUNNER)
         result = executor.execute(task_run, beeline, {})
 
         assert result.status == TaskRunStatus.COMPLETED
@@ -240,11 +236,11 @@ class TestBeelineExecutor:
         assert all(op.status == "completed" for op in result.operations.values())
 
     def test_executor_picks_branched_path(self):
-        # warehouse_inventory_lookup 总是返回 resolution_type=fulfilled
+        # sample_resolve 总是返回 sample_state=resolved
         beeline = _make_branched_beeline()
         task_run = create_task_run("o", "i", "c", "r", beeline.id, 1, "rt", "in")
 
-        executor = BeelineExecutor(INVENTORY_RUNNER)
+        executor = BeelineExecutor(SAMPLE_RUNNER)
         result = executor.execute(task_run, beeline, {})
 
         assert result.status == TaskRunStatus.COMPLETED
@@ -262,7 +258,7 @@ class TestBeelineExecutor:
             operations=[
                 Operation(
                     op_id="a",
-                    type="warehouse_inventory_lookup",
+                    type="sample_classify",
                     input_from="external",
                     input="s",
                     output="s",
@@ -271,7 +267,7 @@ class TestBeelineExecutor:
                 ),
                 Operation(
                     op_id="b",
-                    type="customer_notification",
+                    type="sample_notify",
                     input_from="external",
                     input="s",
                     output="s",
@@ -281,7 +277,7 @@ class TestBeelineExecutor:
             ],
         )
         task_run = create_task_run("o", "i", "c", "r", beeline.id, 1, "rt", "in")
-        executor = BeelineExecutor(INVENTORY_RUNNER)
+        executor = BeelineExecutor(SAMPLE_RUNNER)
         result = executor.execute(task_run, beeline, {})
         assert result.status == TaskRunStatus.FAILED
         assert "multiple start ops" in (result.event_log.entries[-1].detail or {}).get("reason", "")
@@ -290,7 +286,7 @@ class TestBeelineExecutor:
         beeline = _make_simple_beeline()
         task_run = create_task_run("o", "i", "c", "r", beeline.id, 1, "rt", "in")
 
-        executor = BeelineExecutor(INVENTORY_RUNNER)
+        executor = BeelineExecutor(SAMPLE_RUNNER)
         result = executor.execute(task_run, beeline, {})
 
         events = [e.event for e in result.event_log.entries]
@@ -319,7 +315,7 @@ class TestBeelineExecutor:
             ],
         )
         task_run = create_task_run("o", "i", "c", "r", beeline.id, 1, "rt", "in")
-        executor = BeelineExecutor(INVENTORY_RUNNER)
+        executor = BeelineExecutor(SAMPLE_RUNNER)
         result = executor.execute(task_run, beeline, {})
         assert result.status == TaskRunStatus.FAILED
         assert "bad" in result.operations
@@ -439,22 +435,19 @@ class TestAcceptance:
 
 
 class TestEndToEnd:
-    def test_inventory_shortage_full_flow(self):
+    def test_sample_box_full_flow(self):
         box = get_definition()
-        beeline = get_inventory_shortage_beeline()
+        beeline = get_sample_beeline()
 
         input_data = {
-            "exception_id": "exc_001",
-            "order_id": "ord_42",
-            "customer_id": "cust_001",
+            "sample_id": "s_001",
+            "kind": "demo",
             "amount": 350.0,
-            "exception_type": "inventory_shortage",
-            "context": {"severity": "medium", "customer_tier": "vip"},
         }
 
         task_run = create_task_run(
             originator="orders.api",
-            intent="handle_order_exception",
+            intent="handle_sample_request",
             contract_ref=box.result.result_schema,
             release_id=f"{box.id}@v{box.version}",
             beeline_id=beeline.id,
@@ -463,13 +456,13 @@ class TestEndToEnd:
             instance_id="instance_local_001",
         )
 
-        executor = BeelineExecutor(INVENTORY_RUNNER)
+        executor = BeelineExecutor(SAMPLE_RUNNER)
         task_run = executor.execute(task_run, beeline, input_data)
 
         # task run 必须 COMPLETED
         assert task_run.status == TaskRunStatus.COMPLETED
-        # beeline 必须至少跑了 diagnose_exception
-        assert "diagnose_exception" in task_run.operations
+        # beeline 必须至少跑了 sample_classify
+        assert "sample_classify" in task_run.operations
         # 所有 op 都 completed（没有失败）
         for rec in task_run.operations.values():
             assert rec.status == "completed", f"op {rec.op_id} failed"
@@ -490,15 +483,15 @@ class TestEndToEnd:
         # event_log 至少 1 条
         assert len(task_run.event_log.entries) > 0
 
-    def test_inventory_shortage_event_log_trail(self):
+    def test_sample_box_event_log_trail(self):
         box = get_definition()
-        beeline = get_inventory_shortage_beeline()
+        beeline = get_sample_beeline()
         task_run = create_task_run(
-            "o", "handle_order_exception", box.result.result_schema,
+            "o", "handle_sample_request", box.result.result_schema,
             f"{box.id}@v{box.version}", beeline.id, beeline.version,
             "rt", "in",
         )
-        BeelineExecutor(INVENTORY_RUNNER).execute(task_run, beeline, {"exception_type": "inventory_shortage"})
+        BeelineExecutor(SAMPLE_RUNNER).execute(task_run, beeline, {"sample_id": "s_001"})
 
         events = [e.event for e in task_run.event_log.entries]
         # 必须含 status_change + op_start + op_finish

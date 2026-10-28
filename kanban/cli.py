@@ -11,8 +11,8 @@ CLI 输出（终端友好的纯文本）：
   ====================================
   
   Boxes Registered
-    - inventory_shortage (Order Fulfillment)
-    - wms_design (Warehouse Management)
+    - wms_design_box (Warehouse Management)
+    - wms_testing_box (Warehouse Management)
   
   Status Counts
     completed:  10
@@ -25,7 +25,7 @@ CLI 输出（终端友好的纯文本）：
   Recent Task Runs (last 10)
     task_run_id  box                 status     acceptance   duration  ops
     -----------  ------------------  ---------  -----------  --------  ---
-    a1b2c3d4     inventory_shortage  completed  accepted     120ms     3
+    a1b2c3d4     wms_design_box     completed  accepted     120ms     3
     ...
   
   Active Exceptions

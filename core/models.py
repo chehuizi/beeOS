@@ -44,45 +44,6 @@ def is_not_applicable(value: Any) -> bool:
     return value == NOT_APPLICABLE
 
 # ============================================================
-# 业务化枚举（跨盒子共享）
-# ============================================================
-
-
-class ExceptionType(str):
-    """订单异常类型"""
-
-    INVENTORY_SHORTAGE = "inventory_shortage"
-    PAYMENT_FAILED = "payment_failed"
-    SHIPPING_DELAY = "shipping_delay"
-    CUSTOMER_COMPLAINT = "customer_complaint"
-    PARTIAL_UNAVAILABLE = "partial_unavailable"
-
-
-class Severity(str):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-    CRITICAL = "critical"
-
-
-class CustomerTier(str):
-    STANDARD = "standard"
-    VIP = "vip"
-    ENTERPRISE = "enterprise"
-
-
-class ResolutionType(str):
-    """异常处理结果类型"""
-
-    FULFILLED = "fulfilled"
-    PARTIAL_FULFILLED = "partial_fulfilled"
-    REFUNDED = "refunded"
-    COMPENSATED = "compensated"
-    ESCALATED = "escalated"
-    REJECTED = "rejected"
-
-
-# ============================================================
 # 数据形状：Schema 定义（definition 自带）
 # ============================================================
 

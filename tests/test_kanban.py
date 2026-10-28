@@ -23,9 +23,9 @@ from runtime import (
     create_task_run,
     evaluate_acceptance,
 )
-from boxes.inventory_shortage import get_definition as get_inv_def
-from boxes.inventory_shortage.beeline import get_beeline as get_inv_beeline
-from boxes.inventory_shortage.runner import RUNNER as INVENTORY_RUNNER
+from tests.fixtures.sample_box import get_definition as get_sample_def
+from tests.fixtures.sample_box.beeline import get_beeline as get_sample_beeline
+from tests.fixtures.sample_box.runner import RUNNER as SAMPLE_RUNNER
 from boxes.wms_design.runner import RUNNER as MODELING_RUNNER
 from boxes.wms_design import get_definition as get_mod_def
 from boxes.wms_design.beeline import get_beeline as get_mod_beeline
@@ -57,13 +57,13 @@ class TestTaskRunStore:
         assert store.list_boxes() == []
 
     def test_append_writes_to_file(self, store: TaskRunStore, tmp_store_path: Path):
-        box = get_inv_def()
-        beeline = get_inv_beeline()
+        box = get_sample_def()
+        beeline = get_sample_beeline()
         tr = create_task_run(
-            "orders.api", "handle_order_exception", box.result.result_schema,
+            "sample.api", "handle_sample_request", box.result.result_schema,
             f"{box.id}@v{box.version}", beeline.id, beeline.version, "rt", "in",
         )
-        BeelineExecutor(INVENTORY_RUNNER).execute(tr, beeline, {"exception_type": "inventory_shortage"})
+        BeelineExecutor(SAMPLE_RUNNER).execute(tr, beeline, {"sample_id": "s_001"})
 
         store.append(tr, box_id=box.id, acceptance_status="accepted")
 
@@ -77,8 +77,8 @@ class TestTaskRunStore:
         assert record["status"] == "completed"
 
     def test_persistence_across_instances(self, tmp_store_path: Path):
-        box = get_inv_def()
-        beeline = get_inv_beeline()
+        box = get_sample_def()
+        beeline = get_sample_beeline()
 
         # 实例 1：写入
         s1 = TaskRunStore(path=tmp_store_path)
@@ -86,7 +86,7 @@ class TestTaskRunStore:
             "o", "i", box.result.result_schema, f"{box.id}@v{box.version}",
             beeline.id, beeline.version, "rt", "in",
         )
-        BeelineExecutor(INVENTORY_RUNNER).execute(tr, beeline, {"exception_type": "inventory_shortage"})
+        BeelineExecutor(SAMPLE_RUNNER).execute(tr, beeline, {"sample_id": "s_001"})
         s1.append(tr, box_id=box.id, acceptance_status="accepted")
         del s1
 
@@ -121,8 +121,8 @@ class TestTaskRunStore:
         self, store: TaskRunStore
     ):
         """没有规则介入就不该有这一项——空对象也是信号，会被误读成"介入过"。"""
-        box = get_inv_def()
-        beeline = get_inv_beeline()
+        box = get_sample_def()
+        beeline = get_sample_beeline()
         tr = create_task_run(
             "o", "i", box.result.result_schema, f"{box.id}@v{box.version}",
             beeline.id, beeline.version, "rt", "in",
@@ -133,14 +133,14 @@ class TestTaskRunStore:
         assert store.list_recent()[0]["rule_applied"] is None
 
     def test_list_recent_sorted_desc(self, store: TaskRunStore):
-        box = get_inv_def()
-        beeline = get_inv_beeline()
+        box = get_sample_def()
+        beeline = get_sample_beeline()
         for i in range(3):
             tr = create_task_run(
                 "o", "i", box.result.result_schema, f"{box.id}@v{box.version}",
                 beeline.id, beeline.version, "rt", "in",
             )
-            BeelineExecutor(INVENTORY_RUNNER).execute(tr, beeline, {"exception_type": "inventory_shortage"})
+            BeelineExecutor(SAMPLE_RUNNER).execute(tr, beeline, {"sample_id": "s_001"})
             store.append(tr, box_id=box.id)
 
         records = store.list_recent(limit=2)
@@ -149,8 +149,8 @@ class TestTaskRunStore:
         assert records[0]["created_at"] >= records[1]["created_at"]
 
     def test_list_recent_filter_by_box(self, store: TaskRunStore):
-        inv_def = get_inv_def()
-        inv_beeline = get_inv_beeline()
+        inv_def = get_sample_def()
+        inv_beeline = get_sample_beeline()
         mod_def = get_mod_def()
         mod_beeline = get_mod_beeline()
 
@@ -160,7 +160,7 @@ class TestTaskRunStore:
                 "o", "i", inv_def.result.result_schema, f"{inv_def.id}@v{inv_def.version}",
                 inv_beeline.id, inv_beeline.version, "rt", "in",
             )
-            BeelineExecutor(INVENTORY_RUNNER).execute(tr, inv_beeline, {"exception_type": "inventory_shortage"})
+            BeelineExecutor(SAMPLE_RUNNER).execute(tr, inv_beeline, {"sample_id": "s_001"})
             store.append(tr, box_id=inv_def.id)
 
         tr = create_task_run(
@@ -181,29 +181,29 @@ class TestTaskRunStore:
         assert all(r["box_id"] == inv_def.id for r in inv_records)
 
     def test_count_by_status_and_acceptance(self, store: TaskRunStore):
-        box = get_inv_def()
-        beeline = get_inv_beeline()
+        box = get_sample_def()
+        beeline = get_sample_beeline()
         # 2 个 accepted, 1 个 rejected
         for status in ["accepted", "accepted", "rejected"]:
             tr = create_task_run(
                 "o", "i", box.result.result_schema, f"{box.id}@v{box.version}",
                 beeline.id, beeline.version, "rt", "in",
             )
-            BeelineExecutor(INVENTORY_RUNNER).execute(tr, beeline, {"exception_type": "inventory_shortage"})
+            BeelineExecutor(SAMPLE_RUNNER).execute(tr, beeline, {"sample_id": "s_001"})
             store.append(tr, box_id=box.id, acceptance_status=status)
 
         assert store.count_by_status() == {"completed": 3}
         assert store.count_by_acceptance() == {"accepted": 2, "rejected": 1}
 
     def test_aggregate_metrics(self, store: TaskRunStore):
-        box = get_inv_def()
-        beeline = get_inv_beeline()
+        box = get_sample_def()
+        beeline = get_sample_beeline()
         for _ in range(5):
             tr = create_task_run(
                 "o", "i", box.result.result_schema, f"{box.id}@v{box.version}",
                 beeline.id, beeline.version, "rt", "in",
             )
-            BeelineExecutor(INVENTORY_RUNNER).execute(tr, beeline, {"exception_type": "inventory_shortage"})
+            BeelineExecutor(SAMPLE_RUNNER).execute(tr, beeline, {"sample_id": "s_001"})
             store.append(tr, box_id=box.id, acceptance_status="accepted")
 
         m = store.aggregate_metrics()
@@ -213,17 +213,17 @@ class TestTaskRunStore:
         assert m["acceptance_rate"] == "100.0%"
 
     def test_list_boxes(self, store: TaskRunStore):
-        inv_def = get_inv_def()
-        inv_beeline = get_inv_beeline()
+        inv_def = get_sample_def()
+        inv_beeline = get_sample_beeline()
         mod_def = get_mod_def()
         mod_beeline = get_mod_beeline()
 
         for box, beeline, intent in [
-            (inv_def, inv_beeline, "handle_order_exception"),
+            (inv_def, inv_beeline, "handle_sample_request"),
             (mod_def, mod_beeline, "handle_modeling_request"),
         ]:
             input_data = (
-                {"exception_type": "inventory_shortage"} if intent == "handle_order_exception"
+                {"sample_id": "s_001"} if intent == "handle_sample_request"
                 else {"set_id": "s1", "business_goal": "x", "requirements": [{"requirement_id": "r1", "description": "x", "requirement_type": "object", "priority": "must_have"}]}
             )
             tr = create_task_run(
@@ -237,8 +237,8 @@ class TestTaskRunStore:
 
     def test_view_filters_unregistered_boxes(self, store: TaskRunStore):
         """view() 返回只含指定 box 的内存视图；原 store 不受影响"""
-        inv_def = get_inv_def()
-        inv_beeline = get_inv_beeline()
+        inv_def = get_sample_def()
+        inv_beeline = get_sample_beeline()
         mod_def = get_mod_def()
         mod_beeline = get_mod_beeline()
 
@@ -246,7 +246,7 @@ class TestTaskRunStore:
             "o", "i", inv_def.result.result_schema, f"{inv_def.id}@v{inv_def.version}",
             inv_beeline.id, inv_beeline.version, "rt", "in",
         )
-        BeelineExecutor(INVENTORY_RUNNER).execute(tr, inv_beeline, {"exception_type": "inventory_shortage"})
+        BeelineExecutor(SAMPLE_RUNNER).execute(tr, inv_beeline, {"sample_id": "s_001"})
         store.append(tr, box_id=inv_def.id)
 
         tr = create_task_run(
@@ -282,13 +282,13 @@ class TestKanbanRender:
         assert "(no active exceptions)" in out
 
     def test_dashboard_with_data(self, store: TaskRunStore):
-        box = get_inv_def()
-        beeline = get_inv_beeline()
+        box = get_sample_def()
+        beeline = get_sample_beeline()
         tr = create_task_run(
             "o", "i", box.result.result_schema, f"{box.id}@v{box.version}",
             beeline.id, beeline.version, "rt", "in",
         )
-        BeelineExecutor(INVENTORY_RUNNER).execute(tr, beeline, {"exception_type": "inventory_shortage"})
+        BeelineExecutor(SAMPLE_RUNNER).execute(tr, beeline, {"sample_id": "s_001"})
         eval_result = evaluate_acceptance(tr, box.result)
         store.append(tr, box_id=box.id, acceptance_status=eval_result.status.value)
 
@@ -301,14 +301,14 @@ class TestKanbanRender:
         assert "Aggregate Metrics" in out
 
     def test_dashboard_shows_acceptance_outcomes(self, store: TaskRunStore):
-        box = get_inv_def()
-        beeline = get_inv_beeline()
+        box = get_sample_def()
+        beeline = get_sample_beeline()
         for _ in range(3):
             tr = create_task_run(
                 "o", "i", box.result.result_schema, f"{box.id}@v{box.version}",
                 beeline.id, beeline.version, "rt", "in",
             )
-            BeelineExecutor(INVENTORY_RUNNER).execute(tr, beeline, {"exception_type": "inventory_shortage"})
+            BeelineExecutor(SAMPLE_RUNNER).execute(tr, beeline, {"sample_id": "s_001"})
             store.append(tr, box_id=box.id, acceptance_status="accepted")
 
         out = render_dashboard(store)

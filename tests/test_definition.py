@@ -3,7 +3,7 @@
 覆盖范围：
 - core.models 各组件的 pydantic 验证（含 FieldDef 类型结构规则）
 - BeeBoxDefinition 顶层结构 + get_schema / get_task 查询方法
-- boxes.inventory_shortage 库存不足盒子 Definition 完整加载
+- 全部已注册盒子的 Definition 结构不变式
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ from core.models import (
     SchemaDef,
     TaskDef,
 )
-from boxes.inventory_shortage import ORDER_EXCEPTION_BOX, get_definition
 
 
 # ============================================================
@@ -270,85 +269,67 @@ class TestBeeBoxDefinition:
 
 
 # ============================================================
-# boxes.inventory_shortage 集成验证
+# ============================================================
+# 全部已注册盒子的 Definition 结构不变式
 # ============================================================
 
 
-class TestInventoryShortageBox:
-    def test_module_exports(self):
-        # 入口 get_definition 必须可用
-        assert callable(get_definition)
-        # 常量 ORDER_EXCEPTION_BOX 必须是 BeeBoxDefinition
-        assert isinstance(ORDER_EXCEPTION_BOX, BeeBoxDefinition)
+def _registered_definitions():
+    from kanban.trigger import BOX_REGISTRY
 
-    def test_get_definition_returns_instance(self):
-        d = get_definition()
-        assert isinstance(d, BeeBoxDefinition)
-        assert d.id == "order_exception_box"
-        assert d.version >= 1
+    return [(box_id, factory()) for box_id, (factory, *_rest) in BOX_REGISTRY.items()]
 
-    def test_schemas_complete(self):
-        d = get_definition()
-        ids = {s.id for s in d.schemas}
-        # 4 个核心 schema 必须就位
-        assert "schema_order_request" in ids
-        assert "schema_address" in ids
-        assert "schema_order_exception" in ids
-        assert "schema_resolution_result" in ids
 
-    def test_task_uses_existing_schema(self):
-        d = get_definition()
-        t = d.get_task("handle_order_exception")
-        assert t is not None
-        # task 引用的 schema 必须真实存在
-        assert d.get_schema(t.task_schema) is not None
-        # beeline 引用（机制层独立，但必须在 task 内）
-        assert t.beeline_id.startswith("beeline_")
-        assert t.beeline_version >= 1
+class TestEveryRegisteredBoxDefinition:
+    """结构不变式，不是某一只盒子的快照
 
-    def test_result_uses_existing_schema(self):
-        d = get_definition()
-        assert d.get_schema(d.result.result_schema) is not None
+    以前这里断言的是订单异常盒的 schema 清单 / queen 规则 / 验收条目。
+    那些断言在盒子退役时会一起退役——换成跨产品的不变式。
+    """
 
-    def test_acceptance_rules_complete(self):
-        d = get_definition()
-        # 至少 5 条 acceptance（含 SLA / 通知 / 退款 / 一致性 / 证据）
-        assert len(d.result.acceptance) >= 5
-        metrics = {a.metric for a in d.result.acceptance}
-        assert "resolution_within_sla" in metrics
-        assert "customer_notified" in metrics
-        assert "evidence_complete" in metrics
+    def test_every_box_has_schemas_and_a_result_schema(self):
+        for box_id, d in _registered_definitions():
+            assert d.schemas, f"{box_id}: 一个 schema 都没有"
+            assert d.result.result_schema in {s.id for s in d.schemas}, (
+                f"{box_id}: 产出 schema 没在自己的 schema 清单里"
+            )
 
-    def test_exception_rules_have_valid_actions(self):
-        d = get_definition()
-        valid_actions = {"no_deliver", "rollback", "escalate"}
-        for e in d.result.exceptions:
-            assert e.action in valid_actions
+    def test_task_schema_belongs_to_the_box(self):
+        """task 的输入 schema 必须来自本盒
 
-    def test_queen_authorization_within_bounds(self):
-        d = get_definition()
-        a = d.queen.authorization
-        for v in (a.task_routing, a.exception_handling, a.continuous_improvement):
-            assert v in {"allow", "observe_only", "off"}
+        跨盒引用会让「删掉下游盒」变成不可能——schema 归消费者所有。
+        """
+        for box_id, d in _registered_definitions():
+            own = {s.id for s in d.schemas}
+            for task in d.task:
+                assert task.task_schema in own, (
+                    f"{box_id}: task {task.type} 的输入 schema 不属于本盒"
+                )
 
-    def test_queen_rules_business_specific(self):
-        d = get_definition()
-        rules = d.queen.rules
-        # 订单异常盒必须有 SLA 分级策略
-        assert rules.task_routing is not None
-        assert "sla_by_customer_tier" in rules.task_routing
-        # 库存不足优先级链必须存在
-        assert rules.exception_handling is not None
-        assert "inventory_shortage_priority" in rules.exception_handling
+    def test_refs_resolve_within_the_box(self):
+        """`ref:` 只能引用本 definition 内的 schema
 
-    def test_metrics_three_dimensions(self):
-        d = get_definition()
-        # quality / latency / cost 三类度量都必须有
-        assert len(d.metrics.quality) >= 1
-        assert len(d.metrics.latency) >= 1
-        assert len(d.metrics.cost) >= 1
-        # 所有 metric 必须有 name 和 target
-        for group in (d.metrics.quality, d.metrics.latency, d.metrics.cost):
-            for m in group:
-                assert m.name
-                assert m.target >= 0
+        悬空 ref 的代价是哑的：投料照收、照跑，只是内容不对。
+        """
+        for box_id, d in _registered_definitions():
+            own = {s.id for s in d.schemas}
+            for schema in d.schemas:
+                for field in schema.fields:
+                    if field.type.startswith("ref:"):
+                        target = field.type.split(":", 1)[1]
+                        assert target in own, (
+                            f"{box_id}: schema {schema.id} 的字段 {field.name} "
+                            f"引用了本盒没有的 {target}"
+                        )
+
+    def test_acceptance_rules_are_mechanical(self):
+        """判据不许有主观项：op 只能是可比较的那些"""
+        allowed = {"eq", "ne", "gt", "gte", "lt", "lte", "in", "not_in", "contains"}
+        for box_id, d in _registered_definitions():
+            for rule in d.result.acceptance:
+                assert rule.op in allowed, f"{box_id}: 判据 {rule.metric} 用了 {rule.op}"
+
+    def test_every_box_declares_exceptions(self):
+        for box_id, d in _registered_definitions():
+            assert d.result.exceptions, f"{box_id}: 一条例外都没声明"
+

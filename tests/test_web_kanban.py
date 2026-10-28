@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from boxes.inventory_shortage.runner import RUNNER as INVENTORY_RUNNER
+from tests.fixtures.sample_box.runner import RUNNER as SAMPLE_RUNNER
 from boxes.wms_design.runner import RUNNER as MODELING_RUNNER
 from kanban.trigger import box_manifest
 from kanban.web import (
@@ -34,8 +34,8 @@ from kanban.web import (
 )
 from runtime.store import TaskRunStore
 from runtime import create_task_run, BeelineExecutor
-from boxes.inventory_shortage import get_definition as get_inv_def
-from boxes.inventory_shortage.beeline import get_beeline as get_inv_beeline
+from tests.fixtures.sample_box import get_definition as get_sample_def
+from tests.fixtures.sample_box.beeline import get_beeline as get_sample_beeline
 from boxes.wms_design import get_definition as get_mod_def
 from boxes.wms_design.beeline import get_beeline as get_mod_beeline
 
@@ -66,8 +66,8 @@ def server_url(tmp_path: Path):
     store = TaskRunStore(path=tmp_path / "task_runs.jsonl")
 
     # 灌入测试数据
-    inv_def = get_inv_def()
-    inv_beeline = get_inv_beeline()
+    inv_def = get_sample_def()
+    inv_beeline = get_sample_beeline()
     mod_def = get_mod_def()
     mod_beeline = get_mod_beeline()
 
@@ -77,7 +77,7 @@ def server_url(tmp_path: Path):
             "o", "i", inv_def.result.result_schema, f"{inv_def.id}@v{inv_def.version}",
             inv_beeline.id, inv_beeline.version, "rt", "in",
         )
-        BeelineExecutor(INVENTORY_RUNNER).execute(tr, inv_beeline, {"exception_type": "inventory_shortage"})
+        BeelineExecutor(SAMPLE_RUNNER).execute(tr, inv_beeline, {"sample_id": "s_001"})
         store.append(tr, box_id=inv_def.id, acceptance_status="accepted")
 
     tr = create_task_run(
@@ -173,8 +173,8 @@ class TestDashboardData:
 
     def test_box_filter_applied(self, tmp_path: Path):
         store = TaskRunStore(path=tmp_path / "x.jsonl")
-        inv_def = get_inv_def()
-        inv_beeline = get_inv_beeline()
+        inv_def = get_sample_def()
+        inv_beeline = get_sample_beeline()
         mod_def = get_mod_def()
         mod_beeline = get_mod_beeline()
 
@@ -183,7 +183,7 @@ class TestDashboardData:
             "o", "i", inv_def.result.result_schema, f"{inv_def.id}@v{inv_def.version}",
             inv_beeline.id, inv_beeline.version, "rt", "in",
         )
-        BeelineExecutor(INVENTORY_RUNNER).execute(tr, inv_beeline, {"exception_type": "inventory_shortage"})
+        BeelineExecutor(SAMPLE_RUNNER).execute(tr, inv_beeline, {"sample_id": "s_001"})
         store.append(tr, box_id=inv_def.id, acceptance_status="accepted")
 
         # 2 mod
@@ -216,8 +216,8 @@ class TestDashboardData:
     def test_box_stats_per_box(self, tmp_path: Path):
         """box_stats 只含已注册盒子的聚合数据（未注册盒子隐藏）"""
         store = TaskRunStore(path=tmp_path / "x.jsonl")
-        inv_def = get_inv_def()
-        inv_beeline = get_inv_beeline()
+        inv_def = get_sample_def()
+        inv_beeline = get_sample_beeline()
         mod_def = get_mod_def()
         mod_beeline = get_mod_beeline()
 
@@ -226,7 +226,7 @@ class TestDashboardData:
             "o", "i", inv_def.result.result_schema, f"{inv_def.id}@v{inv_def.version}",
             inv_beeline.id, inv_beeline.version, "rt", "in",
         )
-        BeelineExecutor(INVENTORY_RUNNER).execute(tr, inv_beeline, {"exception_type": "inventory_shortage"})
+        BeelineExecutor(SAMPLE_RUNNER).execute(tr, inv_beeline, {"sample_id": "s_001"})
         store.append(tr, box_id=inv_def.id, acceptance_status="accepted")
 
         # 1 mod (rejected)
@@ -242,7 +242,7 @@ class TestDashboardData:
 
         stats = dashboard_data(store)["box_stats"]
         # 所有注册盒子都在，哪怕只有 1 只跑过——「没跑过」读成 0 次运行，
-        # 不是读成不存在。未注册的 order_exception_box 不在名单里。
+        # 不是读成不存在。未注册的盒子不在名单里。
         assert [s["box_id"] for s in stats] == FLOW_ORDER
         assert all(s["total"] == 0 for s in stats if s["box_id"] != mod_def.id), (
             "没跑过的盒子也该有统计条目，只是计数为 0"
@@ -342,10 +342,10 @@ class TestKanbanServer:
         conn.close()
 
     def test_api_data_unregistered_box_hidden(self, server_url: tuple[str, TaskRunStore]):
-        """未注册盒子（order_exception_box）即使有历史记录也不显示"""
+        """未注册盒子即使有历史记录也不显示"""
         url, _ = server_url
         conn = HTTPConnection(url.replace("http://", ""))
-        conn.request("GET", "/api/data?box=order_exception_box")
+        conn.request("GET", "/api/data?box=not_a_registered_box")
         resp = conn.getresponse()
         assert resp.status == 200
         data = json.loads(resp.read())
@@ -616,15 +616,19 @@ class TestTriggerApi:
         assert data["acceptance_status"] == "rejected"
 
     def test_removed_box_not_triggerable(self, server_url: tuple[str, TaskRunStore]):
-        """运营线盒子已从看板移除：未注册 = trigger 拒收（代码保留在仓库）"""
+        """未注册 = trigger 拒收
+
+        退役的样例盒（order_exception_box）也走这条路：它连代码都没了，
+        更不可能接得到投料。
+        """
         url, _ = server_url
         status, data = self._post(url, {
-            "box_id": "order_exception_box",
-            "task_type": "handle_order_exception",
-            "payload": {"exception_type": "inventory_shortage", "amount": 100},
+            "box_id": "not_a_registered_box",
+            "task_type": "handle_sample_request",
+            "payload": {},
         })
         assert status == 400
-        assert "order_exception_box" in data["error"]
+        assert "not_a_registered_box" in data["error"]
 
     def test_unknown_box_400(self, server_url: tuple[str, TaskRunStore]):
         url, _ = server_url
@@ -839,7 +843,7 @@ class TestTheRosterComesFromTheRegistry:
         assert all(s["total"] == 0 for s in data["box_stats"]), (
             "没跑过的盒子计数应为 0，不是缺条目"
         )
-        # 未注册盒子（运营线那只）不进名单，但它的 runner 还在仓库里
+        # 退役的样例盒不进名单（它已经删掉了，更不该出现）
         assert "order_exception_box" not in data["boxes"]
         assert "order_exception_box" not in registered_box_ids()
 

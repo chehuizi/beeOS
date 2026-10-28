@@ -39,8 +39,8 @@ flowchart LR
 
 ```
 boxes/
-  inventory_shortage/
-    beeline.py               # 库存不足订单履约作业路线（v3 ver12）
+  wms_requirement/
+    beeline.py               # 需求盒的作业路线（split → extract → build → verify → package）
     definition.py
     runner.py
     schemas.py
@@ -52,52 +52,50 @@ boxes/
     baseline/                # 盒子自带的基线资产
 ```
 
-其余 7 只盒子同构：每只一个 `beeline.py`，目录清单见仓库根 README 的盒子表。
+其余 6 只盒子同构：每只一个 `beeline.py`，目录清单见仓库根 README 的盒子表。
 
-## 第一只 beeline：beeline_inventory_shortage_v3 (v12)
+## 举例：beeline_wms_requirement_v1 (v1)
 
-业务流——按 queen `inventory_shortage_priority` 优先级链：
+需求盒的作业路线——把一段自然语言业务表述变成可机械验证的需求集：
 
 ```mermaid
 flowchart TB
-    Start[diagnose_exception]
-    Start --> Alt[try_alternative_warehouse]
-    Alt -->|fulfilled| Notify[notify_customer]
-    Alt -->|fallback| Trans[try_inter_warehouse_transfer]
-    Trans -->|fulfilled| Notify
-    Trans -->|fallback| Repl[try_replenishment_eta]
-    Repl -->|acceptable| Notify
-    Repl -->|fallback| Sub[try_substitute_product]
-    Sub -->|fulfilled| Notify
-    Sub -->|fallback| Comp[calculate_compensation]
-    Comp --> Notify
-    Notify -->|human_review_required| Esc[escalate_to_human]
-    Notify -->|otherwise| End1[terminal]
-    Esc --> End2[terminal]
+    Start[split_source_sentences]
+    Start --> Extract[extract_requirements]
+    Extract --> Build[build_requirement_set]
+    Build --> Verify[verify_graph_fidelity]
+    Verify --> Package[package_requirement_set]
+    Package --> End1[terminal]
 ```
 
-8 个 operation / 4 个 try_* 分支 / 1 个 fan-in 汇聚点 / 1 个终态。
+5 个 operation / 1 个入口 / 1 个终态 / 线性链。
+
+> **当前已注册的 8 只盒子，beeline 全是线性链。**
+> runtime 支持分支（`next` 带 `when` 条件）与 fan-in，
+> 但产品侧暂时没有用到——「声明了分支能力」和「产品真有分支」是两件事，
+> 这里只说前者。
 
 ## 幂等性策略
 
 | operation | mode | key | 原因 |
 |---|---|---|---|
-| `diagnose_exception` | required | order_id | 重复诊断必须同结果 |
-| `try_alternative_warehouse` | required | order_id | 不重复扣减库存 |
-| `try_inter_warehouse_transfer` | required | order_id | 不重复发起调拨 |
-| `try_replenishment_eta` | required | order_id | 不重复查询 ETA |
-| `try_substitute_product` | required | order_id | 不重复锁替代品 |
-| `calculate_compensation` | required | order_id | 不重复计算补偿 |
-| `notify_customer` | **forbidden** | — | 不重复发通知 |
-| `escalate_to_human` | required | order_id | 不重复升级 |
+| `split_source_sentences` | required | set_id | 同一批需求重复切句必须同结果 |
+| `extract_requirements` | required | set_id | 重复抽取不产生第二份需求 |
+| `build_requirement_set` | required | set_id | 同一需求集只有一份结构 |
+| `verify_graph_fidelity` | required | set_id | 忠实度校验结果稳定 |
+| `package_requirement_set` | required | set_id | 重复打包产出同一份需求集 |
+
+**`forbidden` 的用法**：不可重复的动作（发通知、扣库存）声明成
+`mode=forbidden`，而不是 `required`——两者语义不同：
+`required` 是「重复执行要幂等」，`forbidden` 是「根本不该执行第二次」。
 
 ## 加载
 
 ```python
-from boxes.inventory_shortage import get_beeline
+from boxes.wms_requirement import get_beeline
 
-b = get_beeline()                                # beeline_inventory_shortage_v3 v12
-b.get_operation("try_alternative_warehouse")     # 查 operation
+b = get_beeline()                                # beeline_wms_requirement_v1 v1
+b.get_operation("extract_requirements")          # 查 operation
 b.get_start_operations()                         # 入口 ops
 ```
 

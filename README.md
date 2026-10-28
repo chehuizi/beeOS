@@ -34,7 +34,6 @@ flowchart TB
     Boxes --> B6[wms_analysis 效果分析]
     Boxes --> B7[wms_system 系统档案]
     Boxes --> B8[receipt 小票识别]
-    Boxes --> B9[inventory_shortage 订单异常 - 未注册]
 
     Runtime --> R1[executor + TaskRun + Acceptance]
     Runtime --> R2[contract 投料闸 + handoff 盒间接力]
@@ -63,7 +62,7 @@ flowchart TB
     ExternalSystem（含 DAG 校验）
   - `metrics.py` — 指标计算契约
 
-- **`boxes/`** — 业务履约盒子（产品层）。**9 个目录，8 只已注册**
+- **`boxes/`** — 业务履约盒子（产品层）。**8 只，全部已注册**
   - 每只盒子：`__init__.py` / `schemas.py` / `definition.py` / `runner.py`
     / `measure.py` / `beeline.py` / `README.md`
 
@@ -83,7 +82,6 @@ flowchart TB
   | [`wms_analysis/`](boxes/wms_analysis/README.md) | `wms_analysis_box` | WMS | 4 | 2 | live |
   | [`wms_system/`](boxes/wms_system/README.md) | `wms_system_box` | WMS | 5 | 3 | live |
   | [`receipt/`](boxes/receipt/README.md) | `receipt_capture_box` | 未归域 | 6 | 2 | live |
-  | [`inventory_shortage/`](boxes/inventory_shortage/README.md) | `order_exception_box` | 未归域 | 6 | 4 | **未注册**（代码保留） |
 
 - **`runtime/`** — 执行运行时（**不含任何业务知识**）
   - `models.py` — TaskRun durable object + 9 状态机 + Acceptance 4 状态

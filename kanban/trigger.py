@@ -29,7 +29,6 @@ from boxes.wms_system.beeline import get_beeline as get_wms_system_beeline
 from boxes.wms_testing.beeline import get_beeline as get_wms_testing_beeline
 from boxes.receipt.beeline import get_beeline as get_receipt_capture_beeline
 from boxes.wms_requirement.beeline import get_beeline as get_requirement_capture_beeline
-from boxes.inventory_shortage.runner import RUNNER as INVENTORY_RUNNER
 from boxes.wms_analysis.measure import COMPUTERS as WMS_ANALYSIS_COMPUTERS
 from boxes.wms_analysis.runner import RUNNER as WMS_ANALYSIS_RUNNER
 from boxes.wms_development.measure import COMPUTERS as WMS_DEV_COMPUTERS
@@ -127,9 +126,6 @@ METRIC_COMPUTERS: dict[str, dict[str, core_metrics.Computer]] = {
 RUNNER_REGISTRY: dict[str, HandlerRunner] = {
     "wms_requirement_box": CAPTURE_RUNNER,
     "wms_design_box": MODELING_RUNNER,
-    # 运营线盒子未注册进 BOX_REGISTRY（看板不显示、trigger 不接收），
-    # 代码保留在仓库里，恢复时把它一起挂回 BOX_REGISTRY 即可
-    "inventory_shortage": INVENTORY_RUNNER,
     "receipt_capture_box": RECEIPT_RUNNER,
     "wms_system_box": WMS_SYS_RUNNER,
     "wms_development_box": WMS_DEV_RUNNER,

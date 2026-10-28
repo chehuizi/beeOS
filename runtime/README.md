@@ -69,7 +69,8 @@ flowchart TB
 ## 端到端冒烟
 
 ```python
-from boxes.inventory_shortage import get_definition, get_beeline
+from boxes.wms_analysis import get_definition, get_beeline
+from boxes.wms_analysis.runner import RUNNER
 from runtime import (
     create_task_run, BeelineExecutor, evaluate_acceptance,
     default_queen_escalation_handler,
@@ -80,16 +81,16 @@ beeline = get_beeline()
 
 # 1. 创建 task run
 task_run = create_task_run(
-    originator="orders.api",
-    intent="handle_order_exception",
+    originator="analysis.api",
+    intent="handle_effect_analysis_request",
     contract_ref=box.result.result_schema,
     release_id=f"{box.id}@v{box.version}",
     beeline_id=beeline.id, beeline_version=beeline.version,
     runtime_id="runtime_dev", instance_id="instance_local",
 )
 
-# 2. 执行 beeline
-executor = BeelineExecutor()
+# 2. 执行 beeline（runner 由盒子自己提供，executor 不许猜）
+executor = BeelineExecutor(RUNNER)
 task_run = executor.execute(task_run, beeline, input_data)
 # → status: triggered → running → completed
 
@@ -108,10 +109,11 @@ eval_result = evaluate_acceptance(
 **不在 runtime 里**。runtime 的 `runner.py` 只做「按 `op.type` 找 handler」这一件事，
 handler 由各盒子自己提供（`boxes/<box>/runner.py`）。
 
-例：订单异常盒的 8 个 op（`diagnose_exception` / `try_alternative_warehouse` /
-`try_inter_warehouse_transfer` / `try_replenishment_eta` / `try_substitute_product` /
-`calculate_compensation` / `notify_customer` / `escalate_to_human`）
-全部实现在 `boxes/inventory_shortage/runner.py`。
+例：效果分析盒的 3 个 op（`analysis_intake` / `analysis_compare` / `analysis_packager`）
+全部实现在 `boxes/wms_analysis/runner.py`。
+
+executor **不许自己猜 runner**——`BeelineExecutor(None)` 直接报错
+（`requires a runner from the box`）。加盒子不用改内核，盒子也带得走自己的实现。
 
 这条边界是硬边界：**runtime 里出现任何 WMS 词、票据词、需求词，就是越界了**
 （`tests/test_layering.py` 盯着）。

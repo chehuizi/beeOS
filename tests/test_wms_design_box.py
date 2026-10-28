@@ -18,7 +18,6 @@ from boxes.wms_design.runner import RUNNER as MODELING_RUNNER
 from boxes.wms_design.measure import COMPUTERS as MODEL_COMPUTERS
 from boxes.wms_design.schemas import REQUIREMENT_TYPES
 from boxes.wms_design.beeline import WMS_DESIGN_BEELINE, get_beeline
-from boxes.inventory_shortage.beeline import get_beeline as get_inventory_shortage_beeline
 from core import metrics as m
 from runtime import (
     BeelineExecutor,
@@ -311,27 +310,26 @@ class TestModelingEndToEnd:
         assert events.count("op_finish") == 7
 
     def test_different_lines_dont_cross_contaminate(self):
-        """两个产品线（运营 vs 软件）互不污染"""
-        # 加载运营线的 box + beeline
-        from boxes.inventory_shortage import get_definition as get_inv_def
-        inv_def = get_inv_def()
-        inv_beeline = get_inventory_shortage_beeline()
+        """不同盒子的判据互不污染"""
+        from boxes.wms_requirement import get_definition as get_req_def
+        from boxes.wms_requirement.beeline import get_beeline as get_req_beeline
 
-        # 加载软件线的 box + beeline
+        req_def = get_req_def()
+        req_beeline = get_req_beeline()
         mod_def = get_definition()
         mod_beeline = get_beeline()
 
         # id 必须不同
-        assert inv_def.id != mod_def.id
-        assert inv_beeline.id != mod_beeline.id
+        assert req_def.id != mod_def.id
+        assert req_beeline.id != mod_beeline.id
         # acceptance 字段必须不同
-        inv_metrics = {a.metric for a in inv_def.result.acceptance}
+        req_metrics = {a.metric for a in req_def.result.acceptance}
         mod_metrics = {a.metric for a in mod_def.result.acceptance}
-        assert "resolution_within_sla" in inv_metrics  # 运营特征
-        assert "requirement_coverage" in mod_metrics   # 软件特征
+        assert "source_coverage" in req_metrics        # 需求盒特征
+        assert "requirement_coverage" in mod_metrics   # 建模盒特征
         # 不能混入
-        assert "resolution_within_sla" not in mod_metrics
-        assert "requirement_coverage" not in inv_metrics
+        assert "source_coverage" not in mod_metrics
+        assert "requirement_coverage" not in req_metrics
 
     def test_minimal_requirement_set_works(self):
         """最小可行输入：1 个 object 需求"""

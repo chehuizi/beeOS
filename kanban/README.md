@@ -25,7 +25,7 @@ runtime/
 > **可见性**：看板只展示 `BOX_REGISTRY`（trigger.py）里已注册的盒子；
 > 未注册盒子的历史记录保留在 JSONL 审计日志里，只是不显示、不可触发。
 > 当前已注册 8 只盒子（WMS 域 7 只 + 小票识别 1 只），
-> `order_exception_box` 代码保留在仓库但未注册。
+> 全部 8 只都已注册；仓库里不再有「代码保留但未注册」的盒子。
 
 ## CLI 入口
 
@@ -86,11 +86,11 @@ TaskRunStore 用 JSONL 追加写（每行一条 record）：
 ```json
 {
   "task_run_id": "abc-123",
-  "box_id": "order_exception_box",
-  "beeline_id": "beeline_inventory_shortage_v3",
-  "beeline_version": 12,
-  "intent": "handle_order_exception",
-  "originator": "orders.api",
+  "box_id": "wms_analysis_box",
+  "beeline_id": "beeline_wms_analysis_v1",
+  "beeline_version": 1,
+  "intent": "handle_effect_analysis_request",
+  "originator": "analysis.api",
   "status": "completed",
   "acceptance_status": "accepted",
   "started_at": "2026-09-23T23:00:00+00:00",
@@ -107,14 +107,15 @@ TaskRunStore 用 JSONL 追加写（每行一条 record）：
 ```python
 from runtime.store import TaskRunStore
 from runtime import create_task_run, BeelineExecutor, evaluate_acceptance
-from boxes.inventory_shortage import get_definition, get_beeline
+from boxes.wms_analysis import get_definition, get_beeline
+from boxes.wms_analysis.runner import RUNNER
 
 box = get_definition()
 beeline = get_beeline()
 
 # 跑 task run
 tr = create_task_run(...)
-tr = BeelineExecutor().execute(tr, beeline, input_data)
+tr = BeelineExecutor(RUNNER).execute(tr, beeline, input_data)
 eval_result = evaluate_acceptance(tr, box.result)
 
 # 落盘

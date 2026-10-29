@@ -42,9 +42,24 @@ WORKSPACE_ENV = "BEEOS_DEV_WORKSPACE"   # 隔离工作区根目录
 # XML 模板和迁移模板恰恰在里面。
 # 于是模型拿着「照着谁写」的答案写不出 SQL 和建表脚本——
 # 编译能过（SQL 是字符串），上线才炸（表根本不存在）。
-MAX_CONTEXT_FILES = 30
-MAX_CONTEXT_BYTES = 120_000
-MAX_FILE_BYTES = 12_000
+MAX_CONTEXT_FILES = 40
+MAX_CONTEXT_BYTES = 180_000
+MAX_FILE_BYTES = 20_000
+
+#: 仓里的**源码根**及各自的后缀
+#:
+#: **为什么要加 web/src**：前端也是仓的一部分。
+#: 开发盒以前只看后端 → 它**看不见也改不了**前端，
+#: 于是「库区管理」这类需求交出来的永远只有接口、没有页面——
+#: **业务方点的是页面**。
+#:
+#: 三个根分别扫，是因为后缀不同（java / xml+sql / vue+ts），
+#: 但**采集的规矩对两边一样**：按落点分桶、轮转着取。
+SOURCE_ROOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("server/src/main/java", (".java",)),
+    ("server/src/main/resources", (".xml", ".sql")),
+    ("web/src", (".vue", ".ts")),
+)
 
 # 模型最多试几轮（每一轮失败都把错误原样喂回去）
 MAX_CODGEN_ATTEMPTS = 3
@@ -141,7 +156,34 @@ def prepare_workspace(base_ref: str = "HEAD", task_id: str = "") -> Path:
     add = _run(["git", "worktree", "add", "--detach", str(ws), ref], cwd=repo)
     if add.returncode != 0:
         raise CodegenError(f"起隔离工作区失败：{add.stderr.strip()[:300]}")
+    _link_frontend_deps(ws, repo)
     return ws
+
+
+def _link_frontend_deps(ws: Path, repo: Path) -> None:
+    """把主仓的 ``web/node_modules`` 软链进隔离工作区
+
+    **为什么必须做**：worktree 里只有 git 跟踪的文件，
+    ``node_modules`` 是 gitignore 的 → 工作区里**没有依赖**，
+    ``npm run build`` 直接失败（vite 找不到）。
+    而 ``npm ci`` 要联网、下一次几分钟——链每跑一轮就装一次，
+    既慢又不稳（本机没网/registry 不通时会直接把链打断）。
+
+    软链一份主仓现成的依赖：**只读共享**，不复制、不污染主仓。
+
+    **主仓没有依赖就不链**——那种情况下前端构建这一跳会报
+    「环境不具备」，而不是假装构建过了。
+    """
+    src = repo / "web" / "node_modules"
+    dst = ws / "web" / "node_modules"
+    if not src.exists() or dst.exists():
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        dst.symlink_to(src, target_is_directory=True)
+    except OSError:
+        # 软链失败不是致命的：前端构建那一跳会自己报「环境不具备」
+        pass
 
 
 def cleanup_workspace(ws: Optional[Path]) -> None:
@@ -200,12 +242,12 @@ def collect_context(ws: Path, locations: list[str]) -> dict[str, str]:
     buckets: dict[str, list[tuple[str, str]]] = {}
     order: list[str] = []
     total = 0
-    base = ws / "server" / "src" / "main"
-    for root in (base / "java", base / "resources"):
-        if not root.exists():
+    for root_rel, suffixes in SOURCE_ROOTS:
+        base = ws / root_rel
+        if not base.exists():
             continue
-        for path in sorted(root.rglob("*")):
-            if not path.is_file() or path.suffix not in (".java", ".xml", ".sql"):
+        for path in sorted(base.rglob("*")):
+            if not path.is_file() or path.suffix not in suffixes:
                 continue
             rel = str(path.relative_to(ws))
             # **归给第一个命中的落点**——一个文件只放一份，
@@ -260,12 +302,12 @@ def collect_tree(ws: Path) -> list[str]:
     **布局**得靠全量路径清单给——那点字数很便宜（只有路径，没有正文）。
     """
     out: list[str] = []
-    base = ws / "server" / "src" / "main"
-    for root in (base / "java", base / "resources"):
-        if not root.exists():
+    for root_rel, suffixes in SOURCE_ROOTS:
+        base = ws / root_rel
+        if not base.exists():
             continue
-        for path in sorted(root.rglob("*")):
-            if not path.is_file() or path.suffix not in (".java", ".xml", ".sql"):
+        for path in sorted(base.rglob("*")):
+            if not path.is_file() or path.suffix not in suffixes:
                 continue
             out.append(str(path.relative_to(ws)))
     return out
@@ -283,12 +325,12 @@ def collect_all_sources(ws: Path) -> dict[str, str]:
     证据核对要的是「代码里到底有没有」，那就该看整个工作区。
     """
     out: dict[str, str] = {}
-    base = ws / "server" / "src" / "main"
-    for root in (base / "java", base / "resources"):
-        if not root.exists():
+    for root_rel, suffixes in SOURCE_ROOTS:
+        base = ws / root_rel
+        if not base.exists():
             continue
-        for path in sorted(root.rglob("*")):
-            if not path.is_file() or path.suffix not in (".java", ".xml", ".sql"):
+        for path in sorted(base.rglob("*")):
+            if not path.is_file() or path.suffix not in suffixes:
                 continue
             try:
                 out[str(path.relative_to(ws))] = path.read_text(encoding="utf-8")
@@ -385,6 +427,20 @@ _CODE_PROMPT = """你在一个 Java（Spring Boot + MyBatis）仓储管理系统
     同名类出现两份，机械核对会直接判红。
 13. **不许动方案没覆盖的文件**（例如库存看板的 VO `vo/DashboardVO`）：
     这次需求跟看板无关，改到那儿会被判红。
+14. **前端在 `web/src/` 下**（跟后端一样是仓的一部分）：
+    页面 `web/src/views/<模块>/index.vue`、接口封装 `web/src/api/<模块>.ts`、
+    类型 `web/src/types/<模块>.ts`、路由 `web/src/router.ts`、
+    侧边栏菜单 `web/src/layouts/BasicLayout.vue`。
+    **新建前端模块照着现有的写**：页面照 `web/src/views/warehouse/index.vue`、
+    接口封装照 `web/src/api/warehouse.ts`、类型照 `web/src/types/warehouse.ts`。
+    **前端也是「一次最多 2 个文件」**：先写类型和接口封装，再写页面，
+    最后改路由和菜单。
+15. **前端也会被机械核对**（不是你说写好了就算）：
+    - `vue-tsc` 的类型错误会被判红（接口返回类型、props 类型都要对）
+    - **只 import 接口却一次都没调用 = 判红**（页面得真的用它）
+    - **路由必须真的注册**（`router.ts` 里 `path: '...'`），
+      菜单项也要真的加上（`BasicLayout.vue`）——
+      页面建好了但没挂到界面上，业务方一样找不到
 {done_files}
 输出格式（只输出 JSON，不要解释、不要复述）：
 
@@ -487,11 +543,11 @@ def _near_miss_hint(ws: Path, rel: str) -> str:
     """
     name = Path(rel).name
     hits: list[str] = []
-    base = ws / "server" / "src" / "main"
-    for root in (base / "java", base / "resources"):
-        if not root.exists():
+    for root_rel, suffixes in SOURCE_ROOTS:
+        base = ws / root_rel
+        if not base.exists():
             continue
-        for path in root.rglob(name):
+        for path in base.rglob(name):
             hits.append(str(path.relative_to(ws)))
             if len(hits) >= 5:
                 break

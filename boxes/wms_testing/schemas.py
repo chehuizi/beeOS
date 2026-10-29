@@ -40,6 +40,15 @@ BUILD_ARTIFACT_INPUT_SCHEMA = SchemaDef(
         FieldDef(name="unit_test_green", type="boolean", required=True),
         FieldDef(name="review_coverage", type="boolean", required=True),
         FieldDef(name="artifact_traceable", type="boolean", required=True),
+        # ---- 前端 ----
+        # **frontend_expected 是必填**：它回答「这次到底有没有前端」。
+        # 不填的话，「没有前端」和「上游忘了说」分不开——
+        # 前端探针就可能悄悄跳过（那又是一次假绿）。
+        FieldDef(name="frontend_expected", type="boolean", required=True),
+        # **frontend_dist_path 是前端产物目录**（开发盒交付的那一份）。
+        # 探针要验的就是它——验的是交付物本身，不是别处随便一份。
+        FieldDef(name="frontend_dist_path", type="string", required=False),
+        FieldDef(name="frontend_build_ok", type="boolean", required=False),
     ],
 )
 

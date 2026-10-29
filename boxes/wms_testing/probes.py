@@ -25,8 +25,10 @@ boxes.wms_testing.probes - WMS 业务场景探针
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any, Callable, Optional
 from uuid import uuid4
 
@@ -79,6 +81,20 @@ class ProbeContext:
     mode: str = "production"
     today: date = field(default_factory=date.today)
     requirements: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: **前端构建产物目录**（开发盒交付的那一份 dist）。
+    #:
+    #: **为什么探针要能看文件**：前端没有「调接口」这一步——
+    #: 页面在浏览器里跑，测试盒够不着浏览器。
+    #: 能机械判的是**产物里有没有那套页面**：
+    #: 产物里有 `/zones`（页面真的调了库区接口）+
+    #: 产物里有「库区管理」（菜单/路由标题真的注册了）。
+    #:
+    #: **为什么是「开发盒交付的那一份」**：跟后端一样——
+    #: 测的必须是交付物本身，测别处的一份等于没测。
+    frontend_dist_path: str = ""
+    #: 这次到底有没有前端。**False 不等于「前端通过了」**——
+    #: 那只是「这次压根没前端」，前端探针据此跳过（并说明）。
+    frontend_expected: bool = False
 
     @property
     def may_mutate(self) -> bool:
@@ -935,6 +951,124 @@ def _check_location_ownership(ctx: ProbeContext, facts: dict[str, Any]) -> Probe
     )
 
 
+# ============================================================
+# 前端探针：库区管理**页面**在不在
+# ============================================================
+#
+# **为什么前端要单独一条**：后端接口做完了，业务方在页面上还是找不到
+# 「库区管理」——那不叫交付完成。
+#
+# **怎么机械判**：前端没有「调接口」这一步（页面在浏览器里跑，
+# 测试盒够不着浏览器），能判的是**构建产物里有没有那套页面**：
+# - 产物里有 `/zones` → 页面真的调了库区接口
+# - 产物里有「库区管理」或 'zone' 路由 → 页面真的注册进菜单/路由
+#
+# **判的是「开发盒交付的那一份 dist」**，不是别处随便一份——
+# 跟后端「部署 jar 到验证实例再探」是同一个道理。
+
+#: 产物里必须出现的**接口调用**痕迹（页面调了库区接口）
+ZONE_FRONTEND_API_MARK = "/zones"
+#: 产物里必须出现的**菜单标题**（设计盒契约里写死的那个）
+ZONE_FRONTEND_TITLE = "库区管理"
+#: 产物里必须出现的**路由**（注册了页面入口）
+ZONE_FRONTEND_ROUTE = re.compile(r"""['"]/?zone['"]""")
+
+
+def _frontend_dist_text(dist_dir: str) -> tuple[str, int]:
+    """把前端产物读成一坨文本（顺便报文件数）
+
+    **读什么**：.js / .html（vite 的产物就这两种）。
+    **不读图片字体**：那是二进制，读出来也没信息。
+    """
+    if not dist_dir:
+        return "", 0
+    root = Path(dist_dir)
+    if not root.exists():
+        return "", 0
+    chunks: list[str] = []
+    count = 0
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.suffix not in (".js", ".html"):
+            continue
+        try:
+            chunks.append(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+        count += 1
+    return "\n".join(chunks), count
+
+
+def _check_zone_frontend(ctx: ProbeContext, facts: dict[str, Any]) -> ProbeResult:
+    """库区管理**页面**：前端产物里真的有那套页面
+
+    **三种结论**：
+    - 这次压根没前端落点 → `indeterminate`（**不是「前端通过了」**）
+    - 产物里缺页面/缺菜单 → `fail`（带定位证据）
+    - 两样都在 → `pass`
+    """
+    if not ctx.frontend_expected:
+        return ProbeResult(
+            OUTCOME_INDETERMINATE,
+            "这次方案没有前端落点——前端没验"
+            "（这不等于「前端通过了」，是压根没前端可验）",
+            {"frontend_expected": False},
+        )
+
+    text, file_count = _frontend_dist_text(ctx.frontend_dist_path)
+    if not ctx.frontend_dist_path:
+        return ProbeResult(
+            OUTCOME_INDETERMINATE,
+            "没有前端构建产物的路径——这次验不了前端",
+            {"frontend_expected": True, "frontend_dist_path": ""},
+        )
+    if file_count == 0:
+        return ProbeResult(
+            OUTCOME_INDETERMINATE,
+            f"前端产物目录里没有 .js/.html：{ctx.frontend_dist_path}"
+            "——这次验不了前端",
+            {"frontend_expected": True, "frontend_dist_path": ctx.frontend_dist_path},
+        )
+
+    has_api = ZONE_FRONTEND_API_MARK in text
+    has_title = ZONE_FRONTEND_TITLE in text
+    has_route = ZONE_FRONTEND_ROUTE.search(text) is not None
+
+    details = {
+        "frontend_dist_path": ctx.frontend_dist_path,
+        "artifact_file_count": file_count,
+        "has_zone_api_call": has_api,
+        "has_zone_menu_title": has_title,
+        "has_zone_route": has_route,
+    }
+
+    missing: list[str] = []
+    if not has_api:
+        missing.append(
+            f"产物里找不到「{ZONE_FRONTEND_API_MARK}」"
+            "——页面没有真的调库区接口（只有页面壳子？）"
+        )
+    if not has_title and not has_route:
+        missing.append(
+            f"产物里找不到菜单标题「{ZONE_FRONTEND_TITLE}」，"
+            "也没有 'zone' 路由——页面没有注册进菜单/路由"
+            "（业务方在界面上找不到它）"
+        )
+    if missing:
+        return ProbeResult(
+            OUTCOME_FAIL,
+            "前端产物里没有库区管理页面：" + "；".join(missing),
+            details,
+        )
+
+    return ProbeResult(
+        OUTCOME_PASS,
+        "前端产物里有库区管理页面"
+        f"（{file_count} 个产物文件，页面调了 {ZONE_FRONTEND_API_MARK}，"
+        f"菜单/路由{'标题在' if has_title else '路由在'}）",
+        details,
+    )
+
+
 ZONE_MANAGEMENT_SCENARIO = Scenario(
     scenario_id="zone_management",
     mutates=True,
@@ -943,6 +1077,8 @@ ZONE_MANAGEMENT_SCENARIO = Scenario(
         Probe("zone", "zone_management", _check_zone_management),
         Probe("warehouse", "zone_management", _check_zone_under_warehouse),
         Probe("location", "zone_management", _check_location_ownership),
+        # **前端那一条**：后端做完了、页面上没有 = 没交付完
+        Probe("zone", "zone_management", _check_zone_frontend),
     ],
 )
 

@@ -215,6 +215,11 @@ def test_execute_handler(input_data: dict[str, Any]) -> dict[str, Any]:
                         r.get("requirement_id", ""): r
                         for r in input_data.get("requirements") or []
                     },
+                    # **前端产物**：开发盒交付的那一份 dist。
+                    # 前端探针验的就是它——跟后端验「部署到验证实例的那份 jar」
+                    # 是同一个道理：**测的必须是交付物本身**。
+                    frontend_dist_path=str(input_data.get("frontend_dist_path") or ""),
+                    frontend_expected=bool(input_data.get("frontend_expected")),
                 )
                 facts_cache[scenario_id] = scenario.prepare(ctx)
             except WmsError as exc:

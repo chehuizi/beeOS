@@ -41,6 +41,7 @@ from boxes.wms_development.build import (
     commit_range_files,
     reproducibility,
     run_build,
+    run_frontend_build,
     run_verify_build,
     unit_test_stats,
 )
@@ -212,6 +213,11 @@ def dev_code_handler(input_data: dict[str, Any]) -> dict[str, Any]:
             "落点表跟仓库对不上（改不了就是改不了，不许瞎改）"
         )
 
+    # **这次要不要验前端**：看方案有没有前端落点。
+    # 后端需求就不跑 npm（跑一次几十秒，还要 node_modules），
+    # 前端需求必须跑（后端编译发现不了 vue-tsc 的类型错误）。
+    frontend_expected = any(str(loc).startswith("web/") for loc in locations)
+
     # ---- 机械核对：哪些概念在源码里还没有实现 ----
     #
     # **这一步是「已实现」这句话的神谕**：模型说「看板已经有了」不算，
@@ -283,6 +289,19 @@ def dev_code_handler(input_data: dict[str, Any]) -> dict[str, Any]:
                 )
             if not comp.get("errors") and not comp.get("test_errors"):
                 problems.append("构建没过，但没摘到错误详情——去看构建日志")
+        # **前端构建**：这次方案涉及前端才跑。
+        # vue-tsc 的类型错误后端编译**发现不了**（前端不进 maven），
+        # 但页面就是坏的——所以前端也要有外部神谕。
+        if frontend_expected:
+            fe = run_frontend_build(ws)
+            if not fe.get("ok"):
+                problems.append(
+                    "前端构建不过（vue-tsc / vite 说的，不是我说的）：\n"
+                    + (fe.get("errors") or "（没摘到错误详情——去看前端构建输出）")
+                    + "\n——前端文件在 web/src 下："
+                    "页面 .vue、接口封装 api/*.ts、类型 types/*.ts、"
+                    "路由在 web/src/router.ts、菜单在 web/src/layouts/BasicLayout.vue"
+                )
         problems.extend(_verify_fast())
         return problems
 
@@ -416,6 +435,13 @@ def dev_build_handler(input_data: dict[str, Any]) -> dict[str, Any]:
         repro = reproducibility(ws, str(first.get("classes_digest") or ""))
 
     digest = str(first.get("classes_digest") or "")
+    # **前端构建**：这次方案涉及前端才跑（后端需求不浪费时间在 npm 上）。
+    # **答案来自 npm 的退出码**，跟 maven 一样是外部神谕。
+    locations = list(input_data.get("locations") or [])
+    frontend_expected = any(str(loc).startswith("web/") for loc in locations)
+    frontend: dict[str, Any] = {}
+    if frontend_expected:
+        frontend = run_frontend_build(ws)
     return {
         "dev_task_id": dev_task_id,
         "commit_sha": str(input_data.get("commit_sha") or ""),
@@ -435,12 +461,20 @@ def dev_build_handler(input_data: dict[str, Any]) -> dict[str, Any]:
         "test_run_ref": str(ws / "server" / "target" / "surefire-reports"),
         "build_log_ref": str(first.get("build_log_ref") or ""),
         "jar_path": str(first.get("jar_path") or ""),
+        # ---- 前端 ----
+        # **frontend_expected=false 时不判红**：这次压根没碰前端。
+        # 但也不能说「前端构建通过了」——那是从没跑过。
+        "frontend_expected": frontend_expected,
+        "frontend_build_failed": bool(frontend.get("ok") is False),
+        "frontend_build_ok": bool(frontend.get("ok")) if frontend_expected else False,
+        "frontend_dist_dir": str(frontend.get("dist_dir") or ""),
+        "frontend_build_errors": str(frontend.get("errors") or ""),
         "codegen_summary": str(input_data.get("codegen_summary") or ""),
         "concept_states": input_data.get("concept_states") or [],
         "expectation_concepts": input_data.get("expectation_concepts") or [],
         # 往下带
         "concepts": input_data.get("concepts") or [],
-        "locations": input_data.get("locations") or [],
+        "locations": locations,
         "expectations": input_data.get("expectations") or [],
     }
 
@@ -505,6 +539,24 @@ def build_packager_handler(input_data: dict[str, Any]) -> dict[str, Any]:
                     "build_log_ref": str(input_data.get("build_log_ref") or ""),
                 }, ensure_ascii=False, indent=2), encoding="utf-8")
 
+        # **前端产物也留下来**（跟 jar 同一个道理）：
+        # 工作区一会儿就拆了，dist 里那一份是**这次交付的前端**。
+        # 测试盒的前端探针要验的就是它——验的是「开发盒交付的那份」，
+        # 不是别处随便一份（同一族：测的必须是交付物本身）。
+        frontend_dist_path = ""
+        if bool(input_data.get("frontend_expected")):
+            dist_src = Path(str(input_data.get("frontend_dist_dir") or ""))
+            if not dist_src.exists():
+                dist_src = Path(workspace_path) / "web" / "dist"
+            if dist_src.exists():
+                import shutil
+                dest_dir = workspace_root() / "artifacts" / (commit_sha[:8] or "nocommit")
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                dest = dest_dir / "web-dist"
+                shutil.rmtree(dest, ignore_errors=True)
+                shutil.copytree(dist_src, dest)
+                frontend_dist_path = str(dest)
+
         return {
             "commit_count": int(input_data.get("commit_count") or 0),
             "build_duration_s": float(input_data.get("build_duration_s") or 0.0),
@@ -535,6 +587,11 @@ def build_packager_handler(input_data: dict[str, Any]) -> dict[str, Any]:
             "trace_reason": trace_reason,
             "codegen_summary": str(input_data.get("codegen_summary") or ""),
             "artifact_path": artifact_path,
+            # ---- 前端 ----
+            "frontend_expected": bool(input_data.get("frontend_expected")),
+            "frontend_build_ok": bool(input_data.get("frontend_build_ok")),
+            "frontend_build_failed": bool(input_data.get("frontend_build_failed")),
+            "frontend_dist_path": frontend_dist_path,
         }
     finally:
         # 工作区拆掉——**不留残渣在别人的仓里**。

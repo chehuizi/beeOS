@@ -190,6 +190,14 @@ BUILD_CHECK_SCHEMA = SchemaDef(
         FieldDef(name="build_log_ref", type="string", required=False),
         FieldDef(name="jar_path", type="string", required=False),
         FieldDef(name="codegen_summary", type="string", required=False),
+        # ---- 前端 ----
+        # **frontend_expected**：这次方案有没有前端落点。
+        # false 时前端构建**没跑**，所以下面两个字段不能当成「前端通过了」。
+        FieldDef(name="frontend_expected", type="boolean", required=False),
+        FieldDef(name="frontend_build_ok", type="boolean", required=False),
+        FieldDef(name="frontend_build_failed", type="boolean", required=False),
+        FieldDef(name="frontend_dist_dir", type="string", required=False),
+        FieldDef(name="frontend_build_errors", type="string", required=False),
         FieldDef(name="concept_states", type="array", required=False, items=FieldDef(
             name="concept_state", type="object", properties=[
                 FieldDef(name="concept", type="string"),
@@ -223,6 +231,12 @@ BUILD_ARTIFACT_SCHEMA = SchemaDef(
         FieldDef(name="unit_test_green", type="boolean", required=True),
         FieldDef(name="review_coverage", type="boolean", required=True),
         FieldDef(name="artifact_traceable", type="boolean", required=True),
+        # ---- 前端：字段名跟测试盒声明的制品形状逐字一致 ----
+        # 前端产物路径要能顺着链传到测试盒，
+        # 否则前端探针没有「开发盒交付的那一份」可验。
+        FieldDef(name="frontend_expected", type="boolean", required=True),
+        FieldDef(name="frontend_dist_path", type="string", required=False),
+        FieldDef(name="frontend_build_ok", type="boolean", required=False),
         # ---- 证据：判据红的时候，读者得知道红在哪 ----
         FieldDef(name="commit_sha", type="string", required=False),
         FieldDef(name="branch", type="string", required=False),

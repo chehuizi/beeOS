@@ -61,12 +61,35 @@ WMS_CONCEPT_CODE_LOCATIONS: dict[str, tuple[str, ...]] = {
     # 实现它就得动库位实体（加库区字段）、库位 Mapper、库位 DTO/VO——
     # 不在落点里的话，模型改了这些文件会被判成「改了方案没覆盖的文件」，
     # 而它改的恰恰是这条需求要的（实测：加了 zoneId 的库位实体被判越界）。
+    #
+    # ---- 前端那一侧也在落点里 ----
+    #
+    # **为什么后端做完了还要前端**：业务方点的是**页面**，不是接口。
+    # 只有 REST 没有页面 = 功能没交付（用户看到的还是「没有库区管理」）。
+    # 落点写成路径片段，所以 `web/src/api/zone` 命中 `web/src/api/zone.ts`。
+    #
+    # **router.ts / layouts 是共享文件**：改它们会影响别的菜单，
+    # 但「加一个菜单项」本来就只能改这两个文件——
+    # 把它们写进落点，是让「改这两个文件」变成**方案允许的改动**，
+    # 而不是靠模型自觉。
     "zone": ("entity/Zone", "mapper/ZoneMapper", "module/zone", "vo/ZoneVO",
              "dto/Zone", "db/migration", "module/location",
              "entity/Location", "mapper/LocationMapper", "vo/LocationVO",
              "dto/LocationSaveRequest",
              "module/warehouse", "entity/Warehouse", "mapper/WarehouseMapper",
-             "vo/WarehouseVO", "dto/WarehouseQuery"),
+             "vo/WarehouseVO", "dto/WarehouseQuery",
+             # ---- 前端 ----
+             # **库区页面是新建的** → 模型手上没有任何同类文件可参考，
+             # 写出来的东西跟仓里的风格必然不像（后端那边有 module/warehouse
+             # 当样板，前端这边就得有对应的）。
+             # 仓库页面 = 最简单的一套主数据 CRUD；库位页面 = 跟库区最像
+             # （库位要挂在库区上，页面得能选库区）。
+             "web/src/views/zone", "web/src/api/zone", "web/src/types/zone",
+             "web/src/views/warehouse", "web/src/api/warehouse",
+             "web/src/types/warehouse",
+             "web/src/views/location", "web/src/api/location",
+             "web/src/types/location",
+             "web/src/router.ts", "web/src/layouts"),
 
     # ---- 约束 ----
     "unique_slot": ("module/location", "mapper/InventoryMapper"),
@@ -165,7 +188,20 @@ WMS_CONCEPT_IMPL_EVIDENCE: dict[str, tuple[tuple[str, ...], ...]] = {
              # 两份重名实体，编译过、单测过，坑留在仓里）。
              ("service/LocationServiceImpl", "Zone", "usage"),
              # 库区这一侧引用库位（删库区前要拦住）
-             ("module/zone", "Location")),
+             ("module/zone", "Location"),
+             # ---- 前端三件套：封装 / 页面真的用 / 路由真的注册 ----
+             #
+             # **为什么页面那条要用 ts_usage 而不是 any**：
+             # 前端的骗法跟 Java 一样常见——`import { zoneApi } from '@/api/zone'`
+             # 然后**一次都没调用**，页面照样能编译通过、构建也不报错。
+             # 「只 import 就骗过证据」在 Vue 里是同一族病。
+             ("web/src/api/zone", "zoneApi"),
+             ("web/src/views/zone", "zoneApi", "ts_usage"),
+             # 路由用 **literal** 模式：token 必须被引号**单独**包住。
+             # 这样 `import('@/views/zone/index.vue')` 里那个 zone
+             # 不算（它在 '/views/zone/index.vue' 字符串中间），
+             # 只有 `path: 'zone'` 才算——注册了路由。
+             ("web/src/router.ts", "zone", "literal")),
 
     # ---- 约束：实现的机制 ----
     "fefo": (("mapper/InventoryMapper", "ORDER BY expire_date"),),
@@ -214,6 +250,56 @@ def implementation_evidence(concept: str) -> tuple[tuple[str, ...], ...]:
 # ---- 证据的三种模式 ----
 EVIDENCE_ANY = "any"
 EVIDENCE_USAGE = "usage"
+#: 前端版「真的用上了」：**排除 import 语句**之后还出现过。
+#:
+#: **为什么前端也要这个模式**：Java 那边的骗法是「import + 注入字段，
+#: 一行业务逻辑都没写」；前端是「import { zoneApi } from '@/api/zone'，
+#: 然后一次都没调用」。两边是**同一族病**——只提到、没用上。
+#:
+#: 前端没有 Java 那套「字段声明 / 参数列表 / 纯赋值」的骗法，
+#: 所以规则可以简单：**import 之外还出现过，就算用上了**。
+EVIDENCE_TS_USAGE = "ts_usage"
+#: 被引号**单独**包住的字面量（'zone' / "zone"）。
+#:
+#: **为什么路由要用它**：`import('@/views/zone/index.vue')` 里也有 zone，
+#: 但那是**文件路径**，不是**路由注册**。用 literal 模式，
+#: 只有 `path: 'zone'` 才算数——证据说的是「注册了路由」，
+#: 就不能让一个路径字符串冒充它。
+EVIDENCE_LITERAL = "literal"
+
+
+def _ts_usage_lines(text: str) -> list[str]:
+    """前端文件里**排除 import 之后**的那些行
+
+    排除三类：
+    1. import 语句（**含跨行的**——`import {` 后面几行都不算）
+    2. re-export（`export { x } from '...'`）
+    3. `//` 行注释
+    """
+    out: list[str] = []
+    in_import = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if in_import:
+            # import 语句结束于带 from 的那一行
+            if "from" in stripped or stripped.endswith(";"):
+                in_import = False
+            continue
+        if stripped.startswith("import"):
+            # 一行写完的 import（`import x from 'y'`）当场就结束了
+            in_import = "from" not in stripped
+            continue
+        if stripped.startswith("export") and " from " in stripped:
+            continue
+        if stripped.startswith("//"):
+            continue
+        out.append(line)
+    return out
+
+
+def _literal_found(text: str, token: str) -> bool:
+    """token 有没有被引号**单独**包住（'token' / "token"）"""
+    return re.search(r"['\"]" + re.escape(token) + r"['\"]", text) is not None
 
 
 def _usage_lines(text: str) -> list[str]:
@@ -271,12 +357,22 @@ def _token_found(text: str, token: str, mode: str) -> bool:
     """标识符在这个文件里算不算「出现了」
 
     `usage` 模式：**只看真正用上它的地方**——
-    import 行、字段声明、参数列表都不算。
+    import 行、字段声明、参数列表都不算（Java）。
+
+    `ts_usage` 模式：排除 import 语句之后还出现过（前端）。
+
+    `literal` 模式：被引号**单独**包住（'token'），
+    避免路径字符串冒充路由/键名。
     """
-    if mode != EVIDENCE_USAGE:
-        return token in text
-    lowered = token.lower()
-    return any(lowered in line.lower() for line in _usage_lines(text))
+    if mode == EVIDENCE_USAGE:
+        lowered = token.lower()
+        return any(lowered in line.lower() for line in _usage_lines(text))
+    if mode == EVIDENCE_TS_USAGE:
+        lowered = token.lower()
+        return any(lowered in line.lower() for line in _ts_usage_lines(text))
+    if mode == EVIDENCE_LITERAL:
+        return _literal_found(text, token)
+    return token in text
 
 
 def missing_evidence(

@@ -31,6 +31,10 @@ from typing import Any, Optional
 MVN_ENV = "BEEOS_MVN"
 DEFAULT_MVN = "mvn"
 
+# npm 可执行：前端构建用
+NPM_ENV = "BEEOS_NPM"
+DEFAULT_NPM = "npm"
+
 
 class BuildError(RuntimeError):
     """构建这一步做不下去（环境不具备 / 命令跑不动）"""
@@ -302,3 +306,131 @@ def commit_range_files(ws: Path, base_sha: Optional[str] = None) -> list[str]:
     if proc.returncode != 0:
         return []
     return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+
+
+# ============================================================
+# 前端构建（vite）——**跟后端构建一样是外部神谕**
+# ============================================================
+#
+# **为什么前端也要过构建**：后端编译过了 ≠ 页面能用。
+# Vue 这边最常见的失败是 **vue-tsc 类型不过**——
+# 它在 `vite build` 之前就跑（`npm run build` = `vue-tsc --noEmit && vite build`），
+# 类型错了页面就是坏的。
+#
+# **答案只来自 npm 的退出码**，不是模型说「我写好了」。
+
+def npm_cmd() -> list[str]:
+    """找到 npm
+
+    找不到就报错——**跟 maven 一样**：找不到构建工具是「环境不具备」，
+    不是「构建失败」。两者混成一个结论，看板上会显示成「页面编译不过」。
+    """
+    import os
+    import shutil
+    raw = (os.environ.get(NPM_ENV) or "").strip()
+    if raw:
+        return [raw]
+    found = shutil.which(DEFAULT_NPM)
+    if found:
+        return [found]
+    raise BuildError(
+        f"找不到 {DEFAULT_NPM}——用 {NPM_ENV} 指到 npm 可执行文件"
+        f"（这是环境不具备，不是构建失败）"
+    )
+
+
+def web_dir(ws: Path) -> Path:
+    d = ws / "web"
+    if not (d / "package.json").exists():
+        raise BuildError(f"工作区里没有 web/package.json：{ws}")
+    return d
+
+
+def run_frontend_build(ws: Path, timeout: int = 600) -> dict[str, Any]:
+    """跑一次前端构建（类型检查 + 打包）
+
+    返回 ok / exit_code / errors / dist_dir / duration_s。
+    **构建失败不算异常**——那是业务结果（判据判红）。
+    """
+    d = web_dir(ws)
+    cmd = npm_cmd() + ["run", "build"]
+    started = time.time()
+    print(
+        f"[build {time.strftime('%H:%M:%S')}] 开始构建前端 {ws.name}（{cmd[0]}）",
+        file=sys.stderr, flush=True,
+    )
+    try:
+        proc = subprocess.run(
+            cmd, cwd=str(d), capture_output=True, text=True, timeout=timeout,
+        )
+    except FileNotFoundError as exc:
+        raise BuildError(f"找不到构建命令 {cmd[0]}：{exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise BuildError(f"前端构建超时（{timeout}s）") from exc
+    out = (proc.stdout or "") + (proc.stderr or "")
+    duration = round(time.time() - started, 2)
+    print(
+        f"[build {time.strftime('%H:%M:%S')}] 前端构建结束，用了 {duration}s"
+        f"（{'失败' if proc.returncode else '成功'}）",
+        file=sys.stderr, flush=True,
+    )
+    dist = d / "dist"
+    return {
+        "ok": proc.returncode == 0,
+        "exit_code": proc.returncode,
+        "errors": extract_frontend_errors(out),
+        "duration_s": duration,
+        "dist_dir": str(dist) if dist.exists() else "",
+    }
+
+
+_FRONTEND_ERROR = re.compile(
+    r"^(?:.*\.(?:vue|ts|tsx)\(\d+,\d+\):\s*error\s+TS\d+.*|"
+    r".*error TS\d+:.*|"
+    r".*error during build:.*|"
+    r"\[ERROR\].*)$",
+    re.M,
+)
+
+
+def extract_frontend_errors(output: str, limit: int = 40) -> str:
+    """从前端构建输出里摘出**错误行**
+
+    **只摘错误行**：整份 vite 输出几百行，喂回给模型只会把它淹掉。
+    类型错误长这样：`src/views/zone/index.vue(12,5): error TS2345: ...`
+    """
+    lines: list[str] = []
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        if _FRONTEND_ERROR.match(line.strip()):
+            lines.append(line.strip())
+    if not lines:
+        lines = [
+            ln.strip() for ln in output.splitlines()
+            if "error" in ln.lower()
+        ]
+    return "\n".join(lines[:limit])
+
+
+def frontend_dist_files(ws: Path) -> dict[str, str]:
+    """前端构建产物（dist）里的文件内容
+
+    **给谁用**：测试盒的前端探针要验「页面真的在产物里」，
+    而产物是**开发盒交付的那一份**——跟后端「部署 jar 到验证实例再探」
+    是同一个道理：不验别处的那份。
+    """
+    out: dict[str, str] = {}
+    dist = ws / "web" / "dist"
+    if not dist.exists():
+        return out
+    for path in sorted(dist.rglob("*")):
+        if not path.is_file():
+            continue
+        try:
+            out[str(path.relative_to(dist))] = path.read_text(
+                encoding="utf-8", errors="replace"
+            )
+        except OSError:
+            continue
+    return out

@@ -79,7 +79,15 @@ WMS_ENTITIES: dict[str, dict[str, Any]] = {
             "GET /api/v1/zones 查询、"
             "POST /api/v1/zones 新增（warehouseId、code、name）、"
             "PUT /api/v1/zones/{id} 编辑、"
-            "DELETE /api/v1/zones/{id} 删除"
+            "DELETE /api/v1/zones/{id} 删除。"
+            "**前端也要有管理界面**（跟仓库/库位同一套，"
+            "业务方点的是页面，不是接口）："
+            "页面 web/src/views/zone/index.vue、"
+            "接口封装 web/src/api/zone.ts、"
+            "类型 web/src/types/zone.ts、"
+            "路由 /zone（在 web/src/router.ts 注册，标题「库区管理」）、"
+            "侧边栏主数据菜单里加「库区管理」一项；"
+            "页面要能新增、编辑、删除、查询（列表 + 表单）"
         ),
     },
     "location": {

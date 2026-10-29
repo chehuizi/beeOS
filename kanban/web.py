@@ -76,12 +76,96 @@ def _single_text_field(schema) -> str:
 # ============================================================
 
 
-def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[str, Any]:
+def _task_label(records: list[dict[str, Any]]) -> str:
+    """从产出里找一句人读的话——任务列表不能只给一串 id
+
+    产出本体住在记录里（artifact），需求盒的产出带 document.title，
+    那是业务方自己写的那句话。拿它当任务的标题，读者扫一眼就知道
+    「任务是干什么的」，而不是对着一串 req_set_nl_xxx 发呆。
+    """
+    for r in records:
+        art = r.get("artifact")
+        if not isinstance(art, dict):
+            continue
+        doc = art.get("document")
+        title = doc.get("title") if isinstance(doc, dict) else None
+        if not title:
+            title = art.get("business_goal")
+        if title:
+            return str(title)
+    return ""
+
+
+def _collect_tasks(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """把履约记录按「工作项」归拢成任务（活）
+
+    **任务是工作项，不是一次履约**：同一个需求集在盒子里跳了几轮，
+    都属于同一件任务（同一句需求、同一张需求集）。
+    所以按 subject_ref 归组，组内每只盒子取**最近一次**。
+
+    没有 subject_ref 的记录**不进任务列表**：它们是「某只盒子跑过什么」，
+    不是「哪件任务」。硬归成一个「(无主题)」的假任务，等于凭空造一件
+    读者没法核对的任务——那比不列更坏。
+    """
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for r in records:
+        ref = r.get("subject_ref")
+        if not ref:
+            continue
+        groups.setdefault((r.get("subject_kind") or "", str(ref)), []).append(r)
+
+    tasks: list[dict[str, Any]] = []
+    for (kind, ref), recs in groups.items():
+        latest_by_box: dict[str, dict[str, Any]] = {}
+        for r in sorted(recs, key=lambda x: x.get("created_at") or ""):
+            latest_by_box[r["box_id"]] = r
+        boxes = []
+        run_counts: dict[str, int] = {}
+        for r in recs:
+            run_counts[r["box_id"]] = run_counts.get(r["box_id"], 0) + 1
+        for bid, r in latest_by_box.items():
+            boxes.append({
+                "box_id": bid,
+                "display_name": (box_meta(bid) or {}).get("display_name") or bid,
+                "status": r.get("status"),
+                "acceptance_status": r.get("acceptance_status"),
+                "at": r.get("created_at"),
+                "task_run_id": r.get("task_run_id"),
+                # 这件任务里这只盒子一共跑过几次——卡上要写「本任务 N 次」，
+                # 而不是这只盒子全局跑了多少次（那是另一件任务的事）。
+                "runs": run_counts.get(bid, 1),
+            })
+        boxes.sort(key=lambda b: b.get("at") or "")
+        failed = sum(1 for b in boxes if b.get("status") != "completed")
+        tasks.append({
+            "ref": ref,
+            "kind": kind,
+            "label": _task_label(recs),
+            "runs": len(recs),
+            "boxes": boxes,
+            "failed": failed,
+            # 任务整体状态 = 组内**每只盒子最近一次**里有没有红的。
+            # 不是「有没有失败过」——那会让一次修好的任务永远挂着红。
+            "state": "failed" if failed else "done",
+            "at": max((r.get("created_at") or "") for r in recs),
+        })
+    tasks.sort(key=lambda t: t.get("at") or "", reverse=True)
+    return tasks
+
+
+def dashboard_data(
+    store: TaskRunStore,
+    box_filter: str | None = None,
+    task_ref: str | None = None,
+) -> dict[str, Any]:
     """生成看板 JSON 数据
 
     与 CLI render_dashboard 共用同一份数据源（TaskRunStore）。
     只展示已注册盒子（BOX_REGISTRY）——未注册盒子的历史记录留在
     审计日志里，看板不显示。
+
+    `task_ref` = 选中某件任务时的口径：**中间只摆这件任务涉及的盒子，
+    右栏只给这件任务的轨迹**。不选时是全量口径。
     """
     store = store.view(registered_box_ids())
     records = store._cache
@@ -120,10 +204,29 @@ def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[s
     else:
         boxes = all_boxes
 
+    # ---- 任务（活）----
+    #
+    # 左边那栏回答「现在有哪些任务在飞」，中间那栏回答「场里有哪些盒子」。
+    # 两件事不是一回事：盒子的清单在中间已经全画出来了，左边再列一遍
+    # 是同一份信息的第二遍——读者要滚动两处才能拼出一个全貌。
+    tasks = _collect_tasks(store._cache)
+    task_map = {t["ref"]: t for t in tasks}
+    selected_task = task_map.get(task_ref) if task_ref else None
+
     # Per-box stats（每只 beeBox 的聚合数据，给盒子渲染用）
     # 单盒视图时：只过滤出当前盒；多盒视图时：所有盒
+    #
+    # 选了某件任务时，中间只摆**这件任务涉及**的盒子——它是「这件任务
+    # 走到哪了」的答案，多摆没参与过的盒子只会稀释它。
     box_stats = []
-    target_boxes = [box_filter] if box_filter else all_boxes
+    if box_filter:
+        target_boxes = [box_filter]
+    elif selected_task:
+        target_boxes = [b["box_id"] for b in selected_task["boxes"]
+                        if b["box_id"] in all_boxes]
+    else:
+        target_boxes = all_boxes
+    task_box_runs = {b["box_id"]: b for b in (selected_task["boxes"] if selected_task else [])}
     for b in target_boxes:
         b_records = [r for r in store._cache if r["box_id"] == b]
         b_total = len(b_records)
@@ -135,6 +238,8 @@ def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[s
             (r for r in sorted(b_records, key=lambda x: x["created_at"], reverse=True)),
             None,
         )
+        # 这件任务下这只盒子最近一次跑成什么样（选了任务时才给）
+        tr = task_box_runs.get(b)
         box_stats.append({
             "box_id": b,
             "meta": box_meta(b),
@@ -145,6 +250,17 @@ def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[s
             "acceptance_rate": b_rate,
             "last_run_at": latest["created_at"] if latest else None,
             "last_run_status": latest["acceptance_status"] if latest else None,
+            # 「这次跑完了没有」——跟验收结论是**两件事**：
+            # 跑完了但判据没过（rejected），跟跑一半挂了（failed），
+            # 卡上得能分开说，别都叫「失败」。
+            "last_run_state": latest["status"] if latest else None,
+            "task_run": ({
+                "task_run_id": tr.get("task_run_id"),
+                "status": tr.get("status"),
+                "acceptance_status": tr.get("acceptance_status"),
+                "at": tr.get("at"),
+                "runs": tr.get("runs"),
+            } if tr else None),
             "task_entries": list_task_entries(b),
             "box_context": box_context(b, b_records),
         })
@@ -182,13 +298,26 @@ def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[s
     #
     # 轨迹本身来自落盘（runtime/store.py 的 op_trace）。加落盘之前跑的
     # 记录没有轨迹——那就**照实显示「没有轨迹」**，不拿别的数来凑。
+    #
+    # 选了某件任务时，轨迹取**这件任务里**那次运行：读者在问
+    # 「这件任务走到哪了」，给他看另一件任务的轨迹等于答非所问。
     op_trails = []
     for b in target_boxes:
-        b_records = [r for r in store._cache if r["box_id"] == b]
-        latest = next(
-            (r for r in sorted(b_records, key=lambda x: x["created_at"], reverse=True)),
-            None,
-        )
+        if selected_task:
+            tr = task_box_runs.get(b)
+            latest = None
+            if tr and tr.get("task_run_id"):
+                latest = next(
+                    (r for r in store._cache
+                     if r.get("task_run_id") == tr["task_run_id"]),
+                    None,
+                )
+        else:
+            b_records = [r for r in store._cache if r["box_id"] == b]
+            latest = next(
+                (r for r in sorted(b_records, key=lambda x: x["created_at"], reverse=True)),
+                None,
+            )
         if latest is None:
             continue
         ops = latest.get("op_trace") or []
@@ -214,6 +343,8 @@ def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[s
 
     return {
         "box_filter": box_filter,
+        "task_filter": selected_task["ref"] if selected_task else None,
+        "tasks": tasks,
         "boxes": boxes,
         "box_stats": box_stats,
         "op_trails": op_trails,
@@ -432,6 +563,36 @@ HTML_PAGE = f"""<!DOCTYPE html>
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }}
   .side-item.active .side-box-id {{ color: rgba(255, 255, 255, 0.8); }}
+  /* ===== 任务（任务）行 =====
+     一行三件事：人读的标题、编号/规模/时间、每只盒子一个点。
+     标题允许占两行——需求标题往往是一整句话，截成一行就看不出是啥任务。 */
+  .side-task-body {{
+    display: flex; flex-direction: column; gap: 1px;
+    min-width: 0; flex: 1 1 auto;
+  }}
+  .side-task-label {{
+    font-size: 12px; line-height: 1.35;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }}
+  .side-task-meta {{
+    font-size: 10px; color: #94a3b8; font-weight: 400;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }}
+  .side-task-dots {{ display: flex; gap: 3px; margin-top: 2px; }}
+  .side-task-dot {{
+    width: 6px; height: 6px; border-radius: 50%;
+  }}
+  .side-item.active .side-task-meta {{ color: rgba(255, 255, 255, 0.8); }}
+  .side-clear {{
+    display: inline-block; margin-top: 8px; font-size: 11px;
+    color: #0f766e; text-decoration: none;
+  }}
+  .side-clear:hover {{ text-decoration: underline; }}
+  /* 只列最近一批时的说明：**写清楚还剩多少**，不静默截断 */
+  .side-more {{
+    font-size: 10px; color: #94a3b8; padding: 6px 9px; line-height: 1.5;
+  }}
   /* 窄屏侧边栏让位给内容。断点取 760：216px 侧边栏 + 内容在 800px 上
      还能看，再窄就挤了，堆叠比横向压缩清楚。 */
   @media (max-width: 760px) {{
@@ -507,6 +668,21 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .radial .cube-caption {{ margin-top: 10px; }}
   .radial .cube-caption .name {{ font-size: 13px; line-height: 1.35; }}
   .compact-stats {{ font-size: 10px; color: #64748b; margin-top: 3px; }}
+  /* ===== 盒子卡上的状态徽标 =====
+     三个状态分开：跑挂了 / 跑完但判红 / 跑完且通过。
+     合成一个「失败」就分不出「代码写不出来」和「写出来了但不对」。 */
+  .box-state {{
+    display: inline-flex; align-items: baseline; gap: 4px;
+    font-size: 10px; font-weight: 600; white-space: nowrap;
+  }}
+  .box-state.ok {{ color: #16a34a; }}
+  .box-state.bad {{ color: #dc2626; }}
+  .box-state.warn {{ color: #b45309; }}
+  .box-state.none {{ color: #94a3b8; font-weight: 400; }}
+  .box-state-at {{
+    color: #94a3b8; font-weight: 400; font-variant-numeric: tabular-nums;
+  }}
+  .compact-state {{ margin-top: 3px; }}
   /* 圆心那只：比环上的大一圈，免得读成「环上的一只」 */
   .radial .radial-center {{ z-index: 2; }}
   .radial .radial-center .cube-scene {{ transform: scale(1.14); }}
@@ -713,6 +889,12 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .section-title {{
     font-size: 12px; font-weight: 600; color: #64748b;
     text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;
+  }}
+  /* 任务标题里的补充说明（编号 + 牵了几只盒子）：
+     **不跟着大写**——标题是需求原文，大写会把它变成噪音。 */
+  .section-sub {{
+    text-transform: none; letter-spacing: 0; font-weight: 400;
+    color: #94a3b8; margin-left: 8px; font-size: 11px;
   }}
 
   /* ===== 顶部筛选条 =====
@@ -1343,7 +1525,11 @@ const API = '/api/data';
 
 async function fetchData() {{
   const box = new URLSearchParams(location.search).get('box') || '';
-  const url = box ? `${{API}}?box=${{encodeURIComponent(box)}}` : API;
+  const task = new URLSearchParams(location.search).get('task') || '';
+  const params = [];
+  if (box) params.push('box=' + encodeURIComponent(box));
+  if (task) params.push('task=' + encodeURIComponent(task));
+  const url = params.length ? `${{API}}?${{params.join('&')}}` : API;
   const resp = await fetch(url);
   return await resp.json();
 }}
@@ -1388,6 +1574,10 @@ const VIEW_GRID = 'grid';
 const VIEW_TOPOLOGY = 'topology';
 let _view = _params.get('view') === VIEW_TOPOLOGY
   ? VIEW_TOPOLOGY : VIEW_GRID;
+
+// 选中的任务（任务）。**第三个轴**，跟域、视图一样进 URL：
+// 「WMS 域 + 拓扑视图 + 库区那件任务」是一份能分享、能后退的状态。
+let _task = _params.get('task') || '';
 
 // ===== 链接拼装 =====
 //
@@ -1434,6 +1624,15 @@ function boxHref(boxId, domain, view) {{
   return '/?box=' + encodeURIComponent(boxId) + (q ? '&' + q : '');
 }}
 
+// 任务（任务）的链接。**范围（域）带着**，视图**不带着**：
+// 「看这件任务」= 平铺它牵过的那些盒子。拓扑画的是**域的接线**（一个环），
+// 拿它去画一件任务牵的 4 只盒子，环上就缺了好几段——那不是拓扑，
+// 是一张断了的环。选任务就换平铺，别假装。
+function taskHref(ref, domain, view) {{
+  const q = scopeQuery(VIEW_GRID, domain);
+  return '/?task=' + encodeURIComponent(ref) + (q ? '&' + q : '');
+}}
+
 // ===== 顶部筛选条 =====
 //
 // 「视图」和「范围」现在住在同一块：**内容区顶部的筛选条**。
@@ -1466,8 +1665,18 @@ function renderFilters(data) {{
   html += '<div class="filter-group"><span class="filter-label">视图</span>'
     + '<div class="seg" role="tablist">';
   for (const [v, label, hint] of FILTER_VIEWS) {{
+    // 选了任务时拓扑**不可用**：拓扑画的是域的接线（一个环），
+    // 这件任务只牵了其中几只盒子——环上缺段还叫拓扑，那是骗人。
+    // 不静默退回平铺，把原因写在 chip 上。
+    const taskBlock = _task && v === VIEW_TOPOLOGY;
     const blocked = (v === VIEW_TOPOLOGY) && !canRadial;
-    const active = (_view === v) && !blocked;
+    const active = (_view === v) && !blocked && !taskBlock;
+    if (taskBlock) {{
+      html += '<span class="seg-item disabled" aria-disabled="true"'
+        + ' title="选了任务：拓扑画的是域的接线，不是这件任务走过的路">'
+        + esc(label) + '<span class="seg-flag">不适用</span></span>';
+      continue;
+    }}
     if (blocked) {{
       const why = (lay && lay.reason) || '这个范围推不出环';
       html += '<button type="button" class="seg-item disabled" disabled'
@@ -1524,32 +1733,69 @@ function currentScopeLayout(scopeLayouts) {{
   return {{ lay: lay, canRadial: !!(lay && lay.layout === 'radial') }};
 }}
 
-function renderSidebar(data, current) {{
-  // 只列**当前范围内**的盒子：侧边栏是导航，但导航到一个网格里看不见的
-  // 盒子会更迷惑——点进去、进详情、退回来，格子上还是空的。
+// ===== 左栏 = 任务（任务）=====
+//
+// 左栏回答「现在有哪些任务在飞」，中间的场回答「盒子和接线长什么样」。
+// 两件事不是一回事：盒子的清单在中间已经全画出来了，左栏再列一遍
+// 是同一份信息的第二遍——读者得在两处来回拼，才能拼出一个全貌。
+//
+// 所以左栏搬成「任务」：每件任务一句人读的标题 + 它牵过哪些盒子 +
+// 每只盒子跑成什么样（那几个小点）。点一件任务，中间只摆这件任务
+// 涉及的盒子，右栏给这件任务的轨迹。
+//
+// **状态从左栏搬到中间的盒子上**：状态是盒子的属性（这只盒子现在
+// 怎么样），放在任务列表里就变成了「任务旁边一列盒子的状态」——
+// 同一个信息放在两个地方，迟早不一致。
+function renderTaskList(data) {{
+  const tasks = data.tasks || [];
+  // 列表长了页面就长：只列最近的一批，**并写清楚还剩多少**。
+  // 静默截断 = 读者以为就这些任务；写清楚「还有 N 件没列」才是诚实。
+  const LIMIT = 12;
   let html = '';
   html += '<div class="side-group">';
-  html += '<div class="side-group-label">盒子</div><div class="side-list">';
-  const stats = (data.box_stats || []).filter(
-    (s) => _domainFilter === ALL_DOMAINS
-      || ((s.meta || {{}}).domain || '') === _domainFilter);
-  for (const s of stats) {{
-    const id = s.box_id;
-    const meta = s.meta || {{}};
-    const name = meta.display_name || id;
-    const isSkeleton = s.maturity === 'skeleton';
-    const color = isSkeleton ? '#cbd5e1'
-      : ({{ good: '#16a34a', warn: '#f59e0b', bad: '#dc2626' }}[healthOf(s)] || '#cbd5e1');
-    const active = current === id;
-    html += '<a class="side-item' + (active ? ' active' : '') + '"'
-      + ' data-box-id="' + esc(id) + '"'
-      + ' href="' + esc(boxHref(id, _domainFilter, _view)) + '">'
-      + '<span class="side-box-dot" style="background:' + color + '"></span>'
-      + '<span class="side-box-name">' + esc(name)
-      + '<span class="side-box-id">' + esc(id) + '</span></span>'
-      + '</a>';
+  html += '<div class="side-group-label">任务列表</div><div class="side-list">';
+  if (!tasks.length) {{
+    html += '<div class="rail-empty">还没有带工作项号的运行记录。'
+      + '没有工作项的运行（某只盒子自己跑过什么）不进这一栏——'
+      + '那是「盒子跑过什么」，不是「哪件任务」。</div>';
   }}
-  html += '</div></div>';
+  const shown = tasks.slice(0, LIMIT);
+  for (const t of shown) {{
+    const active = _task === t.ref;
+    const color = t.state === 'failed' ? '#dc2626' : '#16a34a';
+    let dots = '';
+    for (const b of (t.boxes || [])) {{
+      const c = b.status === 'completed' ? '#16a34a' : '#dc2626';
+      dots += '<span class="side-task-dot" style="background:' + c + '"'
+        + ' title="' + esc(b.display_name + '：' + (b.status === 'completed' ? '跑完' : '跑挂了')) + '"></span>';
+    }}
+    const kindLabel = t.kind === 'ops_event' ? '运维' : (t.kind === 'requirement' ? '需求' : '');
+    html += '<a class="side-item task-item' + (active ? ' active' : '') + '"'
+      + ' data-task-ref="' + esc(t.ref) + '"'
+      + ' href="' + esc(taskHref(t.ref, _domainFilter, _view)) + '">'
+      + '<span class="side-box-dot" style="background:' + color + '"></span>'
+      + '<span class="side-task-body">'
+      + '<span class="side-task-label">' + esc(t.label || t.ref) + '</span>'
+      + '<span class="side-task-meta">'
+      + (kindLabel ? kindLabel + ' · ' : '')
+      + esc(t.ref)
+      + ' · ' + (t.boxes || []).length + ' 只盒子'
+      + (t.failed ? ' · ' + t.failed + ' 只挂了' : '')
+      + ' · ' + esc(fmtClock(t.at)) + '</span>'
+      + '<span class="side-task-dots">' + dots + '</span>'
+      + '</span></a>';
+  }}
+  if (tasks.length > LIMIT) {{
+    html += '<div class="side-more">还有 ' + (tasks.length - LIMIT)
+      + ' 件更早的任务没列（这里只列最近 ' + LIMIT + ' 件）</div>';
+  }}
+  html += '</div>';
+  // 选中的话给一条「回到全部任务」——不然读者不知道怎么取消选择。
+  if (_task) {{
+    html += '<a class="side-clear" href="' + esc(overviewHref(_view, _domainFilter)) + '">'
+      + '← 看全部任务</a>';
+  }}
+  html += '</div>';
 
   return html;
 }}
@@ -1562,24 +1808,18 @@ function renderSidebar(data, current) {{
 // 就是按下去没反应。所以**结构没变就不重建**，只同步 active 态。
 function ensureSidebar(el, data, current) {{
   const sig = [
-    (data.boxes || []).join(','),
-    Object.keys(data.domains || {{}}).sort().join('|'),
-    JSON.stringify((data.scope_layouts || {{}})[_domainFilter] || null),
+    (data.tasks || []).map(
+      t => t.ref + ':' + (t.at || '') + ':' + t.state + ':' + t.runs).join(','),
+    _task,
   ].join('#');
   if (el.dataset.sig !== sig) {{
-    el.innerHTML = renderSidebar(data, current);
+    el.innerHTML = renderTaskList(data);
     el.dataset.sig = sig;
   }}
-  // active 态每轮**先清后加**：只 add 不 remove 的话，上一轮打开的那只盒子
-  // 会一直亮着——侧边栏里两项同时显示为当前选择。
-  //
-  // 这里比的是 **`data-box-id` 是不是当前打开的那只盒**，不是 href。
-  // 以前这里比 href == overviewHref(...)，那是范围项的判据；范围搬去
-  // 筛选条之后侧边栏只剩盒子链接，而盒子链接的 href 永远不等于总览链接，
-  // 于是这个循环每轮都把盒子的高亮**抹掉**——打开某只盒的详情页，
-  // 侧边栏里它却是不亮的，而 renderSidebar 刚给它加上的 active 被覆盖了。
+  // active 态每轮**先清后加**：只 add 不 remove 的话，上一轮选中的那件
+  // 任务会一直亮着——两件同时显示为当前选择。
   for (const a of el.querySelectorAll('.side-item')) {{
-    a.classList.toggle('active', (a.getAttribute('data-box-id') || '') === current);
+    a.classList.toggle('active', (a.getAttribute('data-task-ref') || '') === _task);
   }}
 }}
 
@@ -1609,7 +1849,12 @@ function syncHeadHeight() {{
 function renderRail(data) {{
   const trails = data.op_trails || [];
   let html = '<div class="rail-title">操作轨迹</div>';
-  html += '<div class="rail-sub">每只盒子最近一次履约的 op 执行顺序</div>';
+  // 口径跟着「选中的任务」走，说清楚这一栏给的是**哪一次**运行。
+  html += '<div class="rail-sub">'
+    + (_task
+      ? '这件任务里每只盒子最近一次履约的 op 执行顺序'
+      : '每只盒子最近一次履约的 op 执行顺序')
+    + '</div>';
   if (!trails.length) {{
     html += '<div class="rail-empty">还没有运行记录。触发一次履约，'
       + '这里就会列出每个 op 的执行痕迹。</div>';
@@ -1807,6 +2052,39 @@ const MATURITY_DISPLAY = {{
 }};
 
 // 盒子铭牌：Line 是价值流，Box 是业务责任单元
+// 盒子卡上的状态徽标：**当前口径**下这只盒子最近一次跑成什么样。
+//
+// 口径跟着「选中的任务」走：选了任务就看这件任务里的那次运行，
+// 没选就看这只盒子最近一次。不选时右栏给的是「每只盒子最近一次」，
+// 卡上却写着别的运行 —— 两处口径不一致，读者会以为矛盾。
+//
+// 三个状态分开说，不合并成一个「失败」：
+//   跑挂了（failed）      → 链路中途断了
+//   跑完了但判红（rejected）→ 跑完了，判据没过
+//   跑完了且通过（accepted）→ 跑完了，判据也过了
+// 前两个合成一个「失败」，就分不出「代码写不出来」和「写出来了但不对」。
+function boxStatePill(box) {{
+  const tr = box.task_run;
+  const state = tr ? tr.status : box.last_run_state;
+  const acc = tr ? tr.acceptance_status : box.last_run_status;
+  const at = tr ? tr.at : box.last_run_at;
+  let cls = 'none', mark = '—', label = '未跑过';
+  if (state === 'failed') {{
+    cls = 'bad'; mark = '✕'; label = '跑挂了';
+  }} else if (state === 'completed') {{
+    if (acc === 'rejected') {{
+      cls = 'warn'; mark = '!'; label = '跑完·判红';
+    }} else if (acc === 'accepted') {{
+      cls = 'ok'; mark = '✓'; label = '跑完·通过';
+    }} else {{
+      cls = 'none'; mark = '·'; label = '跑完·未判定';
+    }}
+  }}
+  return '<span class="box-state ' + cls + '">' + mark + ' ' + label
+    + (at ? '<span class="box-state-at">' + esc(fmtClock(at)) + '</span>' : '')
+    + '</span>';
+}}
+
 function captionHtml(box) {{
   const meta = box.meta || {{}};
   const maturity = MATURITY_DISPLAY[box.maturity] || MATURITY_DISPLAY.live;
@@ -1814,13 +2092,23 @@ function captionHtml(box) {{
   const healthColor = {{ good: '#16a34a', warn: '#f59e0b', bad: '#dc2626', none: '#cbd5e1' }}[healthOf(box)];
   const row = (k, v) => `<div class="spec-row"><span class="k">${{k}}</span><span class="v">${{v ?? '—'}}</span></div>`;
   const rate = maturity.acceptance ?? box.acceptance_rate;
+  // 选了任务时，卡上的数字**全部换成这件任务的口径**：
+  // RUNS 写「本任务 N 次」，全局的验收率**藏起来**——
+  // 它是这只盒子有史以来的验收率，跟这件任务没关系，
+  // 跟旁边的状态（这件任务里的那次）摆在一张卡上就是两件事混着说。
+  const tr = box.task_run;
+  const runsRow = tr
+    ? row('本任务 RUNS', (tr.runs != null ? tr.runs : 1) + ' 次')
+    : row('RUNS', box.total);
+  const accRow = tr ? '' : row('ACCEPTANCE', rate);
   return `<div class="name"><span class="health-dot" style="background:${{isSkeleton ? '#cbd5e1' : healthColor}}"></span>${{meta.display_name || box.box_id}}${{maturity.badge}}<span class="bid">${{box.box_id}}</span></div>
     <div class="spec">
       ${{row('DOMAIN', domainLabel(meta.domain || ''))}}
       ${{row('VALUE STREAM', meta.value_stream)}}
       ${{row('ROLE', meta.role)}}
-      ${{row('RUNS', box.total)}}
-      ${{row('ACCEPTANCE', rate)}}
+      ${{runsRow}}
+      ${{accRow}}
+      <div class="spec-row"><span class="k">状态</span><span class="v">${{boxStatePill(box)}}</span></div>
     </div>`;
 }}
 
@@ -2030,8 +2318,13 @@ function compactCaptionHtml(box) {{
   const meta = box.meta || {{}};
   const m = MATURITY_DISPLAY[box.maturity] || MATURITY_DISPLAY.live;
   const rate = m.acceptance ?? box.acceptance_rate;
+  const tr = box.task_run;
+  const stats = tr
+    ? '本任务 ' + (tr.runs != null ? tr.runs : 1) + ' 次'
+    : 'RUNS ' + box.total + ' · ACCEPTANCE ' + rate;
   return '<div class="name">' + (meta.display_name || box.box_id) + m.badge + '</div>'
-    + '<div class="compact-stats">RUNS ' + box.total + ' · ACCEPTANCE ' + rate + '</div>';
+    + '<div class="compact-state">' + boxStatePill(box) + '</div>'
+    + '<div class="compact-stats">' + stats + '</div>';
 }}
 
 function compactCubeHtml(box) {{
@@ -3580,13 +3873,22 @@ function render(data) {{
     // 换掉整页布局，读者以为在筛选、实际在换页面，URL 里也看不出视图变了。
     //
     // 选拓扑但当前范围推不出环时：**不静默退回网格**，把原因摆出来。
-    if (_view === VIEW_TOPOLOGY && canRadial) {{
+    //
+    // 选了任务时同理：拓扑画的是**域的接线**（一个环），这件任务只牵了
+    // 其中几只盒子——环上缺段还叫拓扑，那是骗人。所以任务一律平铺。
+    const topology = (_view === VIEW_TOPOLOGY && canRadial && !_task);
+    if (topology) {{
       html += `<div class="section"><div class="section-title">${{esc(domainLabel(lay.domain))}} 域
         （环上 ${{lay.ring.length}} 只 · 汇点由接线推导）</div>`;
       html += renderRadial(lay, data.box_stats);
       html += `</div>`;
     }} else {{
-      if (_view === VIEW_TOPOLOGY) {{
+      if (_view === VIEW_TOPOLOGY && _task) {{
+        html += `<div class="skeleton-note">这件任务走的是平铺，不是拓扑：
+          拓扑画的是<strong>域的接线</strong>（一个环），
+          而这件任务只牵了 ${{(data.box_stats || []).length}} 只盒子——
+          环上缺段还叫拓扑，那是骗人。</div>`;
+      }} else if (_view === VIEW_TOPOLOGY) {{
         html += `<div class="skeleton-note">这个范围画不出拓扑：
           ${{esc((lay && lay.reason) || '服务端没给出该范围的布局')}}。<br>
           不静默退回网格——看着像「就是平铺的」，读的人会以为这个范围没有结构。</div>`;
@@ -3602,6 +3904,16 @@ function render(data) {{
       // 范围切换后网格变几只，Tab 的位置不变，少这一行页面反而更安静。
       // （`id="box-count"` 随之消失，applyDomainFilter 里同步它的三行死代码
       //  一起删掉了——域筛选本来就不依赖那个计数。）
+      //
+      // **选了任务时例外**：这时这一行是唯一说明「中间摆的是哪件任务
+      // 牵过的盒子」的地方——不写，读者面对几只盒子不知道它们属于哪件任务。
+      if (_task) {{
+        const t = (data.tasks || []).find(x => x.ref === _task);
+        html += `<div class="section"><div class="section-title">任务：${{
+          esc(t ? (t.label || t.ref) : _task)}}`
+          + `<span class="section-sub">（${{esc(_task)}} · 牵了 ${{
+            (data.box_stats || []).length}} 只盒子）</span></div>`;
+      }}
       html += `<div class="section">`;
       html += `<div class="boxes-scene">`;
       for (const b of data.box_stats) {{
@@ -3680,7 +3992,7 @@ class KanbanRequestHandler(BaseHTTPRequestHandler):
             self._serve_html()
         elif parsed.path == "/api/data":
             box_filter = (qs.get("box") or [None])[0] or None
-            self._serve_json(box_filter)
+            self._serve_json(box_filter, (qs.get("task") or [None])[0] or None)
         elif parsed.path == "/api/boxes":
             # 目录：所有已注册盒子 + 各自的 API 面
             self._send_json(200, {
@@ -3887,8 +4199,8 @@ class KanbanRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _serve_json(self, box_filter: str | None) -> None:
-        data = dashboard_data(self.store, box_filter=box_filter)
+    def _serve_json(self, box_filter: str | None, task_ref: str | None = None) -> None:
+        data = dashboard_data(self.store, box_filter=box_filter, task_ref=task_ref)
         self._send_json(200, data)
 
     def _send_json(self, status: int, obj: Any) -> None:

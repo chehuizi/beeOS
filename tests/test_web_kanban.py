@@ -115,6 +115,11 @@ class TestDashboardData:
         data = dashboard_data(store)
         assert set(data.keys()) == {
             "box_filter",
+            # task_filter：选中的活儿（没有就是 None）。
+            "task_filter",
+            # tasks：左栏那栏「活儿」的数据源。中间那栏是场（盒子+接线），
+            # 左栏是活儿（哪件需求在飞、牵过哪些盒子）。
+            "tasks",
             "boxes",
             "box_stats",
             "domains",
@@ -1205,25 +1210,26 @@ class TestScopeAndViewLinksAreRealQueryUrls:
             if view == "topology":
                 assert q.get("view", [None])[0] == view, f"盒子链接丢了视图：{box!r}"
 
-    def test_the_sidebar_highlights_the_open_box_by_id_not_by_href(self):
-        """侧边栏的 active 判据是「哪只盒开着」，不是「href 等于总览链接」
+    def test_the_sidebar_highlights_the_selected_task_not_by_href(self):
+        """侧边栏的 active 判据是「哪件活儿开着」，不是「href 等于某个链接」
 
-        「视图」和「范围」都搬去筛选条之后，侧边栏只剩盒子链接，而盒子链接
-        的 href（`/?box=xxx`）永远不等于总览链接（`/` 或 `/?domain=WMS`）。
-        所以那个「href == overviewHref」的循环每轮都会把盒子的高亮**抹掉**——
-        打开某只盒的详情页，侧边栏里它却是不亮的，而 renderSidebar 刚给它
-        加上的 active 正好被这个循环覆盖。
+        侧边栏现在是**活儿**列表，项的 href 是 `/?task=xxx`。
+        拿 href 去比某个固定链接，每轮都会把高亮抹掉——选中一件活儿，
+        列表里它却是不亮的，而渲染函数刚给它加上的 active 被这个循环覆盖。
+
+        活儿这一层换掉盒子那一层之后，这条判据**换了个对象**：
+        现在比的是 `data-task-ref`。
         """
-        sidebar = _extract_js_function("renderSidebar")
-        assert "data-box-id" in sidebar, (
-            "盒子项要带上 data-box-id —— 没有它就没法按「哪只开着」判高亮"
+        tasks = _extract_js_function("renderTaskList")
+        assert "data-task-ref" in tasks, (
+            "活儿项要带上 data-task-ref —— 没有它就没法按「哪件开着」判高亮"
         )
         ensure = _extract_js_function("ensureSidebar")
         assert "overviewHref(_view, _domainFilter)" not in ensure, (
             "ensureSidebar 不该再拿总览 href 去比侧边栏项——"
-            "侧边栏现在只有盒子链接，这个比较每轮都会抹掉高亮"
+            "这个比较每轮都会抹掉高亮"
         )
-        assert "data-box-id" in ensure, "高亮同步必须改按 data-box-id 判"
+        assert "data-task-ref" in ensure, "高亮同步必须改按 data-task-ref 判"
 
 
 
@@ -1253,7 +1259,7 @@ SCOPE_LAYOUTS = {
 }
 
 
-def _run_filters(scope_layouts: dict, view: str, domain: str) -> str:
+def _run_filters(scope_layouts: dict, view: str, domain: str, task: str = "") -> str:
     """在 node 里真跑 renderFilters，返回它吐出的 HTML。
 
     用 HTML_PAGE 里的真源码，不抄一份到 Python——抄的那份和页面上的那份
@@ -1282,6 +1288,10 @@ def _run_filters(scope_layouts: dict, view: str, domain: str) -> str:
             _extract_js_function("renderFilters"),
             "let _view = " + json.dumps(view) + ";",
             "let _domainFilter = " + json.dumps(domain) + ";",
+            # renderFilters 现在还看**选中的活儿**（选了活儿时拓扑不适用）。
+            # 少了这一行，node 里就是 ReferenceError——守卫会因为一个
+            # 跟被测行为无关的缺失而红，久了就没人信它了。
+            "let _task = " + json.dumps(task) + ";",
             "console.log(JSON.stringify(renderFilters(" + json.dumps(data) + ")));",
         ]
     )
@@ -1352,27 +1362,35 @@ class TestHomepageIsQuieterAndTheViewIsATabBar:
             # 范围组用 aria-current（它是筛选，不是 tab 切换）
             assert 'aria-current="true"' in html, f"范围组的当前项没标：{html}"
 
-    def test_the_sidebar_no_longer_owns_the_view_axis(self):
-        """「视图」「范围」都搬走了：侧边栏只剩盒子列表"""
-        sidebar = _extract_js_function("renderSidebar")
+    def test_the_sidebar_is_the_task_list_and_owns_no_axis(self):
+        """侧边栏搬成「活儿」列表：它不拥有视图轴，也不再列盒子
+
+        改版前的判据是「侧边栏只剩盒子列表」——中间那栏已经把盒子画全了，
+        左栏再列一遍是同一份信息的第二遍。现在左栏搬成**活儿**：
+        「现在有哪些活儿在飞」，中间那栏才是「场」（盒子和接线）。
+
+        所以这里守三件事：
+        ① 侧边栏不拥有视图轴（视图是内容区顶部筛选条的事）；
+        ② 侧边栏**不再**列盒子（盒子在中间）；
+        ③ 侧边栏只生成活儿链接，不生成总览链接。
+        """
+        sidebar = _extract_js_function("renderTaskList")
         assert "VIEW_TOPOLOGY" not in sidebar, (
             "侧边栏不该再渲染视图选项——它搬进内容区顶部的筛选条了"
         )
         assert "currentScopeLayout" not in sidebar, (
             "侧边栏不该再算「这个范围能不能画环」——那是筛选条的事"
         )
-        # 判据用「侧边栏只生成盒子链接」，而不是「侧边栏里没有 ALL_DOMAINS」：
-        # 盒子列表要按当前范围过滤，`_domainFilter === ALL_DOMAINS` 这个判断
-        # 是必需的，拿它当「范围搬走了」的证据会把正确代码判成违规。
-        assert "overviewHref(" not in sidebar, (
-            "侧边栏不该再生成总览链接——它现在只该有盒子详情链接"
+        # 盒子清单搬走了：中间那栏已经画全，左栏再列一遍是重复。
+        assert "boxHref(" not in sidebar, (
+            "侧边栏不该再生成盒子详情链接——盒子在中间那栏"
         )
-        assert "boxHref(" in sidebar, "盒子列表的链接得还在"
-        assert 'side-group-label">盒子' in sidebar, "盒子列表得还在"
+        assert 'side-group-label">任务列表' in sidebar, "侧边栏应该是「任务列表」"
+        assert "taskHref(" in sidebar, "活儿项要能点进去（真链接）"
         # 只查「没有 overviewHref」有盲区：有人用**硬编码** href 加回一个
         # 范围段也照样滑过去。结构判据没有盲区——侧边栏只准有一个分组。
         assert sidebar.count('side-group"') == 1, (
-            "侧边栏只该剩「盒子」一个分组，实际 "
+            "侧边栏只该剩「活儿」一个分组，实际 "
             f"{sidebar.count('side-group')} 个——范围被搬回来了"
         )
         assert "renderFilters" in HTML_PAGE, "顶部筛选条的渲染函数不见了"
@@ -1480,7 +1498,7 @@ class TestTheThreeRegionsAreVisuallySeparate:
         )
 
 
-def _run_back_link(scope_layouts: dict, view: str, domain: str, is_single: bool) -> dict:
+def _run_back_link(scope_layouts: dict, view: str, domain: str, is_single: bool, task: str = "") -> dict:
     """在 node 里真跑 updateBackLink，返回退路链接的最终状态。"""
     import shutil
     import subprocess
@@ -1505,6 +1523,10 @@ def _run_back_link(scope_layouts: dict, view: str, domain: str, is_single: bool)
             " (id === 'back-link' ? el : null) };",
             "let _view = " + json.dumps(view) + ";",
             "let _domainFilter = " + json.dumps(domain) + ";",
+            # renderFilters 现在还看**选中的活儿**（选了活儿时拓扑不适用）。
+            # 少了这一行，node 里就是 ReferenceError——守卫会因为一个
+            # 跟被测行为无关的缺失而红，久了就没人信它了。
+            "let _task = " + json.dumps(task) + ";",
             "updateBackLink(" + json.dumps(scope_layouts) + ", "
             + json.dumps(is_single) + ");",
             "console.log(JSON.stringify("

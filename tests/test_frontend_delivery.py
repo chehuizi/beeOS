@@ -886,3 +886,112 @@ def test_zone_evidence_requires_location_page_to_use_zone_api():
     lacking = missing_evidence("zone", only_import, "\n".join(only_import.values()))
     assert "web/src/views/location" in {h for h, _t in lacking}, \
         f"库位页面只 import 就判成已实现：lacking={lacking}"
+
+
+# ============================================================
+# 13) 迁移错误要给对的理由（不然模型原地打转）
+# ============================================================
+
+def _git_repo_with_migrations(tmp_path, files):
+    """造一个 git 仓：基线里有一批迁移，工作区里改了/加了新的"""
+    import subprocess
+
+    repo = tmp_path / "repo"
+    mig = repo / "server" / "src" / "main" / "resources" / "db" / "migration"
+    mig.mkdir(parents=True)
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=str(repo), capture_output=True, text=True,
+        )
+
+    git("init", "-q")
+    git("config", "user.name", "t")
+    git("config", "user.email", "t@t")
+    for name, body in files.items():
+        (mig / name).write_text(body, encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    return repo, mig
+
+
+def test_modifying_a_published_migration_is_rejected_with_the_right_reason(tmp_path):
+    """**改了已发布的迁移** → 理由必须是「不许改它，新建一个」
+
+    **为什么**（2026-10-29 实测）：原来只有「版本号要比已有的大」这一条，
+    模型改 V2 时被告知「V2 不大于 V5」——**理由完全不对**，
+    模型被误导，在同一个文件上打了 30 轮。
+
+    **注入**：基线里有 V1~V5，工作区里改了 V2。
+    """
+    from boxes.wms_development.mapper_binding import check_migration_filenames
+
+    repo, mig = _git_repo_with_migrations(tmp_path, {
+        "V1__init.sql": "CREATE TABLE a (id INT);\n",
+        "V2__seed_demo_data.sql": "INSERT INTO a VALUES (1);\n",
+        "V5__create_zone_table.sql": "CREATE TABLE wms_zone (id INT);\n",
+    })
+    (mig / "V2__seed_demo_data.sql").write_text(
+        "INSERT INTO a VALUES (1);\nINSERT INTO wms_zone VALUES (2);\n",
+        encoding="utf-8",
+    )
+
+    problems = check_migration_filenames(
+        repo, ["server/src/main/resources/db/migration/V2__seed_demo_data.sql"],
+        base_ref="HEAD",
+    )
+
+    assert problems, "改了已发布的迁移居然没判红"
+    text = " ".join(problems)
+    assert "已经发布过的迁移" in text, f"理由不对：{text}"
+    assert "V6" in text, f"没说清楚该新建哪个版本：{text}"
+    # **不许说「V2 不大于 V5」** —— 那是误导模型的话
+    assert "不大于仓里已有的最大版本号" not in text, f"给的还是误导性的理由：{text}"
+
+
+def test_new_migration_with_old_version_is_rejected_with_next_version(tmp_path):
+    """**新建的迁移版本号太小** → 理由是「版本号要比已有的大」，并说清用哪个
+
+    **注入**：基线里有 V1~V5，工作区里新建了一个 V2。
+    """
+    from boxes.wms_development.mapper_binding import check_migration_filenames
+
+    repo, mig = _git_repo_with_migrations(tmp_path, {
+        "V1__init.sql": "CREATE TABLE a (id INT);\n",
+        "V5__create_zone_table.sql": "CREATE TABLE wms_zone (id INT);\n",
+    })
+    (mig / "V2__seed_zones.sql").write_text(
+        "INSERT INTO wms_zone VALUES (1);\n", encoding="utf-8"
+    )
+
+    problems = check_migration_filenames(
+        repo, ["server/src/main/resources/db/migration/V2__seed_zones.sql"],
+        base_ref="HEAD",
+    )
+
+    assert problems, "新建的迁移版本号太小居然没判红"
+    text = " ".join(problems)
+    assert "不大于仓里已有的最大版本号" in text, f"理由不对：{text}"
+    assert "V6" in text, f"没说清楚该用哪个版本号：{text}"
+    assert "已经发布过的迁移" not in text, \
+        f"新建的迁移被说成「已发布」，理由串了：{text}"
+
+
+def test_new_migration_with_next_version_is_accepted(tmp_path):
+    """新建 V6 → 不判红（别把这条守卫写成「永远判红」）"""
+    from boxes.wms_development.mapper_binding import check_migration_filenames
+
+    repo, mig = _git_repo_with_migrations(tmp_path, {
+        "V1__init.sql": "CREATE TABLE a (id INT);\n",
+        "V5__create_zone_table.sql": "CREATE TABLE wms_zone (id INT);\n",
+    })
+    (mig / "V6__seed_zones.sql").write_text(
+        "INSERT INTO wms_zone VALUES (1);\n", encoding="utf-8"
+    )
+
+    problems = check_migration_filenames(
+        repo, ["server/src/main/resources/db/migration/V6__seed_zones.sql"],
+        base_ref="HEAD",
+    )
+
+    assert not problems, f"新建 V6 被判红：{problems}"

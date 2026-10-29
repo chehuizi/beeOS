@@ -324,7 +324,12 @@ def dev_code_handler(input_data: dict[str, Any]) -> dict[str, Any]:
         # **迁移文件名**：必须符合 Flyway 规范（V<n>__xxx.sql），
         # 版本号还得比已有的大——写错了 Flyway 启动时直接拒绝，
         # **服务根本起不来**（编译和单测都发现不了）。
-        problems.extend(check_migration_filenames(ws, changed_files(ws)))
+        # **带基线**：这样才能分清「新建的迁移」（版本号要比已有的大）
+        # 和「改了已发布的迁移」（不许改，要新建）——
+        # 两种错误要给**不同的理由**，理由不对模型就会原地打转。
+        problems.extend(check_migration_filenames(
+            ws, changed_files(ws), base_ref=base_ref,
+        ))
         # **重名类**：模型为了表达归属关系，会把实体复制一份到别的包里
         # （实测：module/location/Zone.java + module/zone/Location.java）。
         # 编译得过，坑却留在仓里——改一处、另一处不变，没人说得清数据从哪来。

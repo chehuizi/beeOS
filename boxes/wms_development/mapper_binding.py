@@ -186,6 +186,7 @@ def check_migration_covers_tables(
 def check_migration_filenames(
     ws: Path,
     changed_files: list[str],
+    base_ref: str = "",
 ) -> list[str]:
     """迁移脚本的文件名必须符合 Flyway 规范，版本号必须比已有的大
 
@@ -196,12 +197,37 @@ def check_migration_filenames(
 
     跟「迁移覆盖」是同一族：**运行期才炸的东西，必须在交付前机械核一遍。**
 
-    两条规则：
+    三条规则：
     1. 文件名必须是 `V<版本号>__<描述>.sql`（可重复脚本是 `R__<描述>.sql`）
-    2. 版本号必须**大于仓里已有的最大版本号**——
+    2. **新增**的迁移，版本号必须**大于仓里已有的最大版本号**——
        Flyway 默认不认乱序（out-of-order=false），版本号撞了/倒退了，
        启动时 `Detected resolved migration not applied to database`。
+    3. **不许改已发布的迁移**（基线里已有的那些）——
+       Flyway 会比对 checksum，改了就是 checksum mismatch，
+       **服务起不来**。要加东西就**新建一个迁移**。
+
+    **第 3 条为什么单列**（2026-10-29 实测撞出来的）：
+    原来只有第 2 条，于是模型改 `V2__seed_demo_data.sql`（已发布）时，
+    机械层报的是「版本号 V2 不大于最大 V5」——
+    **理由完全不对**：V2 本来就不该大于 V5。
+    模型被这个理由误导，在同一个文件上**打了 30 轮**，
+    每一轮都在改它、每一轮都被同一条理由拦回去。
+
+    **报错要带能修它的材料**：直接告诉它「新建 V6」，
+    模型的下一轮就会走对路。
     """
+    # 基线里已有的迁移（用来区分「新增」和「改已发布的」）
+    baseline_migrations: set[str] = set()
+    if base_ref:
+        proc = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", base_ref,
+             "--", "server/src/main/resources/db/migration"],
+            cwd=str(ws), capture_output=True, text=True, timeout=60,
+        )
+        if proc.returncode == 0:
+            baseline_migrations = {
+                line.strip() for line in proc.stdout.splitlines() if line.strip()
+            }
     problems: list[str] = []
     mig_dir = ws / "server" / "src" / "main" / "resources" / "db" / "migration"
     if not mig_dir.exists():
@@ -247,11 +273,25 @@ def check_migration_filenames(
     if unchanged:
         top = max(unchanged)
         for rel, ver in sorted(versions.items(), key=lambda kv: kv[1]):
-            if rel in changed and ver <= top:
+            if rel not in changed:
+                continue
+            # **已发布的迁移被改了** → 单独一条理由（不是「版本号要更大」）
+            if rel in baseline_migrations:
+                problems.append(
+                    f"{rel} 是**已经发布过的迁移**，不许改它——"
+                    "Flyway 会比对每个迁移的 checksum，改了内容就是 "
+                    "checksum mismatch，**服务启动时直接拒绝**。"
+                    f"要加东西（表、列、种子数据）就**新建一个迁移**："
+                    f"V{top + 1}__<描述>.sql"
+                    "（新迁移的版本号必须比仓里已有的最大版本号大）"
+                )
+                continue
+            if ver <= top:
                 problems.append(
                     f"{rel} 的版本号 V{ver} 不大于仓里已有的最大版本号 V{top}——"
                     "Flyway 默认不认乱序，版本号撞了或倒退了它会在启动时拒绝："
-                    "Detected resolved migration not applied to database"
+                    "Detected resolved migration not applied to database。"
+                    f"新建迁移的话用 V{top + 1}__<描述>.sql"
                 )
     return problems
 

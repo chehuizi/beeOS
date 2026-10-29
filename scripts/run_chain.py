@@ -160,6 +160,35 @@ def _reset_verify_db(db_url: str, db_user: str) -> str:
     return f"已重置 {dbname}（Flyway 会重新跑迁移 + 种子数据）"
 
 
+def _web_base_from(prod_url: str) -> str:
+    """从生产 API 根推导**前端部署的 base**（vite 的 base）
+
+    **为什么必须推**：前端是 SPA，静态资源路径由 build 时的 base 写死。
+    生产挂在子路径（`/wms/`）下时，base 必须是 `/wms/`——
+    否则 index.html 里写的是 `/assets/xxx.js`，浏览器去根路径取，
+    那个位置没有东西 → **整页白屏**（接口还是好的，最容易误判成「后端挂了」）。
+
+    **不靠人记得设环境变量**：base 是**部署目标决定的**，
+    链自己从生产地址推出来，才不会「这次忘了设 → 部署上去白屏」。
+
+    例：`http://101.37.146.194/wms/api/v1` → `/wms/`
+        `http://101.0.0.1:8080/api/v1`         → `/`
+    """
+    from urllib.parse import urlparse
+
+    raw = (prod_url or "").strip()
+    if not raw:
+        return "/"
+    path = urlparse(raw).path or "/"
+    # **去掉 API 根**：/wms/api/v1 → /wms
+    for suffix in ("/api/v1", "/api"):
+        if path.endswith(suffix):
+            path = path[: -len(suffix)]
+            break
+    path = path.rstrip("/")
+    return (path + "/") if path else "/"
+
+
 def _deploy_to_verify_instance(
     dev_result: dict, verify_url: str
 ) -> str:
@@ -269,6 +298,15 @@ def main() -> int:
     verify_url = args.verify_base_url or os.environ.get(
         "BEEOS_VERIFY_WMS_BASE_URL") or DEFAULT_VERIFY_BASE_URL
     prod_url = args.prod_base_url or os.environ.get("BEEOS_PROD_WMS_BASE_URL") or ""
+
+    # **前端 base 跟着部署目标走**（2026-10-29 实测撞出来的）：
+    # 开发盒构建前端时 vite 会读 VITE_BASE，把它写进 index.html 的资源路径。
+    # 生产挂在 /wms/ 下，base 就得是 /wms/——否则部署上去整页白屏。
+    # 链自己推，不靠人记得设环境变量。
+    web_base = _web_base_from(prod_url)
+    os.environ["VITE_BASE"] = web_base
+    print(f"[chain] 前端 base = {web_base}（从生产地址 {prod_url or '(没配)'} 推的）",
+          file=sys.stderr)
 
     store = TaskRunStore(args.store)
 

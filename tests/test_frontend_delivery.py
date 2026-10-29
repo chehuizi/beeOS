@@ -607,3 +607,31 @@ def test_frontend_fields_are_read_from_artifact_ref(monkeypatch):
         f"前端字段没从 artifact_ref 读到：{seen}"
     assert seen.get("frontend_dist_path") == "/tmp/dist-x", \
         f"前端产物路径没读到：{seen}"
+
+
+# ============================================================
+# 10) 前端 base 跟着部署目标走（否则部署上去整页白屏）
+# ============================================================
+
+def test_web_base_is_derived_from_the_production_url():
+    """**base 由部署目标决定，不能靠人记得设环境变量**
+
+    生产挂在 `/wms/` 下，vite 的 base 就得是 `/wms/`——
+    否则 index.html 里写的是 `/assets/xxx.js`，浏览器去根路径取，
+    那个位置没有东西 → **整页白屏**（接口还是好的，
+    最容易误判成「后端挂了」）。
+    """
+    import importlib.util
+    import pathlib
+
+    spec = importlib.util.spec_from_file_location(
+        "run_chain_mod",
+        pathlib.Path(__file__).resolve().parent.parent / "scripts" / "run_chain.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    assert mod._web_base_from("http://101.37.146.194/wms/api/v1") == "/wms/"
+    assert mod._web_base_from("http://127.0.0.1:8081/api/v1") == "/"
+    assert mod._web_base_from("http://x.com/api/v1") == "/"
+    assert mod._web_base_from("") == "/"

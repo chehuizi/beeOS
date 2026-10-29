@@ -108,6 +108,10 @@ class Probe:
     concept: str
     scenario_id: str
     check: Callable[[ProbeContext, dict[str, Any]], ProbeResult]
+    #: 报告上给人看的名字（默认用函数名）。
+    #: **为什么要它**：一个概念可以挂多条探针（后端契约 + 前端页面），
+    #: 报告得说清**哪条**过了、哪条没过——只写「pass」读者无从判断。
+    label: str = ""
 
 
 @dataclass
@@ -1074,11 +1078,13 @@ ZONE_MANAGEMENT_SCENARIO = Scenario(
     mutates=True,
     prepare=_prepare_zone,
     probes=[
-        Probe("zone", "zone_management", _check_zone_management),
-        Probe("warehouse", "zone_management", _check_zone_under_warehouse),
-        Probe("location", "zone_management", _check_location_ownership),
+        Probe("zone", "zone_management", _check_zone_management, "库区后端契约"),
+        Probe("warehouse", "zone_management", _check_zone_under_warehouse,
+              "库区归属仓库"),
+        Probe("location", "zone_management", _check_location_ownership,
+              "库位归属库区"),
         # **前端那一条**：后端做完了、页面上没有 = 没交付完
-        Probe("zone", "zone_management", _check_zone_frontend),
+        Probe("zone", "zone_management", _check_zone_frontend, "库区管理页面"),
     ],
 )
 
@@ -1102,6 +1108,11 @@ SCENARIOS: dict[str, Scenario] = {
     BATCH_EXPIRY_SCENARIO.scenario_id: BATCH_EXPIRY_SCENARIO,
     ZONE_MANAGEMENT_SCENARIO.scenario_id: ZONE_MANAGEMENT_SCENARIO,
 }
+
+
+def probe_label(probe: Probe) -> str:
+    """探针的报告用名字（没写 label 就用函数名）"""
+    return probe.label or getattr(probe.check, "__name__", "探针")
 
 
 def find_probe(concept: str) -> Optional[tuple[Scenario, Probe]]:

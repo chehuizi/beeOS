@@ -30,9 +30,11 @@ from boxes.wms_testing.probes import (
     OUTCOME_NOT_APPLICABLE,
     OUTCOME_PASS,
     SCENARIOS,
+    Probe,
     ProbeContext,
     ProbeResult,
     find_probe,
+    probe_label,
 )
 from boxes.wms_testing.wms_client import WmsClient, WmsError
 from core.models import NOT_APPLICABLE
@@ -82,6 +84,58 @@ def _requirements_of(input_data: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(rows, list):
         return [r for r in rows if isinstance(r, dict)]
     return []
+
+
+#: 结论的**严重度**——同一个概念挂多条探针时，取最差的那条
+#:
+#: **为什么要按严重度合而不是「取第一条」**（2026-10-29 实测撞出来的）：
+#: 取第一条的写法会让**第二条探针静默不跑**——
+#: 前端探针登记了、代码也在，但结果被丢掉，谁都不知道。
+#: 报告上只看到「后端那条 pass」，前端那条压根没出现。
+#:
+#: 严重度从高到低：fail > indeterminate > pass > not_applicable。
+#: **indeterminate 排在 pass 前面**：有一条判不了，就不能说「验过了」。
+_OUTCOME_SEVERITY: dict[str, int] = {
+    OUTCOME_FAIL: 3,
+    OUTCOME_INDETERMINATE: 2,
+    OUTCOME_PASS: 1,
+    OUTCOME_NOT_APPLICABLE: 0,
+}
+
+
+def _merge_probe_results(
+    results: list[tuple[Probe, ProbeResult]],
+) -> tuple[str, str, dict[str, Any]]:
+    """同一个概念的多条探针 → 一条结论（取最差的）+ 看得见的明细
+
+    **每条探针的结论都要看得见**（details.probe_results）——
+    合并不是「把别的探针吞掉」。
+    """
+    if not results:
+        return OUTCOME_NOT_APPLICABLE, "没有探针", {}
+    worst = max(results, key=lambda item: _OUTCOME_SEVERITY.get(item[1].outcome, 0))
+    outcome = worst[1].outcome
+    # **一条探针时保持原来的 summary**（不改既有报告的读法）
+    if len(results) == 1:
+        summary = results[0][1].summary
+    else:
+        summary = "；".join(
+            f"{probe_label(probe)}：{res.summary}" for probe, res in results
+        )
+    details: dict[str, Any] = {}
+    probe_results: list[dict[str, Any]] = []
+    for probe, res in results:
+        label = probe_label(probe)
+        probe_results.append({
+            "probe": label,
+            "outcome": res.outcome,
+            "summary": res.summary,
+        })
+        # **details 合并时不互相覆盖**：键撞了就加前缀
+        for key, value in (res.details or {}).items():
+            details[key if key not in details else f"{label}.{key}"] = value
+    details["probe_results"] = probe_results
+    return outcome, summary, details
 
 
 def _observation(
@@ -229,11 +283,14 @@ def test_execute_handler(input_data: dict[str, Any]) -> dict[str, Any]:
             prepared.add(scenario_id)
 
         facts = facts_cache.get(scenario_id) or {}
-        probe = next(
-            (p for p in scenario.probes if p.concept == item.get("concept")),
-            None,
-        )
-        if probe is None:
+        # **同一个概念可能挂多条探针**（比如 zone 既有后端契约那条，
+        # 也有「前端页面真的在不在」那条）。
+        # **全部都要跑**——以前这里取的是第一条（`next(...)`），
+        # 后面的探针**静默不跑**，结果被丢掉，谁都不知道（实测踩过）。
+        probes = [
+            p for p in scenario.probes if p.concept == item.get("concept")
+        ]
+        if not probes:
             observations.append(_observation(
                 exp, OUTCOME_NOT_APPLICABLE,
                 f"场景 {scenario_id!r} 里没有概念 {item.get('concept')!r} 的探针",
@@ -241,9 +298,12 @@ def test_execute_handler(input_data: dict[str, Any]) -> dict[str, Any]:
             ))
             continue
 
-        result: ProbeResult = probe.check(ctx, facts)
+        probe_results: list[tuple[Probe, ProbeResult]] = []
+        for probe in probes:
+            probe_results.append((probe, probe.check(ctx, facts)))
+        outcome, summary, details = _merge_probe_results(probe_results)
         observations.append(_observation(
-            exp, result.outcome, result.summary, result.details,
+            exp, outcome, summary, details,
         ))
 
     # ---- 每条观测都带上「这次测的是哪个实例」----

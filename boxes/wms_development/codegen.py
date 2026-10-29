@@ -941,6 +941,41 @@ def changed_files(ws: Path) -> list[str]:
     return files
 
 
+def _drop_symlinks_from_index(ws: Path) -> list[str]:
+    """把**符号链接**从暂存区里剔掉（并返回剔掉哪些）
+
+    **为什么必须剔**：开发盒在隔离工作区里给前端挂了一个
+    `web/node_modules` 软链（worktree 里没有 gitignore 的依赖，
+    不挂就没法跑 `npm run build`）。
+    那个软链是**为了让构建能跑**临时挂上去的，
+    **不是这次需求的产出**——它进了提交，就会被评审判成
+    「改了方案没覆盖的文件」（实测：开发盒因此被判 rejected）。
+
+    **为什么不用 .gitignore 解决**：worktree 专属的
+    `$GIT_DIR/info/exclude` **git 不读**（info/exclude 属于 common dir），
+    而改 WMS 主仓的 .gitignore 是**动方案外的文件**——
+    机械层本来就该拦下来的那种改动。
+
+    **通用规则**：符号链接不进交付物。
+    不针对 node_modules 打补丁——任何符号链接都剔。
+    """
+    proc = _run(["git", "ls-files", "-s", "-z"], cwd=ws)
+    if proc.returncode != 0:
+        return []
+    dropped: list[str] = []
+    for entry in proc.stdout.split("\0"):
+        if not entry.strip():
+            continue
+        meta, _, path = entry.partition("\t")
+        # mode 120000 = 符号链接（100644 文件 / 100755 可执行 / 040000 树）
+        if not path or not meta.startswith("120000"):
+            continue
+        rm = _run(["git", "rm", "--cached", "--quiet", "--", path], cwd=ws)
+        if rm.returncode == 0:
+            dropped.append(path)
+    return dropped
+
+
 def commit_changes(ws: Path, message: str) -> tuple[Optional[str], Optional[str]]:
     """在工作区里提交，并把提交落到主仓的一个分支上
 
@@ -950,6 +985,7 @@ def commit_changes(ws: Path, message: str) -> tuple[Optional[str], Optional[str]
     Returns: (commit_sha, branch)；没提交成返回 (None, None)
     """
     _run(["git", "add", "-A"], cwd=ws)
+    _drop_symlinks_from_index(ws)
     _run(["git", "-c", "user.name=beeos", "-c", "user.email=beeos@local",
           "commit", "-m", message], cwd=ws)
     sha = _run(["git", "rev-parse", "HEAD"], cwd=ws)

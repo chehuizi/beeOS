@@ -43,6 +43,7 @@ from boxes.wms_testing.probes import (
     OUTCOME_PASS,
     ProbeContext,
     _check_zone_frontend,
+    probe_label,
 )
 
 
@@ -396,3 +397,151 @@ def test_frontend_expected_is_required_on_both_sides():
     for schema in (BUILD_ARTIFACT_SCHEMA, BUILD_ARTIFACT_INPUT_SCHEMA):
         field = next(f for f in schema.fields if f.name == "frontend_expected")
         assert field.required, f"{schema.id} 的 frontend_expected 不该是可选的"
+
+
+# ============================================================
+# 7) 符号链接不进交付物（开发盒在隔离工作区里挂 node_modules 软链）
+# ============================================================
+
+def test_commit_changes_drops_symlinks(tmp_path, monkeypatch):
+    """**符号链接不是交付物**——它进了提交就会被评审判红
+
+    **注入**：真的建一个临时 git 仓，里面放一个符号链接 + 一个普通文件。
+    开发盒在 worktree 里给前端挂 `web/node_modules` 软链（不然跑不了 npm），
+    那个软链一旦进了提交，`review_coverage` 判「改了方案没覆盖的文件」
+    → 开发盒被判 rejected（实测踩过）。
+    """
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=str(repo), capture_output=True, text=True,
+        )
+    git("init", "-q")
+    git("config", "user.name", "t")
+    git("config", "user.email", "t@t")
+    (repo / "real.txt").write_text("x", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "init")
+    (repo / "web").mkdir()
+    (repo / "web" / "node_modules").symlink_to(repo / "real.txt")
+
+    monkeypatch.setenv("BEEOS_WMS_REPO", str(repo))
+    monkeypatch.setenv("BEEOS_DEV_WORKSPACE", str(tmp_path / "ws"))
+
+    from boxes.wms_development.codegen import commit_changes
+
+    sha, _branch = commit_changes(repo, "test")
+
+    listed = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", sha],
+        cwd=str(repo), capture_output=True, text=True,
+    ).stdout.split()
+    assert "web/node_modules" not in listed, \
+        f"符号链接进了交付物：{listed}"
+    assert "real.txt" in listed, "普通文件被误删了"
+
+
+# ============================================================
+# 8) 同一个概念的多条探针**都要跑**（前端探针曾经静默不跑）
+# ============================================================
+
+def test_all_probes_of_a_concept_are_run():
+    """同一 concept 挂两条探针 → 两条的结果都要出现在观测里
+
+    **为什么**：以前取的是第一条（`next(...)`），
+    后面的探针**静默不跑**，结果被丢掉——
+    前端探针登记了、代码也在，报告上却压根没它。
+    """
+    from boxes.wms_testing.probes import SCENARIOS
+
+    zone_probes = [
+        p for p in SCENARIOS["zone_management"].probes if p.concept == "zone"
+    ]
+    labels = [probe_label(p) for p in zone_probes]
+
+    assert len(zone_probes) >= 2, "zone 只挂了一条探针"
+    assert len(set(labels)) == len(labels), f"探针名字撞了：{labels}"
+
+
+def test_merge_takes_the_worst_outcome():
+    """合并多条探针 = **取最差**（fail > indeterminate > pass）"""
+    from boxes.wms_testing.probes import Probe, ProbeResult
+    from boxes.wms_testing.runner import _merge_probe_results
+
+    def _mk(name):
+        return Probe("c", "s", lambda ctx, facts: None, name)
+
+    ok = ProbeResult(OUTCOME_PASS, "好的", {})
+    bad = ProbeResult(OUTCOME_FAIL, "坏的", {"why": 1})
+    dunno = ProbeResult(OUTCOME_INDETERMINATE, "判不了", {})
+
+    outcome, summary, details = _merge_probe_results([(_mk("a"), ok), (_mk("b"), bad)])
+    assert outcome == OUTCOME_FAIL
+    assert "好的" in summary and "坏的" in summary
+    assert len(details["probe_results"]) == 2
+
+    outcome, _s, _d = _merge_probe_results([(_mk("a"), ok), (_mk("b"), dunno)])
+    assert outcome == OUTCOME_INDETERMINATE, \
+        "有一条判不了却判成了通过——那是假绿"
+
+    outcome, _s, _d = _merge_probe_results([(_mk("a"), ok)])
+    assert outcome == OUTCOME_PASS
+    assert _s == "好的", "单条探针时 summary 不该被改写"
+
+
+def test_execute_runs_every_probe_not_only_the_first(monkeypatch):
+    """执行层：两条探针都跑，且最差结论生效（注入：第一条 pass、第二条 fail）
+
+    **注入**：临时注册一只带两条探针的合成场景——
+    真的把第二条做成会 fail 的样子。
+    """
+    from boxes.wms_testing import probes as probes_mod
+    from boxes.wms_testing.runner import test_execute_handler as execute_handler
+
+    # **没配 WMS 地址 → 判 indeterminate**（现场没条件），
+    # 那就够不到「探针合并」这一步了——先把地址配上。
+    monkeypatch.setenv("BEEOS_WMS_BASE_URL", "http://127.0.0.1:1/api/v1")
+
+    scenario = probes_mod.Scenario(
+        scenario_id="tmp_multi",
+        mutates=False,
+        prepare=lambda ctx: {"fact": 1},
+        probes=[
+            probes_mod.Probe("c", "tmp_multi",
+                             lambda ctx, facts: probes_mod.ProbeResult(
+                                 OUTCOME_PASS, "第一条通过", {}), "第一条"),
+            probes_mod.Probe("c", "tmp_multi",
+                             lambda ctx, facts: probes_mod.ProbeResult(
+                                 OUTCOME_FAIL, "第二条失败", {}), "第二条"),
+        ],
+    )
+    probes_mod.SCENARIOS["tmp_multi"] = scenario
+    try:
+        result = execute_handler({
+            "test_task_id": "tt_x",
+            "scenarios": ["tmp_multi"],
+            "expectations": [{
+                "expectation_id": "exp_x", "requirement_id": "req_x",
+                "wms_kind": "c", "statement": "s", "evidence": "e",
+            }],
+            "requirements": [{"requirement_id": "req_x", "description": "d"}],
+            "plan": [{
+                "expectation": {
+                    "expectation_id": "exp_x", "requirement_id": "req_x",
+                    "wms_kind": "c", "statement": "s", "evidence": "e",
+                },
+                "concept": "c",
+                "scenario_id": "tmp_multi",
+            }],
+        })
+    finally:
+        probes_mod.SCENARIOS.pop("tmp_multi", None)
+
+    obs = result.get("observations") or []
+    assert len(obs) == 1
+    assert obs[0]["outcome"] == OUTCOME_FAIL, \
+        f"第二条探针的失败被吞了：{obs[0]}"
+    assert len(obs[0]["details"]["probe_results"]) == 2

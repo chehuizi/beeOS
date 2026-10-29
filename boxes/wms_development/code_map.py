@@ -212,7 +212,20 @@ WMS_CONCEPT_IMPL_EVIDENCE: dict[str, tuple[tuple[str, ...], ...]] = {
              # 把「有路由」误当成了「菜单里有」。
              # **产物层面分不出这两者**（路由表和菜单数组都编译进同一个主 chunk），
              # 所以这条只能在**源码层**判——归开发盒。
-             ("web/src/layouts", "/zone", "literal")),
+             ("web/src/layouts", "/zone", "literal"),
+             # ---- 库位已用的库区要在库区管理里存在 ----
+             #
+             # **迁移里要有库区的种子数据**：
+             # token 是 "INTO wms_zone"（不是 "wms_zone"）——
+             # V5 那条建表迁移里也有 `wms_zone`（CREATE TABLE wms_zone），
+             # 用 "wms_zone" 会被**建表迁移**满足 → 假绿：
+             # 表建了、一条库区都没有，库位引用全是孤儿，
+             # 库位页面编辑任何一条都报「库区不存在」。
+             # "INTO wms_zone" 只在 INSERT 里出现。
+             ("db/migration", "INTO wms_zone"),
+             # **库位页面要从库区列表里选**（不许手填编码）：
+             # 库位页面里真的用上了库区接口（ts_usage 排除只 import）。
+             ("web/src/views/location", "zoneApi", "ts_usage")),
 
     # ---- 约束：实现的机制 ----
     "fefo": (("mapper/InventoryMapper", "ORDER BY expire_date"),),

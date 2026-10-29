@@ -682,3 +682,207 @@ def test_sidebar_menu_evidence_rejects_missing_menu_item():
     lacking = missing_evidence("zone", with_menu, "\n".join(with_menu.values()))
     assert "web/src/layouts" not in {h for h, _t in lacking}, \
         f"有菜单项还判没实现：lacking={lacking}"
+
+
+# ============================================================
+# 11) 库位引用的库区必须在库区管理里存在（存量数据自洽）
+# ============================================================
+
+def _fake_client(locations, zones):
+    class _C:
+        def list_locations(self_inner):
+            return list(locations)
+
+        def list_zones(self_inner):
+            return list(zones)
+    return _C()
+
+
+def _consistency_ctx(locations, zones):
+    return ProbeContext(
+        client=_fake_client(locations, zones),
+        mode="production",
+        frontend_expected=False,
+    )
+
+
+def test_zone_catalog_probe_fails_on_orphan_zone_reference():
+    """**注入**：库位引用了库区列表里没有的库区 → 判红
+
+    **这正是上线的真实状态**：库区功能只建了表、没把库位已在用的
+    库区建出来 → 库区列表全空 → 库位页面**编辑任何一条都报
+    「库区不存在或不属于该仓库」**。
+    """
+    from boxes.wms_testing.probes import _check_zone_catalog_consistency
+
+    ctx = _consistency_ctx(
+        locations=[
+            {"id": 7, "code": "A-01-01", "zone": "A", "warehouseId": 1},
+            {"id": 8, "code": "B-01-01", "zone": "B", "warehouseId": 1},
+        ],
+        zones=[],   # 库区管理里一条都没有
+    )
+
+    result = _check_zone_catalog_consistency(ctx, {})
+
+    assert result.outcome == OUTCOME_FAIL
+    assert "1/A" in result.summary and "1/B" in result.summary
+
+
+def test_zone_catalog_probe_fails_on_wrong_warehouse():
+    """**注入**：编码对、仓库不对 → 也要判红
+
+    库区的唯一口径是「仓库 + 编码」——
+    同一个编码在不同仓库下是两条不同的库区。
+    """
+    from boxes.wms_testing.probes import _check_zone_catalog_consistency
+
+    ctx = _consistency_ctx(
+        locations=[{"id": 7, "code": "A-01-01", "zone": "A", "warehouseId": 2}],
+        zones=[{"id": 1, "code": "A", "warehouseId": 1}],   # A 在仓库 1，不在仓库 2
+    )
+
+    result = _check_zone_catalog_consistency(ctx, {})
+
+    assert result.outcome == OUTCOME_FAIL
+    assert "2/A" in result.summary
+
+
+def test_zone_catalog_probe_passes_when_catalog_is_complete():
+    """齐全 → pass（别把这条守卫写成「永远判红」）"""
+    from boxes.wms_testing.probes import _check_zone_catalog_consistency
+
+    ctx = _consistency_ctx(
+        locations=[
+            {"id": 7, "code": "A-01-01", "zone": "A", "warehouseId": 1},
+            {"id": 8, "code": "A-01-02", "zone": "A", "warehouseId": 2},
+        ],
+        zones=[
+            {"id": 1, "code": "A", "warehouseId": 1},
+            {"id": 2, "code": "A", "warehouseId": 2},
+        ],
+    )
+
+    result = _check_zone_catalog_consistency(ctx, {})
+
+    assert result.outcome == OUTCOME_PASS
+
+
+def test_zone_catalog_probe_is_read_only_scenario():
+    """这条探针所在场景**不许造数**——它核的是存量数据，生产上也要能跑
+
+    放在造数场景里的话，生产实例上会跟别的探针一起判 indeterminate，
+    这条白写。
+    """
+    from boxes.wms_testing.probes import SCENARIOS
+
+    scenario = SCENARIOS["zone_catalog_consistency"]
+    assert scenario.mutates is False, "一致性场景不该造数"
+    assert any(p.concept == "location" for p in scenario.probes)
+
+
+def test_probes_of_a_concept_are_planned_across_scenarios(monkeypatch):
+    """**编排阶段也要排全部场景**——一个概念的探针可能在不同场景里
+
+    这是「多探针只跑第一条」的同族病，只是漏在**编排**阶段：
+    执行层跑全了也没用，那个场景根本没进计划。
+    """
+    from boxes.wms_testing import probes as probes_mod
+    from boxes.wms_testing.runner import test_intake_handler as intake_handler
+
+    scen_a = probes_mod.Scenario(
+        scenario_id="tmp_a", mutates=True, prepare=lambda ctx: {},
+        probes=[probes_mod.Probe("c", "tmp_a", lambda c, f: None, "A")],
+    )
+    scen_b = probes_mod.Scenario(
+        scenario_id="tmp_b", mutates=False, prepare=lambda ctx: {},
+        probes=[probes_mod.Probe("c", "tmp_b", lambda c, f: None, "B")],
+    )
+    probes_mod.SCENARIOS["tmp_a"] = scen_a
+    probes_mod.SCENARIOS["tmp_b"] = scen_b
+    try:
+        result = intake_handler({
+            "test_task_id": "tt",
+            "expectations": [{
+                "expectation_id": "e", "requirement_id": "r",
+                "wms_kind": "c", "statement": "s", "evidence": "v",
+            }],
+        })
+    finally:
+        probes_mod.SCENARIOS.pop("tmp_a", None)
+        probes_mod.SCENARIOS.pop("tmp_b", None)
+
+    plan = result.get("plan") or []
+    assert len(plan) == 1
+    assert set(plan[0]["scenario_ids"]) == {"tmp_a", "tmp_b"}, \
+        f"编排只排了一个场景：{plan[0]}"
+
+
+# ============================================================
+# 12) 开发盒证据：库区种子 + 库位页面用库区列表
+# ============================================================
+
+def test_zone_evidence_requires_migration_seed_rows():
+    """库区证据里必须有「迁移里 INSERT 了库区」那条
+
+    **为什么 token 是 "INTO wms_zone" 而不是 "wms_zone"**：
+    V5 那条建表迁移里也有 `wms_zone`（CREATE TABLE wms_zone），
+    用 "wms_zone" 会被**建表迁移**满足 → 假绿：
+    表建了、一条库区都没有，库位引用全是孤儿。
+    """
+    from boxes.wms_development.code_map import implementation_evidence
+
+    tokens = {
+        (h, t) for h, t, *_r in implementation_evidence("zone")
+    }
+    assert ("db/migration", "INTO wms_zone") in tokens, \
+        f"zone 证据里没有「迁移要插库区」那条：{sorted(tokens)}"
+
+
+def test_zone_seed_evidence_is_not_satisfied_by_the_create_table_migration():
+    """**注入**：只有建表迁移（没有 INSERT）→ 那条证据判「没实现」"""
+    files = {
+        "server/src/main/resources/db/migration/V5__create_zone_table.sql": (
+            "CREATE TABLE wms_zone (\n  id BIGSERIAL PRIMARY KEY,\n"
+            "  code VARCHAR(32) NOT NULL\n);\n"
+        ),
+    }
+    lacking = missing_evidence("zone", files, "\n".join(files.values()))
+    assert ("db/migration", "INTO wms_zone") in {(h, t) for h, t in lacking}, \
+        f"只有建表迁移却判成已实现：lacking={lacking}"
+
+    with_seed = {
+        "server/src/main/resources/db/migration/V5__create_zone_table.sql": (
+            "CREATE TABLE wms_zone (id BIGSERIAL PRIMARY KEY);\n"
+        ),
+        "server/src/main/resources/db/migration/V6__seed_zones.sql": (
+            "INSERT INTO wms_zone (warehouse_id, code, name) "
+            "VALUES (1, 'A', 'A区');\n"
+        ),
+    }
+    lacking = missing_evidence("zone", with_seed, "\n".join(with_seed.values()))
+    assert ("db/migration", "INTO wms_zone") not in {(h, t) for h, t in lacking}, \
+        f"有种子数据还判没实现：lacking={lacking}"
+
+
+def test_zone_evidence_requires_location_page_to_use_zone_api():
+    """库位页面必须真的用上库区接口（不能手填编码）"""
+    from boxes.wms_development.code_map import implementation_evidence
+
+    modes = {
+        h: (r[0] if r else "any")
+        for h, _t, *r in implementation_evidence("zone")
+    }
+    assert modes.get("web/src/views/location") == EVIDENCE_TS_USAGE, \
+        f"库位页面那条证据模式不对：{modes}"
+
+    only_import = {
+        "web/src/views/location/index.vue": (
+            "<script setup lang=\"ts\">\n"
+            "import { zoneApi } from '@/api/zone'\n"
+            "</script>\n"
+        ),
+    }
+    lacking = missing_evidence("zone", only_import, "\n".join(only_import.values()))
+    assert "web/src/views/location" in {h for h, _t in lacking}, \
+        f"库位页面只 import 就判成已实现：lacking={lacking}"

@@ -1078,6 +1078,97 @@ def _check_zone_frontend(ctx: ProbeContext, facts: dict[str, Any]) -> ProbeResul
     )
 
 
+# ============================================================
+# 一致性：库位引用的库区，库区管理里必须存在
+# ============================================================
+#
+# **为什么这条要单独一个只读场景**：
+# 它核的是**存量数据自洽**（库位引用的每个库区都得在库区列表里，
+# 且同一个仓库下），不需要造数 → **生产实例上也能跑**。
+# 放在造数场景里的话，生产上会跟别的探针一起判 indeterminate，
+# 这条白写。
+
+def _check_zone_catalog_consistency(
+    ctx: ProbeContext, facts: dict[str, Any]
+) -> ProbeResult:
+    """库位引用的每个库区，都得在库区管理里存在（同一个仓库下）
+
+    **判据是两条集合的包含关系**：
+    - 库位用到的 (仓库, 库区编码)
+    - 库区管理里有的 (仓库, 库区编码)
+    前者必须是后者的子集。
+
+    **为什么口径是「仓库 + 编码」**：库区是仓库下的分区，
+    同一个编码在不同仓库下是**两条不同的库区**。
+    只比编码会漏掉「编码对但仓库不对」的情况——
+    而那正是「库位挂在别的仓库的库区上」。
+
+    **这条能判出来的问题**（实测）：库区管理功能上线时
+    只建了表、没把库位已在用的库区建出来 → 库区列表全空 →
+    库位页面**编辑任何一条都报「库区不存在」**。
+    """
+    locations = ctx.client.list_locations()
+    zones = ctx.client.list_zones()
+
+    used = {
+        (loc.get("warehouseId"), loc.get("zone"))
+        for loc in locations
+        if loc.get("zone")
+    }
+    have = {
+        (z.get("warehouseId"), z.get("code"))
+        for z in zones
+    }
+    details = {
+        "location_zone_refs": sorted(
+            f"{wh}/{code}" for wh, code in used if code
+        ),
+        "zone_catalog": sorted(
+            f"{wh}/{code}" for wh, code in have if code
+        ),
+        "location_count": len(locations),
+        "zone_count": len(zones),
+    }
+
+    missing = sorted(
+        f"{wh}/{code}" for wh, code in used if code and (wh, code) not in have
+    )
+    if missing:
+        return ProbeResult(
+            OUTCOME_FAIL,
+            "库位引用了库区管理里没有的库区："
+            + "、".join(missing)
+            + "——库位挂在不存在的库区上，编辑这些库位会被拒"
+            "（库区不存在或不属于该仓库）",
+            details,
+        )
+
+    if not used:
+        return ProbeResult(
+            OUTCOME_INDETERMINATE,
+            "这个实例上还没有库位，无从判断库区是否齐了",
+            details,
+        )
+
+    return ProbeResult(
+        OUTCOME_PASS,
+        f"库位用到的 {len(used)} 个库区在库区管理里都在"
+        f"（库区列表共 {len(have)} 条）",
+        details,
+    )
+
+
+ZONE_CATALOG_SCENARIO = Scenario(
+    scenario_id="zone_catalog_consistency",
+    # **只读**：不造数 → 生产实例上也能跑
+    mutates=False,
+    prepare=lambda ctx: {},
+    probes=[
+        Probe("location", "zone_catalog_consistency",
+              _check_zone_catalog_consistency, "库区与库位一致"),
+    ],
+)
+
 ZONE_MANAGEMENT_SCENARIO = Scenario(
     scenario_id="zone_management",
     mutates=True,
@@ -1112,12 +1203,34 @@ BATCH_EXPIRY_SCENARIO = Scenario(
 SCENARIOS: dict[str, Scenario] = {
     BATCH_EXPIRY_SCENARIO.scenario_id: BATCH_EXPIRY_SCENARIO,
     ZONE_MANAGEMENT_SCENARIO.scenario_id: ZONE_MANAGEMENT_SCENARIO,
+    ZONE_CATALOG_SCENARIO.scenario_id: ZONE_CATALOG_SCENARIO,
 }
 
 
 def probe_label(probe: Probe) -> str:
     """探针的报告用名字（没写 label 就用函数名）"""
     return probe.label or getattr(probe.check, "__name__", "探针")
+
+
+def find_probes(concept: str) -> list[tuple[Scenario, Probe]]:
+    """这个概念的**全部**探针（跨场景）
+
+    **为什么要有「全部」这一版**（2026-10-29 实测撞出来的）：
+    一个概念的探针可能分布在**不同场景**里——
+    比如「库位归属库区」既有造数场景（真跑一遍增删改查），
+    也有只读场景（查一遍「库位引用的库区是不是都在库区列表里」，
+    这条在**生产实例上也能跑**）。
+    只取第一个场景的话，只读场景里那条**永远跑不到**。
+
+    **和「多探针只跑第一条」是同一族病**：编排阶段漏掉一个，
+    执行阶段跑全了也没用 —— 根本没进计划。
+    """
+    out: list[tuple[Scenario, Probe]] = []
+    for scenario in SCENARIOS.values():
+        for probe in scenario.probes:
+            if probe.concept == concept:
+                out.append((scenario, probe))
+    return out
 
 
 def find_probe(concept: str) -> Optional[tuple[Scenario, Probe]]:

@@ -34,6 +34,7 @@ from boxes.wms_testing.probes import (
     ProbeContext,
     ProbeResult,
     find_probe,
+    find_probes,
     probe_label,
 )
 from boxes.wms_testing.wms_client import WmsClient, WmsError
@@ -104,12 +105,16 @@ _OUTCOME_SEVERITY: dict[str, int] = {
 
 
 def _merge_probe_results(
-    results: list[tuple[Probe, ProbeResult]],
+    results: list[tuple[str, ProbeResult]],
 ) -> tuple[str, str, dict[str, Any]]:
-    """同一个概念的多条探针 → 一条结论（取最差的）+ 看得见的明细
+    """同一个概念的**所有**探针 → 一条结论（取最差的）+ 看得见的明细
 
     **每条探针的结论都要看得见**（details.probe_results）——
     合并不是「把别的探针吞掉」。
+
+    入参是 (标签, 结果) 而不是 (探针对象, 结果)——
+    因为**跨场景**收集时，有的结果来自「这个场景在生产上不能造数」
+    这种没有具体探针的情况。
     """
     if not results:
         return OUTCOME_NOT_APPLICABLE, "没有探针", {}
@@ -120,12 +125,11 @@ def _merge_probe_results(
         summary = results[0][1].summary
     else:
         summary = "；".join(
-            f"{probe_label(probe)}：{res.summary}" for probe, res in results
+            f"{label}：{res.summary}" for label, res in results
         )
     details: dict[str, Any] = {}
     probe_results: list[dict[str, Any]] = []
-    for probe, res in results:
-        label = probe_label(probe)
+    for label, res in results:
         probe_results.append({
             "probe": label,
             "outcome": res.outcome,
@@ -181,11 +185,15 @@ def test_intake_handler(input_data: dict[str, Any]) -> dict[str, Any]:
 
     for exp in expectations:
         concept = exp.get("wms_kind") or ""
-        found = find_probe(concept)
+        # **这个概念的全部探针**（可能分布在不同场景里）。
+        # 只排第一个场景的话，别的场景里那条**永远跑不到**——
+        # 跟「多探针只跑第一条」是同一族病，只是漏在编排阶段。
+        matches = find_probes(concept)
         plan.append({
             "expectation": exp,
             "concept": concept,
-            "scenario_id": found[0].scenario_id if found else None,
+            "scenario_id": matches[0][0].scenario_id if matches else None,
+            "scenario_ids": sorted({sc.scenario_id for sc, _p in matches}),
         })
 
     return {
@@ -231,96 +239,117 @@ def test_execute_handler(input_data: dict[str, Any]) -> dict[str, Any]:
 
     for item in plan:
         exp = item.get("expectation") or {}
-        scenario_id = item.get("scenario_id")
-        if not scenario_id:
+        concept = item.get("concept")
+        # **这个概念要跑的所有场景**（编排阶段排的，可能不止一个）。
+        scenario_ids = list(item.get("scenario_ids") or [])
+        if not scenario_ids and item.get("scenario_id"):
+            scenario_ids = [str(item.get("scenario_id"))]
+        if not scenario_ids:
             observations.append(_observation(
                 exp, OUTCOME_NOT_APPLICABLE,
-                f"没有针对概念 {item.get('concept')!r} 的探针——这条预期没人验",
-                {"concept": item.get("concept", "")},
+                f"没有针对概念 {concept!r} 的探针——这条预期没人验",
+                {"concept": concept or ""},
             ))
             continue
 
-        scenario = SCENARIOS.get(scenario_id)
-        if scenario is None:
-            observations.append(_observation(
-                exp, OUTCOME_NOT_APPLICABLE,
-                f"场景 {scenario_id!r} 不存在",
-                {"scenario_id": scenario_id},
-            ))
-            continue
+        # ---- 跨场景收集：这个概念的全部探针结果 ----
+        #
+        # **一个概念的探针可能分布在不同场景里**：
+        # 造数场景（真跑一遍业务）+ 只读场景（核存量数据自洽，
+        # 生产实例上也能跑）。只跑第一个场景的话，
+        # 只读场景里那条**永远跑不到**。
+        collected: list[tuple[str, ProbeResult]] = []
 
-        if not base_url:
-            observations.append(_observation(
-                exp, OUTCOME_INDETERMINATE,
-                f"没配 WMS 地址（{WMS_BASE_URL_ENV}），这次验不了",
-                {"scenario_id": scenario_id},
-            ))
-            continue
-
-        if scenario.mutates and mode != "verification":
-            observations.append(_observation(
-                exp, OUTCOME_INDETERMINATE,
-                f"场景 {scenario_id!r} 要造单据，但实例模式是 {mode!r}——"
-                "只允许在验证实例上造数",
-                {"scenario_id": scenario_id, "mode": mode},
-            ))
-            continue
-
-        if scenario_id not in prepared:
-            try:
-                ctx = ProbeContext(
-                    client=WmsClient(base_url),
-                    mode=mode,
-                    requirements={
-                        r.get("requirement_id", ""): r
-                        for r in input_data.get("requirements") or []
-                    },
-                    # **前端产物**：开发盒交付的那一份 dist。
-                    # 前端探针验的就是它——跟后端验「部署到验证实例的那份 jar」
-                    # 是同一个道理：**测的必须是交付物本身**。
-                    #
-                    # **从 artifact_ref 里取，不是从顶层取**（2026-10-29 实测）：
-                    # 交接通道把上游的**整个产出**装进 `artifact_ref`，
-                    # 前端字段就在那里面。顶层从来没有它——
-                    # 读顶层就恒为 False，前端探针于是说「这次没有前端」，
-                    # 而开发盒明明交付了前端。
-                    # **字段在正确的地方，读的人却去别处找** = 静默失效。
-                    frontend_dist_path=str(
-                        input_data.get("frontend_dist_path")
-                        or artifact.get("frontend_dist_path") or ""
+        for scenario_id in scenario_ids:
+            scenario = SCENARIOS.get(scenario_id)
+            if scenario is None:
+                collected.append((
+                    scenario_id,
+                    ProbeResult(
+                        OUTCOME_NOT_APPLICABLE, f"场景 {scenario_id!r} 不存在", {}
                     ),
-                    frontend_expected=bool(
-                        input_data.get("frontend_expected")
-                        or artifact.get("frontend_expected")
+                ))
+                continue
+
+            if not base_url:
+                collected.append((
+                    scenario_id,
+                    ProbeResult(
+                        OUTCOME_INDETERMINATE,
+                        f"没配 WMS 地址（{WMS_BASE_URL_ENV}），这次验不了",
+                        {},
                     ),
+                ))
+                continue
+
+            if scenario.mutates and mode != "verification":
+                collected.append((
+                    scenario_id,
+                    ProbeResult(
+                        OUTCOME_INDETERMINATE,
+                        f"场景 {scenario_id!r} 要造单据，但实例模式是 {mode!r}——"
+                        "只允许在验证实例上造数",
+                        {"scenario_id": scenario_id, "mode": mode},
+                    ),
+                ))
+                continue
+
+            if scenario_id not in prepared:
+                try:
+                    ctx = ProbeContext(
+                        client=WmsClient(base_url),
+                        mode=mode,
+                        requirements={
+                            r.get("requirement_id", ""): r
+                            for r in input_data.get("requirements") or []
+                        },
+                        # **前端产物**：开发盒交付的那一份 dist。
+                        # 前端探针验的就是它——跟后端验「部署到验证实例的那份 jar」
+                        # 是同一个道理：**测的必须是交付物本身**。
+                        #
+                        # **从 artifact_ref 里取，不是从顶层取**（2026-10-29 实测）：
+                        # 交接通道把上游的**整个产出**装进 `artifact_ref`，
+                        # 前端字段就在那里面。顶层从来没有它——
+                        # 读顶层就恒为 False，前端探针于是说「这次没有前端」，
+                        # 而开发盒明明交付了前端。
+                        # **字段在正确的地方，读的人却去别处找** = 静默失效。
+                        frontend_dist_path=str(
+                            input_data.get("frontend_dist_path")
+                            or artifact.get("frontend_dist_path") or ""
+                        ),
+                        frontend_expected=bool(
+                            input_data.get("frontend_expected")
+                            or artifact.get("frontend_expected")
+                        ),
+                    )
+                    facts_cache[scenario_id] = scenario.prepare(ctx)
+                except WmsError as exc:
+                    # **探针跑不起来 = 履约中止**，不是记一句「跳过」。
+                    # 降级成「跳过」的话，WMS 挂了会显示成「全都验过了」。
+                    raise
+                prepared.add(scenario_id)
+
+            facts = facts_cache.get(scenario_id) or {}
+            # **同一个概念可能挂多条探针**（比如 zone 既有后端契约那条，
+            # 也有「前端页面真的在不在」那条）。
+            # **全部都要跑**——以前这里取的是第一条（`next(...)`），
+            # 后面的探针**静默不跑**，结果被丢掉，谁都不知道（实测踩过）。
+            for probe in [
+                p for p in scenario.probes if p.concept == concept
+            ]:
+                collected.append(
+                    (probe_label(probe), probe.check(ctx, facts))
                 )
-                facts_cache[scenario_id] = scenario.prepare(ctx)
-            except WmsError as exc:
-                # **探针跑不起来 = 履约中止**，不是记一句「跳过」。
-                # 降级成「跳过」的话，WMS 挂了会显示成「全都验过了」。
-                raise
-            prepared.add(scenario_id)
 
-        facts = facts_cache.get(scenario_id) or {}
-        # **同一个概念可能挂多条探针**（比如 zone 既有后端契约那条，
-        # 也有「前端页面真的在不在」那条）。
-        # **全部都要跑**——以前这里取的是第一条（`next(...)`），
-        # 后面的探针**静默不跑**，结果被丢掉，谁都不知道（实测踩过）。
-        probes = [
-            p for p in scenario.probes if p.concept == item.get("concept")
-        ]
-        if not probes:
+        if not collected:
             observations.append(_observation(
                 exp, OUTCOME_NOT_APPLICABLE,
-                f"场景 {scenario_id!r} 里没有概念 {item.get('concept')!r} 的探针",
-                {"scenario_id": scenario_id},
+                f"没有针对概念 {concept!r} 的探针",
+                {"concept": concept or ""},
             ))
             continue
 
-        probe_results: list[tuple[Probe, ProbeResult]] = []
-        for probe in probes:
-            probe_results.append((probe, probe.check(ctx, facts)))
-        outcome, summary, details = _merge_probe_results(probe_results)
+        outcome, summary, details = _merge_probe_results(collected)
         observations.append(_observation(
             exp, outcome, summary, details,
         ))

@@ -219,6 +219,12 @@ def test_execute_handler(input_data: dict[str, Any]) -> dict[str, Any]:
     observations: list[dict[str, Any]] = []
     scenario_errors: dict[str, str] = {}
 
+    # **上游产出**：开发盒的整个 artifact（交接通道装进 `artifact_ref` 的）。
+    # **前端字段就在这里面** —— 见下面取 frontend_expected 的注释。
+    artifact = input_data.get("artifact_ref") or {}
+    if not isinstance(artifact, dict):
+        artifact = {}
+
     # 场景按需准备（每个场景一次）
     facts_cache: dict[str, dict[str, Any]] = {}
     prepared: set[str] = set()
@@ -272,8 +278,21 @@ def test_execute_handler(input_data: dict[str, Any]) -> dict[str, Any]:
                     # **前端产物**：开发盒交付的那一份 dist。
                     # 前端探针验的就是它——跟后端验「部署到验证实例的那份 jar」
                     # 是同一个道理：**测的必须是交付物本身**。
-                    frontend_dist_path=str(input_data.get("frontend_dist_path") or ""),
-                    frontend_expected=bool(input_data.get("frontend_expected")),
+                    #
+                    # **从 artifact_ref 里取，不是从顶层取**（2026-10-29 实测）：
+                    # 交接通道把上游的**整个产出**装进 `artifact_ref`，
+                    # 前端字段就在那里面。顶层从来没有它——
+                    # 读顶层就恒为 False，前端探针于是说「这次没有前端」，
+                    # 而开发盒明明交付了前端。
+                    # **字段在正确的地方，读的人却去别处找** = 静默失效。
+                    frontend_dist_path=str(
+                        input_data.get("frontend_dist_path")
+                        or artifact.get("frontend_dist_path") or ""
+                    ),
+                    frontend_expected=bool(
+                        input_data.get("frontend_expected")
+                        or artifact.get("frontend_expected")
+                    ),
                 )
                 facts_cache[scenario_id] = scenario.prepare(ctx)
             except WmsError as exc:

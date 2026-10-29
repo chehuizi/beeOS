@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import pathlib
 import shutil
+from typing import Any
 
 import pytest
 
@@ -545,3 +546,64 @@ def test_execute_runs_every_probe_not_only_the_first(monkeypatch):
     assert obs[0]["outcome"] == OUTCOME_FAIL, \
         f"第二条探针的失败被吞了：{obs[0]}"
     assert len(obs[0]["details"]["probe_results"]) == 2
+
+
+# ============================================================
+# 9) 前端字段要从 artifact_ref 里取（交接通道把上游产出装在那儿）
+# ============================================================
+
+def test_frontend_fields_are_read_from_artifact_ref(monkeypatch):
+    """**前端字段在 artifact_ref 里，不在投料顶层**
+
+    **为什么这是条独立的病**：交接通道（runtime/handoff.py）把上游的
+    **整个产出**装进 `artifact_ref`，前端字段就在那里面；
+    而投料顶层从来没有它。读顶层 → 恒为 False →
+    前端探针说「这次没有前端」，而开发盒明明交付了前端。
+    **字段在正确的地方，读的人却去别处找** = 静默失效。
+
+    **注入**：只往 artifact_ref 里放字段（不放顶层），看测试盒认不认。
+    """
+    from boxes.wms_testing import probes as probes_mod
+    from boxes.wms_testing.runner import test_execute_handler as execute_handler
+
+    monkeypatch.setenv("BEEOS_WMS_BASE_URL", "http://127.0.0.1:1/api/v1")
+
+    seen: dict[str, Any] = {}
+
+    def _spy(ctx, facts):
+        seen["frontend_expected"] = ctx.frontend_expected
+        seen["frontend_dist_path"] = ctx.frontend_dist_path
+        return probes_mod.ProbeResult(OUTCOME_PASS, "看到上下文了", {})
+
+    scenario = probes_mod.Scenario(
+        scenario_id="tmp_artifact_ref",
+        mutates=False,
+        prepare=lambda ctx: {},
+        probes=[probes_mod.Probe("c", "tmp_artifact_ref", _spy, "看字段")],
+    )
+    probes_mod.SCENARIOS["tmp_artifact_ref"] = scenario
+    exp = {"expectation_id": "e", "requirement_id": "r",
+           "wms_kind": "c", "statement": "s", "evidence": "v"}
+    try:
+        execute_handler({
+            "test_task_id": "tt",
+            "scenarios": ["tmp_artifact_ref"],
+            "expectations": [exp],
+            "requirements": [{"requirement_id": "r", "description": "d"}],
+            "plan": [{"expectation": exp, "concept": "c",
+                      "scenario_id": "tmp_artifact_ref"}],
+            # **只有 artifact_ref 里有** —— 顶层没有
+            "artifact_ref": {
+                "frontend_expected": True,
+                "frontend_dist_path": "/tmp/dist-x",
+                "artifact_digest": "sha256:abc",
+                "commit_count": 1,
+            },
+        })
+    finally:
+        probes_mod.SCENARIOS.pop("tmp_artifact_ref", None)
+
+    assert seen.get("frontend_expected") is True, \
+        f"前端字段没从 artifact_ref 读到：{seen}"
+    assert seen.get("frontend_dist_path") == "/tmp/dist-x", \
+        f"前端产物路径没读到：{seen}"

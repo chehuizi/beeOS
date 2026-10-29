@@ -44,10 +44,12 @@ from kanban.trigger import (
     box_maturity,
     box_meta,
     declared_beeline_ops,
+    domain_field_map,
     list_task_entries,
     order_boxes_by_flow,
     registered_box_ids,
     resolve_text_intake,
+    scope_field_map,
     scope_layout,
     structure_business_text_with_llm,
     trigger_task,
@@ -151,6 +153,25 @@ def _collect_tasks(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         })
     tasks.sort(key=lambda t: t.get("at") or "", reverse=True)
     return tasks
+
+
+def field_maps_payload() -> dict[str, Any]:
+    """各域的**场图**（结构化，可被程序调用，不只是画布上的一张图）
+
+    场图是从各盒 placement **派生**的（见 core/field_map.py）。
+    这里给的是它的结构化形状：哪些盒子在这个场里、边是什么类型、谁是汇点。
+
+    「全部域」也给一条结论：跨域**没有场图**，附带一句能读懂的原因——
+    不给的话，读者会以为「全部域」那张图缺了。
+    """
+    scopes = box_domains(registered_box_ids())
+    return {
+        "maps": {
+            domain: domain_field_map(domain).to_dict()
+            for domain in sorted(scopes)
+        },
+        "scope_all": scope_field_map(ALL_DOMAINS_SCOPE).to_dict(),
+    }
 
 
 def dashboard_data(
@@ -714,6 +735,16 @@ HTML_PAGE = f"""<!DOCTYPE html>
     stroke-linecap: round; fill: none;
   }}
   .radial-legend .edge {{ stroke-width: 2; }}
+  /* ===== 场域边界 =====
+     虚线框 = 这个域的「场」的边界：里面是这个域的全部盒子和接线。
+     画得比连线更淡——它是**范围**，连线才是**内容**，
+     两者抢同一个视觉重量时，看的人会以为框线也是一条业务流。 */
+  .edge-field {{
+    stroke: #cbd5e1; stroke-width: 1.5; stroke-dasharray: 7 6; fill: none;
+  }}
+  .field-label {{
+    font-size: 11px; fill: #94a3b8; letter-spacing: 0.05em;
+  }}
 
   /* ===== 3D cube beeBox（CSS 3D 盒） =====
      尺寸收小：280×190×130 → 176×118×80。
@@ -2391,6 +2422,10 @@ const RADIAL_R_FACTOR = 1.9;
 // 弦长算够之后再加这么一点富余，免得两张卡刚好贴上
 const RADIAL_CHORD_SLACK = 26;
 const RADIAL_PAD = 30;
+// 场域边界离卡片多远
+const FIELD_PAD = 26;
+// 立方体 3D 投影探出卡片上沿的高度：画布按卡片量高不够，得给它留出来
+const CUBE_ALLOW = 46;
 
 // 从盒子中心沿单位方向 (ux,uy) 走到盒子外框的那个点
 function rectExit(cx, cy, ux, uy, hw, hh) {{
@@ -2509,30 +2544,57 @@ function renderRadial(layout, stats) {{
     // 中心卡底下还挂一行汇点标签，竖向要多给它留出这一行的位置
     spanY = Math.max(spanY, RADIAL_CARD_H / 2 + 22);
   }}
-  const W = Math.round((spanX + RADIAL_PAD) * 2);
-  const H = Math.round((spanY + RADIAL_PAD) * 2);
+  // ===== 场域边界 =====
+  //
+  // 虚线框 = 「这个域的场」的边界：里面是这个域的全部盒子和它们的接线。
+  // 它不是装饰——框里框外是**两个不同的范围**，框外的盒子不属于这个场。
+  //
+  // 边界跟着卡片走（卡片外面留一圈 FIELD_PAD），不写死位置：
+  // 环上多一只盒子，边界跟着长一圈；不跟着长的话，最后一只盒子就骑在框线上。
+  const fieldHalfX = spanX + FIELD_PAD;
+  const fieldHalfY = spanY + FIELD_PAD;
+  // 画布还要装下立方体的 3D 投影：它是 rotateX/rotateY 出来的，
+  // **探出卡片上沿**——画布只按卡片量高，探出去那一截就被裁掉，
+  // 看上去就是「顶上的盒子被削平了」。
+  const canvasHalfY = fieldHalfY + CUBE_ALLOW;
+  const W = Math.round((fieldHalfX + RADIAL_PAD) * 2);
+  const H = Math.round((canvasHalfY + RADIAL_PAD) * 2);
   const cx = W / 2;
+  // **纵向的中心是 H/2，不是 W/2**。以前这里写的是 cx（宽的一半），
+  // 于是整张环竖着偏移了 (W-H)/2 —— 顶部那张卡的立方体探出画布被裁掉，
+  // 而画布看上去是正常的，最难查。
+  const cy = H / 2;
 
   const edges = [];
+  // 场域边界（虚线）：先画 → 压在所有连线**下面**。
+  // 框 = 这个域的场，里面是本域的全部盒子和接线；框外的不属于这个场。
+  const fieldLabel = esc((layout.domain || '') + ' · 场');
+  edges.push(
+    '<rect class="edge-field" x="' + (cx - fieldHalfX).toFixed(1) + '"'
+    + ' y="' + (cy - fieldHalfY).toFixed(1) + '"'
+    + ' width="' + (fieldHalfX * 2).toFixed(1) + '"'
+    + ' height="' + (fieldHalfY * 2).toFixed(1) + '" rx="18"/>'
+    + '<text class="field-label" x="' + (cx - fieldHalfX + 14).toFixed(1) + '"'
+    + ' y="' + (cy - fieldHalfY + 20).toFixed(1) + '">' + fieldLabel + '</text>');
   for (const l of handoffLines) {{
     edges.push(
       '<line data-from="' + esc(l.from) + '" data-to="' + esc(l.to) + '"' +
-      ' x1="' + (cx + l.a.x).toFixed(1) + '" y1="' + (cx + l.a.y).toFixed(1) + '"' +
-      ' x2="' + (cx + l.b.x).toFixed(1) + '" y2="' + (cx + l.b.y).toFixed(1) + '"' +
+      ' x1="' + (cx + l.a.x).toFixed(1) + '" y1="' + (cy + l.a.y).toFixed(1) + '"' +
+      ' x2="' + (cx + l.b.x).toFixed(1) + '" y2="' + (cy + l.b.y).toFixed(1) + '"' +
       ' class="edge edge-handoff" marker-end="url(#arrow-handoff)"/>');
   }}
   for (const l of feedLines) {{
     edges.push(
       '<line data-from="' + esc(l.from) + '" data-to="' + esc(l.to) + '"' +
-      ' x1="' + (cx + l.a.x).toFixed(1) + '" y1="' + (cx + l.a.y).toFixed(1) + '"' +
-      ' x2="' + (cx + l.b.x).toFixed(1) + '" y2="' + (cx + l.b.y).toFixed(1) + '"' +
+      ' x1="' + (cx + l.a.x).toFixed(1) + '" y1="' + (cy + l.a.y).toFixed(1) + '"' +
+      ' x2="' + (cx + l.b.x).toFixed(1) + '" y2="' + (cy + l.b.y).toFixed(1) + '"' +
       ' class="edge edge-feed" marker-end="url(#arrow-feed)"/>');
   }}
   for (const l of feedbackLines) {{
     edges.push(
       '<line data-from="' + esc(l.from) + '" data-to="' + esc(l.to) + '"' +
-      ' x1="' + (cx + l.a.x).toFixed(1) + '" y1="' + (cx + l.a.y).toFixed(1) + '"' +
-      ' x2="' + (cx + l.b.x).toFixed(1) + '" y2="' + (cx + l.b.y).toFixed(1) + '"' +
+      ' x1="' + (cx + l.a.x).toFixed(1) + '" y1="' + (cy + l.a.y).toFixed(1) + '"' +
+      ' x2="' + (cx + l.b.x).toFixed(1) + '" y2="' + (cy + l.b.y).toFixed(1) + '"' +
       ' class="edge edge-feedback" marker-end="url(#arrow-feedback)"/>');
   }}
 
@@ -2550,7 +2612,7 @@ function renderRadial(layout, stats) {{
     return '<a class="' + cls + '" data-box="' + esc(id) + '"'
       + ' href="' + esc(boxHref(id, _domainFilter, _view)) + '"'
       + ' style="left:' + (cx + p.x - RADIAL_CARD_W / 2).toFixed(1) + 'px;'
-      + 'top:' + (cx + p.y - RADIAL_CARD_H / 2).toFixed(1) + 'px">'
+      + 'top:' + (cy + p.y - RADIAL_CARD_H / 2).toFixed(1) + 'px">'
       + compactCubeHtml(s)
       // 汇点标签挂在卡**下面**当铭牌，不当浮在卡上的贴纸：
       // 放卡顶时它正好压在卡片边框上，而那条向心虚线又从同一个方向过来，
@@ -3993,6 +4055,11 @@ class KanbanRequestHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/data":
             box_filter = (qs.get("box") or [None])[0] or None
             self._serve_json(box_filter, (qs.get("task") or [None])[0] or None)
+        elif parsed.path == "/api/maps":
+            # 场图（BeeBox Map）：各域的接线结构。
+            # 画布上那张图是它的一张照片——这个接口给的是**结构本身**，
+            # 别的程序要读「WMS 域有哪些盒子、谁交给谁」时不用去解析 SVG。
+            self._send_json(200, field_maps_payload())
         elif parsed.path == "/api/boxes":
             # 目录：所有已注册盒子 + 各自的 API 面
             self._send_json(200, {

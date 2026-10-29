@@ -55,6 +55,12 @@ from boxes.wms_requirement.measure import COMPUTERS as CAPTURE_COMPUTERS
 from boxes.wms_requirement.runner import RUNNER as CAPTURE_RUNNER
 from core import metrics as core_metrics
 from core.beeline_models import Beeline
+from core.field_map import (
+    BeeBoxMap,
+    PlacementView,
+    derive_field_map,
+    field_map_of_scope,
+)
 from core.models import BeeBoxDefinition, FieldDef, SchemaDef
 from core.beeline_models import Beeline
 from runtime import BeelineExecutor, create_task_run, evaluate_acceptance
@@ -252,14 +258,70 @@ def domain_layout(domain: str) -> dict[str, Any]:
       「流水线」和「记账」是两件事。
     - **环序**：交接边的拓扑序，同层按 box_id 字母序（稳定）。
     """
-    ids = [b for b in order_boxes_by_flow(registered_box_ids())
-           if (BOX_REGISTRY[b][0]().placement.domain == domain)]
-    return _layout_for(ids, domain)
+    return _layout_from_map(domain_field_map(domain))
 
 
 # 「全部域」哨兵，与前端 ALL_DOMAINS 一致。
 # 它**不是**一个域：它没有 placement.domain，也没有成员表。
 ALL_DOMAINS_SCOPE = "__all__"
+
+
+# ===== 场图（BeeBox Map）=====
+#
+# 场图是**派生**的：唯一事实源是各盒自己的 placement（domain + 接线），
+# 这里把它推成一份**可复用的结构**，而不是看板内部的一种画法。
+# 画布上的虚线场域边界只是它的一张照片。
+#
+# 「再手写一张域接线表」= 第二份事实 = 必然漂，而且漂了不报错。
+# 所以场图永远从 placement 推；想让场图变，就去改那只盒子。
+
+
+def placement_views() -> dict[str, PlacementView]:
+    """注册表里每只盒子的**场相关视图**（域 + 接线）"""
+    views: dict[str, PlacementView] = {}
+    for bid in registered_box_ids():
+        p = BOX_REGISTRY[bid][0]().placement
+        views[bid] = PlacementView(
+            box_id=bid,
+            domain=p.domain or "",
+            feeds_into=tuple(p.feeds_into),
+            feedback_into=tuple(p.feedback_into),
+        )
+    return views
+
+
+def domain_field_map(domain: str) -> BeeBoxMap:
+    """一个域的**场图**：这个域里有哪些盒子、谁交给谁、谁是汇点"""
+    views = placement_views()
+    ids = [b for b in order_boxes_by_flow(registered_box_ids())
+           if views[b].domain == domain]
+    return derive_field_map(domain, [views[b] for b in ids])
+
+
+def scope_field_map(scope: str) -> BeeBoxMap:
+    """一个**范围**的场图。横跨多个域 → 没有场图，给一句能读懂的原因。"""
+    if scope == ALL_DOMAINS_SCOPE:
+        views = placement_views()
+        scopes: dict[str, list[str]] = {}
+        for b in order_boxes_by_flow(registered_box_ids()):
+            scopes.setdefault(views[b].domain, []).append(b)
+        return field_map_of_scope(scope, scopes, views)
+    return domain_field_map(scope)
+
+
+def _layout_from_map(m: BeeBoxMap) -> dict[str, Any]:
+    """场图 → 看板的布局 dict（形状不变，只是多了一个来源）"""
+    return {
+        "domain": m.domain,
+        "layout": "radial" if m.drawable else "flat",
+        "reason": m.reason,
+        "center": m.center,
+        "ring": list(m.ring),
+        "handoffs": [list(e) for e in m.handoffs],
+        "feeds_center": list(m.feeds_center),
+        "feedback": [list(e) for e in m.feedback],
+        "boxes": list(m.boxes),
+    }
 
 
 def scope_layout(scope: str) -> dict[str, Any]:
@@ -273,143 +335,7 @@ def scope_layout(scope: str) -> dict[str, Any]:
     multi_domain 那段，域内唯一汇点的规则跨了几条互不相干的流水线之后
     就不成立了，硬凑一个中心等于替业务声明一条不存在的拓扑。
     """
-    if scope == ALL_DOMAINS_SCOPE:
-        ids = order_boxes_by_flow(registered_box_ids())
-        domains = sorted({BOX_REGISTRY[b][0]().placement.domain or "（未归域）"
-                          for b in ids})
-        return _layout_for(ids, "全部域", multi_domain=len(domains) > 1)
-    return domain_layout(scope)
-
-
-def _layout_for(
-    ids: list[str],
-    domain: str,
-    *,
-    multi_domain: bool = False,
-) -> dict[str, Any]:
-    """给定一批盒子，推导出中心 / 环序 / 三类边
-
-    `domain` 只是报错文案里的称呼。`multi_domain` 为真表示这批盒子横跨
-    多个域——此时**直接退回平铺**，连中心都不找。
-    """
-    ids = list(ids)
-    idset = set(ids)
-
-    if multi_domain:
-        # 域内唯一汇点这条规则，跨了几条互不相干的流水线之后就不成立了。
-        # 硬凑的话会怎样：拿「全部域」试，唯一汇点算出来是
-        # wms_system_box，于是费用报销线的 receipt_capture_box 被画成
-        # WMS 流水线的一环、还画了条边投给它——**假的**。
-        # 看板一旦这么画，就是在替业务声明一个没人声明过的拓扑，
-        # 而且图上看不出任何异常。所以这里连边都不画。
-        return {
-            "domain": domain,
-            "layout": "flat",
-            "reason": (
-                "范围横跨多个域，各域流水线互不相干，没有共同汇点——"
-                "硬凑一个中心等于替业务声明一条不存在的拓扑"
-            ),
-            "center": None,
-            "ring": list(ids),
-            "handoffs": [],
-            "feeds_center": [],
-            "feedback": [],
-            "boxes": ids,
-        }
-
-    edges = [
-        (b, t)
-        for b in ids
-        for t in BOX_REGISTRY[b][0]().placement.feeds_into
-        if t in idset
-    ]
-    # 反馈边**不进**拓扑排序：闭环那条边一旦混进 feeds_into，
-    # 排序就遇到环，于是按原顺序静默收尾——环序变任意，
-    # 看板照常渲染，只是结构是错的。摘出来，主干就永远无环。
-    feedback = [
-        [b, t]
-        for b in ids
-        for t in BOX_REGISTRY[b][0]().placement.feedback_into
-        if t in idset
-    ]
-    indeg: Counter = Counter()
-    outdeg: Counter = Counter()
-    for src, dst in edges:
-        outdeg[src] += 1
-        indeg[dst] += 1
-    for src, dst in feedback:
-        outdeg[src] += 1
-        indeg[dst] += 1
-
-    sinks = [b for b in ids if outdeg[b] == 0 and indeg[b] > 0]
-    center = sinks[0] if len(sinks) == 1 else None
-
-    ring = [b for b in ids if b != center] if center else list(ids)
-    handoffs = [[s, d] for s, d in edges if d != center]
-    feeds_center = [s for s, d in edges if d == center]
-
-    # 环序 = 交接边的拓扑序，自己排而不是借道 order_boxes_by_flow：
-    # 那个函数遇到环会静默按原顺序收尾，而这里必须知道「排不出来」。
-    # 中心摘掉——它是汇点，让它参与排序会把整环的深度都压平。
-    ordered, cyclic = _topo_within(ring, edges)
-
-    layout = "radial"
-    reason = ""
-    if center is None:
-        layout = "flat"
-        if len(ids) < 3:
-            reason = f"域内只有 {len(ids)} 只盒子，撑不起环"
-        elif not sinks:
-            reason = "域内没有汇点（每只盒子都还有下游）"
-        else:
-            reason = f"域内有 {len(sinks)} 个汇点，中心不唯一：" + "、".join(sinks)
-    elif cyclic:
-        layout = "flat"
-        # 闭环的边声明成 feeds_into 了。主干因此成环，环序排不出来。
-        # 不猜：退回平铺，并把是哪几只说清楚——不然图上就只是一个
-        # 顺序不对的环，看不出哪里声明错了。
-        reason = (
-            "域内交接边成环（" + "、".join(cyclic) + "）——"
-            "闭环那条边应该声明成 feedback_into，不是 feeds_into"
-        )
-
-    return {
-        "domain": domain,
-        "layout": layout,
-        "reason": reason,
-        "center": center,
-        "ring": ordered,
-        "handoffs": handoffs,
-        "feeds_center": feeds_center,
-        "feedback": feedback,
-        "boxes": ids,
-    }
-
-
-def _topo_within(ids: list[str], edges: list[tuple[str, str]]) -> tuple[list[str], list[str]]:
-    """ids 内部的拓扑排序；返回 (有序结果, 卡在环上的节点)
-
-    跟 `order_boxes_by_flow` 的区别只有一个，但很要紧：那个函数遇到环
-    就按原顺序收尾——看板不能白屏，所以它**选择**不报错。
-    这里正相反：成环必须被**看见**，因为成环只有一个原因，
-    就是有人把闭环的边声明成了 feeds_into，而那会让环序变成任意的。
-    """
-    inside = set(ids)
-    preds: dict[str, set[str]] = {b: set() for b in ids}
-    for src, dst in edges:
-        if src in inside and dst in inside:
-            preds[dst].add(src)
-    ordered: list[str] = []
-    placed: set[str] = set()
-    remaining = list(ids)
-    while remaining:
-        ready = [b for b in remaining if preds[b] <= placed]
-        if not ready:
-            return ordered, remaining
-        ordered.extend(ready)
-        placed.update(ready)
-        remaining = [b for b in remaining if b not in placed]
-    return ordered, []
+    return _layout_from_map(scope_field_map(scope))
 
 
 def order_boxes_by_flow(box_ids: Iterable[str]) -> list[str]:

@@ -201,7 +201,18 @@ WMS_CONCEPT_IMPL_EVIDENCE: dict[str, tuple[tuple[str, ...], ...]] = {
              # 这样 `import('@/views/zone/index.vue')` 里那个 zone
              # 不算（它在 '/views/zone/index.vue' 字符串中间），
              # 只有 `path: 'zone'` 才算——注册了路由。
-             ("web/src/router.ts", "zone", "literal")),
+             ("web/src/router.ts", "zone", "literal"),
+             # **侧边栏菜单项也要有**——用 **literal + 完整路径**：
+             # 菜单写在 `BasicLayout.vue` 的 `menuGroups` 数组里
+             # （**不是**从路由自动生成的），路径是 '/zone'（带斜杠）。
+             #
+             # **为什么这条不能省**（2026-10-29 实测撞出来的）：
+             # 模型只注册了路由、没加菜单项 → 页面上侧边栏**找不到库区管理**，
+             # 而判据是绿的——路由的 `meta.title` 里也有「库区管理」，
+             # 把「有路由」误当成了「菜单里有」。
+             # **产物层面分不出这两者**（路由表和菜单数组都编译进同一个主 chunk），
+             # 所以这条只能在**源码层**判——归开发盒。
+             ("web/src/layouts", "/zone", "literal")),
 
     # ---- 约束：实现的机制 ----
     "fefo": (("mapper/InventoryMapper", "ORDER BY expire_date"),),

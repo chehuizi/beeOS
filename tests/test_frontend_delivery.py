@@ -635,3 +635,50 @@ def test_web_base_is_derived_from_the_production_url():
     assert mod._web_base_from("http://127.0.0.1:8081/api/v1") == "/"
     assert mod._web_base_from("http://x.com/api/v1") == "/"
     assert mod._web_base_from("") == "/"
+
+
+def test_zone_evidence_requires_the_sidebar_menu_item():
+    """zone 的证据里必须有**侧边栏菜单项**那条
+
+    **为什么**：模型可能只注册路由、不加菜单项 →
+    页面上侧边栏找不到「库区管理」，而判据是绿的
+    （路由的 `meta.title` 里也有「库区管理」，把「有路由」误当成「菜单里有」）。
+
+    菜单数组和路由表**编译进同一个主 chunk**，产物层面分不出两者 →
+    这条只能归**开发盒的源码证据**管。
+    """
+    from boxes.wms_development.code_map import implementation_evidence
+
+    hints = {h for h, _tok, *_rest in implementation_evidence("zone")}
+    assert "web/src/layouts" in hints, \
+        f"zone 证据里没有侧边栏菜单那条：{sorted(hints)}"
+
+
+def test_sidebar_menu_evidence_rejects_missing_menu_item():
+    """**注入**：只有路由、没有菜单项 → 菜单那条判「没实现」"""
+    files = {
+        "web/src/router.ts": "const routes = [{ path: 'zone' }]\n",
+        "web/src/layouts/BasicLayout.vue": (
+            "const menuGroups = [\n"
+            "  { title: '主数据', items: [\n"
+            "    { path: '/warehouse', title: '仓库管理' },\n"
+            "    { path: '/location', title: '库位管理' },\n"
+            "  ] },\n"
+            "]\n"
+        ),
+    }
+    lacking = missing_evidence("zone", files, "\n".join(files.values()))
+    assert "web/src/layouts" in {h for h, _t in lacking}, \
+        f"没有菜单项却判成已实现：lacking={lacking}"
+
+    with_menu = dict(files)
+    with_menu["web/src/layouts/BasicLayout.vue"] = (
+        "const menuGroups = [\n"
+        "  { title: '主数据', items: [\n"
+        "    { path: '/zone', title: '库区管理' },\n"
+        "  ] },\n"
+        "]\n"
+    )
+    lacking = missing_evidence("zone", with_menu, "\n".join(with_menu.values()))
+    assert "web/src/layouts" not in {h for h, _t in lacking}, \
+        f"有菜单项还判没实现：lacking={lacking}"

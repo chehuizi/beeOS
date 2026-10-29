@@ -965,7 +965,12 @@ def _check_location_ownership(ctx: ProbeContext, facts: dict[str, Any]) -> Probe
 # **怎么机械判**：前端没有「调接口」这一步（页面在浏览器里跑，
 # 测试盒够不着浏览器），能判的是**构建产物里有没有那套页面**：
 # - 产物里有 `/zones` → 页面真的调了库区接口
-# - 产物里有「库区管理」或 'zone' 路由 → 页面真的注册进菜单/路由
+# - 产物里有「库区管理」或 'zone' 路由 → 页面真的注册进了路由
+#
+# **这条探针不判「侧边栏菜单项」**：菜单数组（BasicLayout.vue 的 menuGroups）
+# 和路由表**编译进同一个主 chunk**，产物层面分不出两者。
+# 菜单归**开发盒的源码证据**管（web/src/layouts 里的 '/zone'）——
+# 分层判，各判各能判的那层。
 #
 # **判的是「开发盒交付的那一份 dist」**，不是别处随便一份——
 # 跟后端「部署 jar 到验证实例再探」是同一个道理。
@@ -1053,8 +1058,8 @@ def _check_zone_frontend(ctx: ProbeContext, facts: dict[str, Any]) -> ProbeResul
         )
     if not has_title and not has_route:
         missing.append(
-            f"产物里找不到菜单标题「{ZONE_FRONTEND_TITLE}」，"
-            "也没有 'zone' 路由——页面没有注册进菜单/路由"
+            f"产物里找不到标题「{ZONE_FRONTEND_TITLE}」，"
+            "也没有 'zone' 路由——页面没有注册进路由"
             "（业务方在界面上找不到它）"
         )
     if missing:
@@ -1068,7 +1073,7 @@ def _check_zone_frontend(ctx: ProbeContext, facts: dict[str, Any]) -> ProbeResul
         OUTCOME_PASS,
         "前端产物里有库区管理页面"
         f"（{file_count} 个产物文件，页面调了 {ZONE_FRONTEND_API_MARK}，"
-        f"菜单/路由{'标题在' if has_title else '路由在'}）",
+        f"{'路由标题在' if has_title else 'zone 路由在'}）",
         details,
     )
 

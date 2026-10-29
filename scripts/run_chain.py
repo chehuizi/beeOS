@@ -250,8 +250,11 @@ def main() -> int:
                         help="WMS 源码仓路径（开发盒改代码、运维盒查回滚目标）")
     parser.add_argument("--alerts", default="",
                         help="生产告警（逗号分隔；每条都要有处置记录）")
-    parser.add_argument("--store", default="/tmp/beeos_chain_runs.jsonl",
-                        help="履约记录落盘位置")
+    parser.add_argument(
+        "--store",
+        default=str(REPO_ROOT / "logs" / "task_runs.jsonl"),
+        help="履约记录落盘位置（默认 = 看板读的那个 store）",
+    )
     parser.add_argument("--json", action="store_true", help="只输出 JSON")
     args = parser.parse_args()
 

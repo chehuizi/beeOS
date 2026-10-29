@@ -1602,7 +1602,9 @@ function renderRail(data) {{
       + '</div>';
     if (!t.ops || !t.ops.length) {{
       // **旧记录没有轨迹就说没有**——不拿别的数来凑。
-      html += '<div class="rail-empty">这条记录没有 op 轨迹（加落盘之前跑的）。</div>';
+      // 「加落盘之前跑的」+ 上面的日期：读者一眼能看出这是**哪一次**运行
+      // 没有轨迹，而不是「这只盒子没跑过」。
+      html += '<div class="rail-empty">这次运行没有 op 轨迹（加落盘之前跑的）。</div>';
     }} else {{
       html += '<div class="rail-ops">';
       for (const op of t.ops) {{
@@ -1628,8 +1630,17 @@ function renderRail(data) {{
 function fmtClock(iso) {{
   if (!iso) return '';
   const d = new Date(iso);
-  if (isNaN(d.getTime())) return String(iso).slice(11, 19);
-  return d.toLocaleTimeString();
+  if (isNaN(d.getTime())) return String(iso).slice(5, 16).replace('T', ' ');
+  const t = d.toLocaleTimeString();
+  // **不是今天的就显示日期**。
+  // 只显示时间的话，6 天前的那次运行会显示成「08:40:15」——
+  // 看着就像刚刚跑的，而这个面板答的恰恰是「**刚才**发生了什么」。
+  // 读的人（和看板自己）都会把它当成当前状态。
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) return t;
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return mm + '-' + dd + ' ' + t;
 }}
 
 // 轨迹面板每 2 秒跟着数据走，但**结构没变就不重建**：

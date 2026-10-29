@@ -1886,7 +1886,22 @@ class TestTheHeaderStaysAndTheTrailPanelSitsOnTheRight:
 
     def test_the_panel_says_so_when_there_is_no_trail(self):
         """旧记录没有轨迹 → 照实说没有，不拿别的数来凑"""
-        assert "这条记录没有 op 轨迹" in HTML_PAGE
+        assert "这次运行没有 op 轨迹" in HTML_PAGE
+
+    def test_the_panel_shows_the_date_for_anything_not_from_today(self):
+        """不是今天的运行必须带日期
+
+        只显示时间的话，6 天前那次会显示成「08:40:15」——
+        看着就像刚刚跑的，而这个面板答的恰恰是「**刚才**发生了什么」。
+        """
+        html = HTML_PAGE
+        assert "function fmtClock(iso)" in html
+        assert "toDateString() === now.toDateString()" in html, (
+            "fmtClock 必须判断是不是今天"
+        )
+        assert "mm + '-' + dd + ' ' + t" in html, (
+            "不是今天的必须显示 MM-DD"
+        )
 
     def test_the_rail_yields_to_the_single_box_layout(self):
         """单盒详情页是「一屏四栏」的密排布局，右栏放不下也不该抢位置"""

@@ -56,6 +56,7 @@ from boxes.wms_requirement.runner import RUNNER as CAPTURE_RUNNER
 from core import metrics as core_metrics
 from core.beeline_models import Beeline
 from core.models import BeeBoxDefinition, FieldDef, SchemaDef
+from core.beeline_models import Beeline
 from runtime import BeelineExecutor, create_task_run, evaluate_acceptance
 from runtime.contract import validate_payload
 from runtime.handoff import HandoffError, assemble_handoff
@@ -178,6 +179,40 @@ def box_maturity(box_id: str) -> str:
     if entry is None:
         return ""
     return entry[0]().result.maturity
+
+
+def declared_beeline_ops(box_id: str, beeline_id: str | None = None) -> list[str]:
+    """这只盒子声明的 op 链（按 beeline 声明的顺序）
+
+    **来源是盒子自己的 beeline，不是看板的一张表**。
+    op 链是「这只盒子应该跑哪几跳」的事实，住在盒子里；
+    看板读它，不拥有它——换掉看板这只盒子照样知道自己该跑哪几跳。
+
+    为什么要单独给一份「声明」：落盘的 op_trace 是**实际跑过什么**，
+    失败时会比声明短一截（停在 dev_code，后面的两跳没跑到）。
+    只给轨迹，读者会把「少了两跳」误读成「这只盒子只有两跳」。
+
+    `beeline_id` 是那一次运行用的 beeline——优先按它取，
+    因为一只盒子可能有多版 beeline，取错版本就说错了「应该跑几跳」。
+    """
+    entry = BOX_REGISTRY.get(box_id)
+    if entry is None:
+        return []
+    loaders: dict[str, Callable[[], Beeline]] = entry[1]
+    loader = None
+    if beeline_id and beeline_id in loaders:
+        loader = loaders[beeline_id]
+    elif len(loaders) == 1:
+        loader = next(iter(loaders.values()))
+    if loader is None:
+        return []
+    try:
+        beeline = loader()
+    except Exception:
+        # 声明读不出来就返回空——看板照实说「读不到声明」，
+        # 不用别处的版本凑一条「看起来对」的链。
+        return []
+    return [op.op_id for op in beeline.operations]
 
 
 def box_domains(box_ids: Iterable[str]) -> dict[str, list[str]]:

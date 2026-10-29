@@ -43,6 +43,7 @@ from kanban.trigger import (
     box_manifest,
     box_maturity,
     box_meta,
+    declared_beeline_ops,
     list_task_entries,
     order_boxes_by_flow,
     registered_box_ids,
@@ -199,6 +200,16 @@ def dashboard_data(store: TaskRunStore, box_filter: str | None = None) -> dict[s
             "acceptance_status": latest.get("acceptance_status"),
             "at": latest.get("created_at"),
             "ops": ops,
+            # 「这次应该跑几跳」——从盒子的 beeline 声明里读出来，
+            # 不从落盘的轨迹里反推（轨迹是**实际跑过什么**，
+            # 失败时会比声明短一截）。两者一起给，前端才能说清
+            # 「这次跑完了」还是「这次停在第 N 跳」。
+            "declared_ops": declared_beeline_ops(b, latest.get("beeline_id")),
+            # 「这次有没有轨迹」跟「这次跑了几跳」是两件事：
+            # 加落盘之前跑的记录压根没有轨迹字段；跑完的记录有轨迹。
+            # 前端据此决定**画不画**声明链——没轨迹时画一串灰色
+            # 「未执行」等于编造那次运行。
+            "has_trace": bool(ops),
         })
 
     return {
@@ -359,6 +370,18 @@ HTML_PAGE = f"""<!DOCTYPE html>
   .rail-op.ok .rail-op-status {{ color: #16a34a; }}
   .rail-op.bad .rail-op-status {{ color: #dc2626; }}
   .rail-op.wait .rail-op-status {{ color: #94a3b8; }}
+  /* 「声明了这一跳、这次没跑到」：灰掉，但**必须画出来**——
+     藏掉它，读者就会把「跑了两跳」当成「这只盒子只有两跳」。 */
+  .rail-op.skip {{ opacity: .55; }}
+  .rail-op.skip .rail-op-status {{ color: #94a3b8; }}
+  .rail-op.skip .rail-op-id {{ text-decoration: line-through; }}
+  .rail-op-tag {{
+    font-size: 9px; color: #94a3b8; border: 1px solid #e2e8f0;
+    border-radius: 4px; padding: 0 4px; flex: 0 0 auto;
+  }}
+  .rail-note {{
+    font-size: 10px; color: #b45309; margin-top: 2px;
+  }}
   .rail-op-err {{
     color: #b91c1c; font-size: 10px; overflow-wrap: anywhere;
   }}
@@ -1604,10 +1627,32 @@ function renderRail(data) {{
       // **旧记录没有轨迹就说没有**——不拿别的数来凑。
       // 「加落盘之前跑的」+ 上面的日期：读者一眼能看出这是**哪一次**运行
       // 没有轨迹，而不是「这只盒子没跑过」。
+      //
+      // 注意这里**不画声明的 op 链**：没有轨迹 ≠ 一跳没跑。
+      // 那条记录是「加落盘之前跑的」，我们压根不知道它跑过什么，
+      // 画一串灰色「未执行」等于**编造**它没跑。
       html += '<div class="rail-empty">这次运行没有 op 轨迹（加落盘之前跑的）。</div>';
     }} else {{
+      // **声明的链 + 实际跑的，两边一起画**。
+      // 只画跑过的：失败那次跑了两跳，读者会把「只跑了两跳」
+      // 误读成「这只盒子只有两跳」。
+      // 跑过但没跑到的跳，画成灰色「未执行」，并说明这次停在哪。
+      const ran = {{}};
+      for (const op of (t.ops || [])) ran[op.op_id] = op;
+      const declared = (t.declared_ops && t.declared_ops.length)
+        ? t.declared_ops : (t.ops || []).map(o => o.op_id);
+      const missing = declared.filter(id => !ran[id]);
       html += '<div class="rail-ops">';
-      for (const op of t.ops) {{
+      for (const opId of declared) {{
+        const op = ran[opId];
+        if (!op) {{
+          html += '<div class="rail-op skip">'
+            + '<span class="rail-op-status">○</span>'
+            + '<span class="rail-op-id">' + esc(opId) + '</span>'
+            + '<span class="rail-op-tag">未执行</span>'
+            + '</div>';
+          continue;
+        }}
         const st = op.status || 'pending';
         const cls = st === 'completed' ? 'ok' : (st === 'failed' ? 'bad' : 'wait');
         const mark = st === 'completed' ? '✓' : (st === 'failed' ? '✕' : '·');
@@ -1620,6 +1665,10 @@ function renderRail(data) {{
         }}
       }}
       html += '</div>';
+      if (missing.length) {{
+        html += '<div class="rail-note">这次有 ' + missing.length + ' 跳未执行：'
+          + esc(missing.join(' · ')) + '</div>';
+      }}
     }}
     html += '</div>';
   }}

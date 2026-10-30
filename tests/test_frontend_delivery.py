@@ -1032,3 +1032,26 @@ def test_migration_note_absent_when_migration_is_not_in_scope():
     from boxes.wms_development.codegen import migration_note_for
 
     assert migration_note_for(["entity/Zone", "module/zone"], {}) == ""
+
+
+def test_migration_note_lists_existing_migrations_and_pins_the_version():
+    """提示里要**列出仓里已有的迁移**，并把版本号写死
+
+    **为什么**（2026-10-30 实测）：模型看不见全貌就会自己挑版本号——
+    它挑了已被占用的 V5，撞版本号 → 反复改名 → 25 轮打转。
+    把确切清单和「版本号就是 N」给它，它没有挑的余地。
+    """
+    from boxes.wms_development.codegen import migration_note_for
+
+    note = migration_note_for(
+        ["db/migration"],
+        {
+            "server/src/main/resources/db/migration/V1__init_schema.sql": "x",
+            "server/src/main/resources/db/migration/V5__create_zone_table.sql": "x",
+        },
+    )
+
+    assert "V1__init_schema.sql" in note, f"没列出已有的迁移：{note}"
+    assert "V5__create_zone_table.sql" in note, f"没列出已有的迁移：{note}"
+    assert "V6__" in note, f"没给出下一个版本号：{note}"
+    assert "不许自己另选" in note, f"没说版本号不能自己选：{note}"

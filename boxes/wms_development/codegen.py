@@ -476,20 +476,34 @@ def migration_note_for(locations: list[str], files: dict[str, str]) -> str:
     if not any(str(loc).startswith("db/migration") for loc in locations):
         return ""
     version = next_migration_version(files)
+    # **仓里已有的迁移文件名，一个不漏地列出来**——
+    # 模型看不见全貌就会自己挑一个版本号（实测挑了已被占用的 V5，
+    # 撞版本号 → 反复改名 → 25 轮打转）。
+    existing = sorted(
+        Path(rel).name for rel in files
+        if "db/migration/" in rel and rel.endswith(".sql")
+    )
+    existing_text = (
+        "\n".join(f"  - {name}" for name in existing)
+        if existing else "  （仓里还没有迁移文件）"
+    )
     return (
-        "\n**迁移**（这次的落点里有 `db/migration`，所以下面这条跟你有关）：\n"
-        "- 仓里**已经有**的迁移（V1…V%d 那些）**一个都不许动**——\n"
-        "  它们已经被应用过，Flyway 会比对每个迁移的 checksum，\n"
-        "  改了内容就是 checksum mismatch，**服务启动时直接拒绝**。\n"
-        "- 你要加的表、列、**种子数据**，全部写进一个**全新的迁移文件**：\n"
-        f"  `server/src/main/resources/db/migration/V{version}__<描述>.sql`\n"
-        "  （描述部分自己起名，例如 `seed_zone`、`add_zone_index`）。\n"
-        "- **新建文件的写法**：`edits` 里 `file` 写这个新路径、\n"
-        "  **`old` 留空字符串**、`new` 写这个文件的完整 SQL 内容。\n"
-        "  `old` 留空 = 这个文件此刻还不存在 → 新建。\n"
-        "- **别去改那个「看起来该改」的迁移**"
-        "（比如建库区表的那个）：它已经发布过了。\n"
-    ) % (version - 1)
+        "\n**迁移**（这次的落点里有 `db/migration`，所以下面这段跟你有关）：\n"
+        "\n仓里**已经有**的迁移（**这些都已经发布过，一个都不许动**——\n"
+        "Flyway 比对每个迁移的 checksum，改了内容就是 checksum mismatch，\n"
+        "**服务启动时直接拒绝**）：\n"
+        f"{existing_text}\n"
+        "\n你要加的表、列、**种子数据**，写进一个**全新的迁移文件**：\n"
+        f"`server/src/main/resources/db/migration/V{version}__<描述>.sql`\n"
+        f"**版本号就是 {version}，不许自己另选**（上面每一个版本号都被占了，\n"
+        "Flyway 遇到重复版本会直接拒绝启动）。描述部分自己起名，\n"
+        "例如 `seed_zone`、`add_zone_index`。\n"
+        "\n**新建文件的写法**：`edits` 里 `file` 写这个新路径、\n"
+        "**`old` 留空字符串**、`new` 写这个文件的完整 SQL 内容。\n"
+        "`old` 留空 = 这个文件此刻还不存在 → 新建。\n"
+        "\n**别去改那个「看起来该改」的迁移**（比如建库区表的那个）：\n"
+        "它已经发布过了，改了就是 checksum mismatch。\n"
+    )
 
 
 def build_prompt(expectations: list[dict[str, Any]], locations: list[str],

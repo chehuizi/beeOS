@@ -261,11 +261,16 @@ def check_migration_filenames(
     seen: dict[int, list[str]] = {}
     for rel, ver in versions.items():
         seen.setdefault(ver, []).append(rel)
+    top_all = max(versions.values()) if versions else 0
     for ver, rels in sorted(seen.items()):
         if len(rels) > 1:
+            # **说清楚该用哪个版本号**——只说「重复」的话，
+            # 模型会反复挑同一个被占用的号（实测挑了 V5，改了又撞，25 轮打转）。
             problems.append(
                 f"迁移版本号 V{ver} 重复（{'、'.join(sorted(rels))}）——"
-                "Flyway 遇到重复版本会直接拒绝启动"
+                "Flyway 遇到重复版本会直接拒绝启动。"
+                f"**改成 V{max(top_all + 1, ver + 1)}__<描述>.sql**"
+                "（版本号必须比仓里已有的最大版本号大）"
             )
 
     # 版本号必须比「本次没改的那些」的最大版本号大

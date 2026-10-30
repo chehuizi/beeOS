@@ -59,6 +59,7 @@ from boxes.wms_development.codegen import (
     collect_all_sources,
     collect_context,
     collect_tree,
+    migration_note_for,
     commit_changes,
     generate_edits,
     prepare_workspace,
@@ -381,6 +382,9 @@ def dev_code_handler(input_data: dict[str, Any]) -> dict[str, Any]:
         # **路径清单**：模型得知道仓里的布局，
         # 否则它会把实体写到 module/location/Location.java（实际在 entity/ 下）
         tree=collect_tree(ws),
+        # **迁移的具体指引**（这次涉及迁移时才有）：
+        # 模型不知道「新建迁移」长什么样 → 会一直去改已发布的那个。
+        migration_note=migration_note_for(locations, files),
     )
     dirty = changed_files(ws)
     commit_sha: str | None = None

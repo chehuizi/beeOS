@@ -373,7 +373,7 @@ _CODE_PROMPT = """你在一个 Java（Spring Boot + MyBatis）仓储管理系统
 **这些 WMS 概念在代码里的落点**（这是本仓的事实，不是你的猜测）：
 
 {locations}
-
+{migration_note}
 **相关源码**：
 
 {files}
@@ -412,14 +412,9 @@ _CODE_PROMPT = """你在一个 Java（Spring Boot + MyBatis）仓储管理系统
 9. **全部写完了就交白卷**：edits 给空数组。机械层会跑完整核对
    （实现证据 / 编译 / SQL 绑定 / 迁移覆盖），
    不通过的话它会把问题原样回给你，你再改。
-10. **迁移脚本只能新建，不能改**：
-    - 新建的文件名必须是 `V{migration_version}__<描述>.sql`
-      （版本号见上；**不许跟仓里已有的版本号重复或更小**——
-      Flyway 遇到重复/倒序的版本会在启动时直接拒绝，服务起不来）。
-    - **绝对不许改仓里已有的迁移**（V1、V2… 那些）：
-      Flyway 会比对每个迁移的 checksum，改了内容就是 checksum mismatch，
-      **服务启动时直接拒绝**。
-      要加表、加列、**加种子数据**，都是**新建一个新版本的迁移**。
+10. **迁移脚本只能新建，不能改**（详见上面「迁移」那段）：
+    新建的文件名必须是 `V{migration_version}__<描述>.sql`，
+    **绝对不许改仓里已有的任何迁移**。
     建表迁移**只建你这一个模块要的表**，别把别的模块的表也搬进去。
 11. **实体类放 `server/src/main/java/com/wms/entity/`**（跟仓里其他实体一致），
     **不要在业务模块目录里另建一份**。
@@ -460,12 +455,50 @@ old 留空字符串**只**用于真正的新建文件（那个文件此刻还不
 直接输出这段 JSON。"""
 
 
+def migration_note_for(locations: list[str], files: dict[str, str]) -> str:
+    """这次涉及迁移时，给模型的一段**具体指引**
+
+    **为什么要单独给一段**（2026-10-30 实测撞出来的）：
+    契约里写「库位已用的库区要在库区管理里存在」时，
+    模型理解成「在种子迁移里加上」——它从第 6 轮起一直想**改/重建**
+    V5（zone 表那个迁移），被「文件已存在」「已发布不许改」拦了 25 轮，
+    **从没试过新建一个迁移**。
+
+    根因：**它不知道「新建」长什么样**。
+    规则里写「迁移只能新建不能改」它读到了，
+    但规则 8 又说「按实体 → Mapper → Mapper XML → **建表迁移** → Service
+    → Controller 的顺序」，它就以为该动**已有的那个建表迁移**。
+
+    修法：**把下一步写具体**——哪个目录、什么文件名、edits 里怎么写
+    （file 写新路径 / old 留空 / new 写完整内容）。
+    「报错和提示都要带能修它的材料」，这里同理。
+    """
+    if not any(str(loc).startswith("db/migration") for loc in locations):
+        return ""
+    version = next_migration_version(files)
+    return (
+        "\n**迁移**（这次的落点里有 `db/migration`，所以下面这条跟你有关）：\n"
+        "- 仓里**已经有**的迁移（V1…V%d 那些）**一个都不许动**——\n"
+        "  它们已经被应用过，Flyway 会比对每个迁移的 checksum，\n"
+        "  改了内容就是 checksum mismatch，**服务启动时直接拒绝**。\n"
+        "- 你要加的表、列、**种子数据**，全部写进一个**全新的迁移文件**：\n"
+        f"  `server/src/main/resources/db/migration/V{version}__<描述>.sql`\n"
+        "  （描述部分自己起名，例如 `seed_zone`、`add_zone_index`）。\n"
+        "- **新建文件的写法**：`edits` 里 `file` 写这个新路径、\n"
+        "  **`old` 留空字符串**、`new` 写这个文件的完整 SQL 内容。\n"
+        "  `old` 留空 = 这个文件此刻还不存在 → 新建。\n"
+        "- **别去改那个「看起来该改」的迁移**"
+        "（比如建库区表的那个）：它已经发布过了。\n"
+    ) % (version - 1)
+
+
 def build_prompt(expectations: list[dict[str, Any]], locations: list[str],
                  files: dict[str, str], feedback: str = "",
                  concepts: Optional[list[str]] = None,
                  must_implement: Optional[list[tuple[str, str]]] = None,
                  done_files: Optional[list[str]] = None,
                  tree: Optional[list[str]] = None,
+                 migration_note: str = "",
                  ) -> str:
     """把期望 + 落点 + 源码拼成 prompt"""
     exp_lines = []
@@ -516,6 +549,7 @@ def build_prompt(expectations: list[dict[str, Any]], locations: list[str],
         # 实测起过 V1__create_wms_core_tables.sql，
         # 而仓里已经有 V1~V4，版本号撞了 Flyway 启动时直接拒绝。
         migration_version=next_migration_version(files),
+        migration_note=migration_note,
     )
 
 

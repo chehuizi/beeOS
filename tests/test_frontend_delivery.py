@@ -995,3 +995,40 @@ def test_new_migration_with_next_version_is_accepted(tmp_path):
     )
 
     assert not problems, f"新建 V6 被判红：{problems}"
+
+
+# ============================================================
+# 14) 迁移指引要具体（模型不知道「新建」长什么样）
+# ============================================================
+
+def test_migration_note_names_the_exact_new_file():
+    """涉及迁移时，提示里要有**具体的新文件名**和**edits 怎么写**
+
+    **为什么**（2026-10-30 实测）：模型从第 6 轮起一直想改/重建
+    已发布的 V5（zone 表那个迁移），被拦了 25 轮，**从没试过新建**——
+    它不知道「新建」长什么样。规则里写「迁移只能新建不能改」它读到了，
+    可另一条规则又让它按「建表迁移」的顺序去动已有的那个。
+
+    修法：**把下一步写具体**——哪个目录、什么文件名、
+    edits 里 file 写什么 / old 留空 / new 写什么。
+    """
+    from boxes.wms_development.codegen import migration_note_for
+
+    note = migration_note_for(
+        ["db/migration", "entity/Zone"],
+        {"server/src/main/resources/db/migration/V5__create_zone_table.sql": "SELECT 1"},
+    )
+
+    assert "V6__" in note, f"没给出下一个版本号：{note}"
+    assert "db/migration/V6__" in note, f"没给出新文件路径：{note}"
+    assert "old` 留空" in note or "old` 留空字符串" in note, \
+        f"没说清新建文件怎么写：{note}"
+    assert "不许动" in note or "一个都不许动" in note, \
+        f"没说清不能改已发布的：{note}"
+
+
+def test_migration_note_absent_when_migration_is_not_in_scope():
+    """不涉及迁移时不要加这段（别给无关的话）"""
+    from boxes.wms_development.codegen import migration_note_for
+
+    assert migration_note_for(["entity/Zone", "module/zone"], {}) == ""

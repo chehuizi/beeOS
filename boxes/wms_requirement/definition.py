@@ -80,6 +80,13 @@ WMS_REQUIREMENT_BOX = BeeBoxDefinition(
             # 自由文本投料（/api/structure）根本没有 set_id，
             # 把它设成必填会把那条路堵死。
             # 归档按需求集分组时，需求盒这一次履约靠「产出的 set_id」认领。
+            #
+            # **这句话以前只是愿望**：机制没实现，运行时只从投料里抽标识，
+            # 于是需求盒的记录 subject_ref 是空的——它造出来的需求集
+            # 在归档里没有「谁造的」这一条，看板上那条需求任务少了一只盒子。
+            # 现在这条声明**真的生效**了：执行完从产出里取 set_id 认领。
+            subject_ref_from_result="set_id",
+            subject_kind="requirement",
             # **全注册表里唯一吃业务自然语言的盒子**（直到下一只盒子
             # 也需要接人话为止）。显式声明，不靠投料 schema 的形状推：
             # 详见 core.models.TaskDef.accepts_free_text。

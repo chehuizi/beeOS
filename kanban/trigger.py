@@ -829,6 +829,8 @@ def trigger_task(
     store: TaskRunStore,
     originator: str = "kanban.web",
     handoff: Optional[dict[str, str]] = None,
+    chain_ref: Optional[str] = None,
+    chain_kind: Optional[str] = None,
 ) -> dict[str, Any]:
     """触发 1 次履约：校验 → 执行 → 验收 → 落盘
 
@@ -840,6 +842,8 @@ def trigger_task(
         originator: 触发源标识
         handoff: {投料字段名: 上游 task_run_id}——把上游盒子的产出接到
             投料的 `ref:` 字段上（盒间接力）。见 runtime/handoff.py。
+        chain_ref / chain_kind: 这次履约**属于哪条链**（哪件活儿）。
+            只有编排者知道哪几跳是一条链——盒子自己不知道。
 
     Returns:
         {task_run_id, box_id, task_type, status, acceptance_status, result}
@@ -969,16 +973,20 @@ def trigger_task(
             )
         subject_ref = raw.strip()
 
-        # 业务对象的**种类**同样由盒子声明。
-        # 不声明就等于让运行时猜——猜错了没人会发现（归档里两类记录混在一起，
-        # 看板上还是「一切正常」）。
-        if not task.subject_kind:
-            raise TriggerError(
-                f"box {box_id!r} task {task_type!r} 声明了 "
-                f"subject_ref_field={task.subject_ref_field!r}，"
-                f"却没声明 subject_kind——「它关于哪一类业务对象」不能靠猜"
-            )
-        subject_kind = task.subject_kind
+    # 业务对象的**种类**同样由盒子声明。
+    # 不声明就等于让运行时猜——猜错了没人会发现（归档里两类记录混在一起，
+    # 看板上还是「一切正常」）。
+    #
+    # 「标识从产出里取」的盒子（需求盒造出需求集）也要声明 kind：
+    # 产出里的那个键说的是哪一类业务对象，盒子说了算。
+    if (task.subject_ref_field or task.subject_ref_from_result) and not task.subject_kind:
+        raise TriggerError(
+            f"box {box_id!r} task {task_type!r} 声明了 "
+            f"subject_ref_field={task.subject_ref_field!r} / "
+            f"subject_ref_from_result={task.subject_ref_from_result!r}，"
+            f"却没声明 subject_kind——「它关于哪一类业务对象」不能靠猜"
+        )
+    subject_kind = task.subject_kind
 
     task_run = create_task_run(
         originator=originator,
@@ -991,6 +999,8 @@ def trigger_task(
         instance_id="instance_kanban",
         subject_ref=subject_ref,
         subject_kind=subject_kind,
+        chain_ref=chain_ref,
+        chain_kind=chain_kind,
     )
     runner = RUNNER_REGISTRY.get(box_id)
     if runner is None:
@@ -1000,6 +1010,44 @@ def trigger_task(
             "(boxes/<box>/runner.py) so it stays self-contained"
         )
     task_run = BeelineExecutor(runner).execute(task_run, beeline, payload)
+
+    # ===== 产出认领：业务对象标识**从产出里**取 =====
+    #
+    # 有些盒子**产生**业务对象（需求盒产出需求集），它的 id 是这次履约的
+    # **结果**，投料里根本没有（自由文本投料连字段都不存在）。
+    #
+    # 这种盒子的记录原本 subject_ref 是空的 → 它**造出来**的工作单元在归档里
+    # 没有「谁造的」这一条：看板上那条需求任务就少了一只盒子。
+    # （需求盒的 definition 里早就写着「靠产出的 set_id 认领」，
+    #  但机制没实现——**声明了却拿不到**。）
+    #
+    # 所以这里在**执行之后、落盘之前**补上：
+    # - 声明了就必须产出：产出里没这个键 → 拒绝这次履约，
+    #   不静默降级成空（空 = 这条记录凭空消失）；
+    # - 补的是 identity，不是事后另贴的标签：它在**写记录之前**就定下来了。
+    claim_error: Optional[TriggerError] = None
+    if task.subject_ref_from_result and task_run.identity.subject_ref is None:
+        produced = task_run.result if isinstance(task_run.result, dict) else {}
+        value = produced.get(task.subject_ref_from_result)
+        if task_run.status != TaskRunStatus.COMPLETED:
+            # **失败的履约没有产出**，也就没有可认领的工作单元：
+            # 不认领，也**不报错**——这次失败的原因由 record 自己记着
+            # （LLM 不可用 → 履约中止，报的应该是那个理由，
+            #  而不是「产出里没有 set_id」这种不相干的错）。
+            pass
+        elif not isinstance(value, str) or not value.strip():
+            # 跑完了却没产出声明的那个键 = **契约被破了**。
+            # 错误**延后到落盘之后再抛**：先抛的话这次履约的记录
+            # 就凭空消失了——而「记录消失」正是这条机制要防的那族病。
+            claim_error = TriggerError(
+                f"box {box_id!r} task {task_type!r} 声明了 "
+                f"subject_ref_from_result={task.subject_ref_from_result!r}，"
+                f"但产出里没有这个键（或不是 id 字符串）——"
+                f"这次履约在归档里就归不到它自己造出来的那个工作单元。"
+                f"Got: {value!r}"
+            )
+        else:
+            task_run.identity.subject_ref = value.strip()
 
     acceptance_status = None
     rejection_class = None
@@ -1054,10 +1102,19 @@ def trigger_task(
         observed=observed,
     )
 
+    # 契约破了也要**先落盘再报错**——记录不许凭空消失。
+    if claim_error is not None:
+        raise claim_error
+
     return {
         "task_run_id": task_run.identity.task_run_id,
         "box_id": box_id,
         "task_type": task_type,
+        # 这次履约**关于哪个业务对象**（哪种、哪个号）。
+        # 编排者拿它来认领「这条链」——链的身份就是链上第一跳认领的那个对象，
+        # 不由编排者自己编一个 kind（编了就等于在编排层声明业务事实）。
+        "subject_ref": task_run.identity.subject_ref,
+        "subject_kind": task_run.identity.subject_kind,
         "status": task_run.status.value,
         "acceptance_status": acceptance_status,
         "acceptance_detail": acceptance_detail,

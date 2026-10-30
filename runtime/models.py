@@ -191,6 +191,25 @@ class TaskRunIdentity(BaseModel):
     # 同样是创建瞬间固化的：跟「这次履约关于谁」是同一个事实。
     subject_kind: Optional[str] = None
 
+    # 这次履约**属于哪件活儿**（哪条链）。
+    #
+    # **跟 subject_ref 的区别**：subject_ref 说「这次履约处理的业务对象是谁」
+    # （运维盒处理的是运维事件 ops_xxx）；chain_ref 说「这次履约是哪条链上的一跳」
+    # （那条链是响应需求 req_set_yyy 的上线处置）。
+    #
+    # **为什么两个都要**：一条需求要走完 6 只盒子，其中运维那一跳处理的是
+    # **另一个**业务对象（运维事件）。只留 subject_ref，这条链在归档里
+    # 就断成两件互不相干的活儿——看板上「库区需求」那条任务只剩 4 只盒子，
+    # 运维那次跑挂在另一个任务下，看着像两件不相干的事。
+    #
+    # **由编排方声明**（链脚本知道哪几跳是一条链），不是盒子自己知道：
+    # 一只盒子不知道全链。
+    chain_ref: Optional[str] = None
+
+    # 这条链是关于哪一类业务对象的（requirement …）。
+    # 跟 subject_kind 一样：**不能靠猜**。
+    chain_kind: Optional[str] = None
+
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
@@ -289,6 +308,8 @@ def create_task_run(
     instance_id: str,
     subject_ref: Optional[str] = None,
     subject_kind: Optional[str] = None,
+    chain_ref: Optional[str] = None,
+    chain_kind: Optional[str] = None,
 ) -> TaskRun:
     """工厂函数：创建一个 task run（status=triggered）"""
     identity = TaskRunIdentity(
@@ -302,5 +323,7 @@ def create_task_run(
         instance_id=instance_id,
         subject_ref=subject_ref,
         subject_kind=subject_kind,
+        chain_ref=chain_ref,
+        chain_kind=chain_kind,
     )
     return TaskRun(identity=identity)

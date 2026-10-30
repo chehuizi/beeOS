@@ -142,6 +142,9 @@ def task_run_to_record(
         # 业务对象标识：归档按它把履约归到工作单元（需求 / 运维任务）。
         # 索引字段——它在 payload 里刨不出来，所以必须是记录的一等公民。
         "subject_ref": task_run.identity.subject_ref,
+        # 这条链的标识（哪条链上的一跳）。链的编排方声明，盒子自己不知道。
+        "chain_ref": task_run.identity.chain_ref,
+        "chain_kind": task_run.identity.chain_kind,
         # 业务对象的种类：只有 ref 不够——需求号和运维事件号可能撞号，
         # 撞了分不出「这条需求的一次运维」和「一个运维事件」。
         "subject_kind": task_run.identity.subject_kind,

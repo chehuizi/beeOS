@@ -154,6 +154,29 @@ class TaskDef(BaseModel):
         ),
     )
 
+    # 业务对象标识取自**产出**里的哪个键。
+    #
+    # **为什么要有这个**：有些盒子**产生**业务对象（需求盒产出需求集），
+    # 而不是消费它——它的 id 是这次履约的**结果**，投料里根本没有
+    # （自由文本投料连字段名都不存在）。
+    #
+    # 于是这类盒子的履约记录归不到任何工作单元：工作单元是它**造出来**的，
+    # 记录却不属于它。看板上就少了一只盒子——「需求集是需求盒产出的，
+    # 可需求盒不在这个需求集的任务里」。这不是显示问题，是**归属丢了**。
+    #
+    # 之前需求盒的 definition 里就写着「靠产出的 set_id 认领」，
+    # 但机制没实现——**声明了却拿不到**，所以那条记录 subject_ref 是空的。
+    #
+    # 声明了就必须真的产出：产出里没这个键 → 拒绝这次履约，
+    # 不静默降级成空（那等于这条记录凭空消失）。
+    subject_ref_from_result: Optional[str] = Field(
+        default=None,
+        description=(
+            "产出（result）里哪个键是这只盒子**产生**的业务对象标识。"
+            "留空表示业务对象标识不从产出里取"
+        ),
+    )
+
     # 标识藏在**对象里面**时，从对象的哪个键取。
     #
     # **为什么要有这个**：`ref:` 类型的字段装的是**整份对象**（上游盒子的产出），
@@ -194,6 +217,17 @@ class TaskDef(BaseModel):
             "不声明就等于让运行时去猜"
         ),
     )
+
+    # 上面那条约束也适用于 subject_ref_from_result：
+    # 「它关于哪一类业务对象」不能靠猜——产出里那个键的种类由盒子说了算。
+    @model_validator(mode="after")
+    def _subject_kind_required(self) -> "TaskDef":
+        if (self.subject_ref_field or self.subject_ref_from_result) and not self.subject_kind:
+            raise ValueError(
+                "声明了 subject_ref_field / subject_ref_from_result 就必须声明 "
+                "subject_kind——「它关于哪一类业务对象」不能靠猜"
+            )
+        return self
 
 
 class AcceptanceRule(BaseModel):

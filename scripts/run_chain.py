@@ -377,13 +377,30 @@ def main() -> int:
     store = TaskRunStore(args.store)
 
     # ---- 1) 需求盒 ----
+    # 需求盒这一跳是链的**起点**：它造出需求集，需求集号就是这条链的身份。
+    # chain_ref 传不了（触发时还不知道 set_id）——它在执行完之后从产出里认领
+    # （subject_ref_from_result），而链身份由下面的 chain_ref/chains 补上。
     cap = trigger_task("wms_requirement_box", "capture_business_requirement",
                        {"narrative": narrative}, store)
     pkg = cap["result"]
 
+    # **这条链的身份**：需求集号 + 它的种类。
+    # 链上的每一跳都归到它下面——**编排者才知道哪几跳是一条链**，
+    # 盒子自己不知道（运维盒那一跳处理的业务对象是运维事件，不是需求集；
+    # 但它确实是这条链上的一跳）。
+    #
+    # 不记这个的话，这条链在归档里就断成两件互不相干的活儿：
+    # 看板上「库区需求」那条任务只剩 4 只盒子，运维那次跑挂在另一个任务下，
+    # 看着像两件不相干的事——而它们明明是同一件活儿的前后半段。
+    chain_ref = pkg.get("set_id")
+    # 链的种类用**需求盒自己声明的**（subject_kind），不在编排层另编一个：
+    # 编了就等于在脚本里声明业务事实。
+    chain_kind = cap.get("subject_kind") or "requirement"
+
     # ---- 2) 设计盒（需求集**接力**过来）----
     design = trigger_task("wms_design_box", "handle_modeling_request", {}, store,
-                          handoff={"requirement_set_ref": cap["task_run_id"]})
+                          handoff={"requirement_set_ref": cap["task_run_id"]},
+                          chain_ref=chain_ref, chain_kind=chain_kind)
     expectations = design["result"].get("expectations", [])
 
     # ---- 3) 开发盒（真腿：隔离工作区 → 改代码 → 编译 → 制品）----
@@ -395,7 +412,8 @@ def main() -> int:
         "dev_task_id": f"dev_{cap['task_run_id'][:8]}",
         "commit_range": commit_range,
         "target_env": "verification",
-    }, store, handoff={"design_package_ref": design["task_run_id"]})
+    }, store, handoff={"design_package_ref": design["task_run_id"]},
+        chain_ref=chain_ref, chain_kind=chain_kind)
     dev_result = dev.get("result") or {}
 
     # ---- 3.5) 把开发盒交付的那份构建部署到验证实例 ----
@@ -417,7 +435,7 @@ def main() -> int:
         "requirement_ref": cap["task_run_id"],
         "expectation_ref": design["task_run_id"],
         "artifact_ref": dev["task_run_id"],
-    })
+    }, chain_ref=chain_ref, chain_kind=chain_kind)
 
     # ---- 5) 运维盒（真读生产 + 真核对上游）----
     commit_sha = str(dev_result.get("commit_sha") or "")
@@ -437,7 +455,7 @@ def main() -> int:
     }, store, handoff={
         "verification_ref": test["task_run_id"],
         "artifact_ref": dev["task_run_id"],
-    })
+    }, chain_ref=chain_ref, chain_kind=chain_kind)
     ops_result = ops.get("result") or {}
 
     # ---- 6) 分析盒（观测接力：运维盒合并后的那一份）----
@@ -446,7 +464,8 @@ def main() -> int:
         "requirement_ref": pkg["set_id"],
         "expected_metrics": expectations,
         "observed_window": "now",
-    }, store, handoff={"observation_ref": ops["task_run_id"]})
+    }, store, handoff={"observation_ref": ops["task_run_id"]},
+        chain_ref=chain_ref, chain_kind=chain_kind)
     ares = analysis.get("result") or {}
 
     payload = {

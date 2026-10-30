@@ -114,7 +114,20 @@ def _collect_tasks(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ref = r.get("subject_ref")
         if not ref:
             continue
-        groups.setdefault((r.get("subject_kind") or "", str(ref)), []).append(r)
+        # **链上的记录按链归组**，其余按业务对象归组。
+        #
+        # 链上那一跳（运维）处理的业务对象是**运维事件**，不是需求集——
+        # 它挂在自己的事件号上。于是「一条需求走完 6 只盒子」在归档里
+        # 断成两件活儿：需求集那条少了运维那一跳，运维事件那条只有一只盒子。
+        # 看着像两件不相干的事，而它们明明是同一件活儿的前后半段。
+        #
+        # 链的身份（chain_ref/chain_kind）由**编排者**声明——只有它知道
+        # 哪几跳是一条链。
+        if r.get("chain_ref"):
+            key = (r.get("chain_kind") or "", str(r["chain_ref"]))
+        else:
+            key = (r.get("subject_kind") or "", str(ref))
+        groups.setdefault(key, []).append(r)
 
     tasks: list[dict[str, Any]] = []
     for (kind, ref), recs in groups.items():

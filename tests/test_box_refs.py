@@ -493,6 +493,14 @@ class TestOneRequirementWalksTheChain:
         req_run = store.get_run(req["task_run_id"])
         set_id = req_run["artifact"]["set_id"]
         assert set_id, "需求盒的产出里没有 set_id"
+        # **需求盒自己认领它造出来的需求集**——它就是这条工作项的来处。
+        # （以前这条记录的 subject_ref 是空的：工作单元是它造出来的，
+        #  记录却不属于它 → 看板上那条需求任务少了一只盒子。）
+        assert req_run["subject_ref"] == set_id, (
+            f"需求盒的 subject_ref 是 {req_run['subject_ref']!r}，"
+            f"应该是它自己产出的需求集 {set_id!r}"
+        )
+        assert req_run["subject_kind"] == "requirement"
 
         # 2) 设计盒：需求集**靠 handoff 接进来**（走 ref: 通道）
         design = trigger_task(
@@ -525,9 +533,10 @@ class TestOneRequirementWalksTheChain:
         )
         assert dev_run["subject_kind"] == "requirement"
 
-        # 三只盒子里，设计和开发认的是同一条需求
-        assert design_run["subject_kind"] == dev_run["subject_kind"] == "requirement"
-        assert len(store.list_by_subject(set_id, subject_kind="requirement")) == 2
+        # **三只盒子**认的是同一条需求：需求盒（造出它）+ 设计 + 开发
+        assert req_run["subject_kind"] == design_run["subject_kind"] \
+            == dev_run["subject_kind"] == "requirement"
+        assert len(store.list_by_subject(set_id, subject_kind="requirement")) == 3
 
     def test_the_development_box_cannot_yet_hand_off_to_testing(self, tmp_path):
         """开发盒的腿还没实现 → 它的产出不是制品 → 接给测试盒要被拒

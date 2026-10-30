@@ -28,6 +28,7 @@ complete_json 带采样，重放出来的是另一个产出。落盘这一份，
 from __future__ import annotations
 
 import json
+import os
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -175,21 +176,74 @@ class TaskRunStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._cache: list[dict[str, Any]] = []
+        #: 读到坏行计数（**不是静默吞掉**）
+        self.corrupt_lines = 0
+        #: 上次同步时文件的大小/行数（用来判断要不要重读）
+        self._loaded_size = 0
+        self._loaded_lines = 0
         self._load()
 
     def _load(self) -> None:
-        """启动时从文件加载"""
-        if not self.path.exists():
-            return
-        with self.path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    self._cache.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
+        """从文件加载（**全量**）
+
+        **原子替换**：先读进新列表，最后一次性换掉 `self._cache`。
+        读的过程中别的线程看到的仍是**旧的完整列表**——
+        边读边 clear 的话，会有人读到半成品（看板列表突然空一下）。
+        """
+        new_cache: list[dict[str, Any]] = []
+        corrupt = 0
+        loaded_lines = 0
+        size = 0
+        if self.path.exists():
+            with self.path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    loaded_lines += 1
+                    try:
+                        new_cache.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        # **坏行要计数，不能静默吞掉**——
+                        # 静默吞掉的代价是「少了一条记录，没人知道」。
+                        corrupt += 1
+                        continue
+            try:
+                size = self.path.stat().st_size
+            except OSError:
+                size = 0
+        self._cache = new_cache
+        self.corrupt_lines = corrupt
+        self._loaded_size = size
+        self._loaded_lines = loaded_lines
+
+    def refresh(self) -> int:
+        """把外部写入的记录同步进内存（**返回新增条数**）
+
+        **为什么需要它**（2026-10-30 调研实测）：
+        store 在**构造时**全量载入一次，之后只读内存缓存。
+        于是：
+        - 看板服务常驻 → 它的缓存停在启动那一刻，
+          别的进程（链脚本）新写的记录它**看不见**；
+        - 反过来，web 侧 `get_run` 找不到链脚本写的上游 run
+          → 报「上游履约找不到」这种**假失败**。
+
+        **症状看起来像「同步没成功」**，其实只是进程缓存过期。
+        （这条已踩过一次：改了 jsonl 不重启服务 → 看板还是旧的。）
+
+        **怎么判要不要重读**：看文件大小有没有变。
+        变了就重读——这个文件是「一次追加一行」的形态，
+        全量重读代价可以接受（几千行以内毫秒级）。
+        """
+        try:
+            size = self.path.stat().st_size
+        except OSError:
+            return 0
+        if size == self._loaded_size:
+            return 0
+        before = len(self._cache)
+        self._load()
+        return len(self._cache) - before
 
     def append(
         self,
@@ -204,12 +258,28 @@ class TaskRunStore:
             task_run, box_id, acceptance_status, rejection_class, observed
         )
         self._cache.append(record)
+        # **一次 write 写完整行 + flush + fsync**：
+        # - 一次 write：避免分多次 write 时并发写把行交错（JSONL 损坏）
+        # - flush + fsync：模块头承诺「写时同步落盘（保证持久性）」，
+        #   光 close() 只是交给页缓存，断电就丢最近若干条——
+        #   **承诺必须兑现**，否则维护者会误判可靠性。
+        line = json.dumps(record, ensure_ascii=False) + "\n"
         with self.path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            f.write(line)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            self._loaded_size = self.path.stat().st_size
+        except OSError:
+            pass
         return record
 
     def list_recent(self, limit: int = 20, box_id: Optional[str] = None) -> list[dict[str, Any]]:
-        """最近的 task run（倒序）"""
+        """最近的 task run（倒序）
+
+        **先 refresh**：别的进程写的记录要看得见（见 refresh 的说明）。
+        """
+        self.refresh()
         records = self._cache
         if box_id is not None:
             records = [r for r in records if r["box_id"] == box_id]
@@ -223,6 +293,7 @@ class TaskRunStore:
         这是「引用一次产出」的最小单位：拿到 run_id 就能把当时的产出、
         判据实测值、中止归因一并取回来，不必重放（LLM 腿重放也不等于原来那次）。
         """
+        self.refresh()
         for r in self._cache:
             if r.get("task_run_id") == task_run_id:
                 return r

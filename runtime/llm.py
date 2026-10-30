@@ -27,6 +27,9 @@ import json
 import os
 import re
 from pathlib import Path
+import random
+import sys
+import time
 from typing import Any
 
 import httpx
@@ -60,6 +63,46 @@ _PLACEHOLDER_HINTS = ("xxx", "your", "changeme", "placeholder", "dummy", "fake",
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 # markdown 代码块围栏：```json ... ``` 或 ``` ... ```
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+
+
+# ---- 传输层重试（瞬时故障不该杀死整轮）----
+#
+# **为什么要有**（2026-10-30 实测撞出来的）：
+# 一次开发盒跑 30 轮、每轮编译 + 前后端构建，是个**几十分钟量级**的作业。
+# 实测某次链跑里，模型正答着的时候网络抖了一下：
+# `SSL: UNEXPECTED_EOF_WHILE_READING` → 整轮开发盒**当场归零**，
+# 前面 30 轮写进工作区的代码全成孤儿（工作区最后被拆掉）。
+#
+# **一次抖动不该等于一整轮白跑**。这不是「降级」——
+# 重试走的是同一条腿、同一个模型、同一份 prompt，
+# 跟「降级成规则版」性质完全相反。
+#
+# **只重试瞬时故障**：
+# - 连接错误 / SSL EOF / 超时 / 429 / 5xx → 随机故障，重试有意义
+# - 401 / 403（凭证错）→ 重试多少次都一样，白等
+# - 4xx（请求本身不合法）→ 同样白等
+_TRANSIENT_STATUS: frozenset[int] = frozenset(
+    {408, 425, 429, 500, 502, 503, 504}
+)
+
+#: 传输类最多重试几次（+1 次原始尝试 = 最多 4 次）
+TRANSPORT_RETRIES = 3
+#: 退避基数（秒）：第 n 次重试等 BASE * 2^n，再加一点随机抖动
+_RETRY_BASE_DELAY = 2.0
+_RETRY_MAX_DELAY = 20.0
+
+
+def _backoff_delay(attempt: int) -> float:
+    """第 ``attempt`` 次重试该等多久（秒）
+
+    **为什么要抖动**：所有并发调用方同时失败、同时重试 → 一起再失败
+    （惊群）。加一点随机能把它们错开。
+
+    **为什么要封顶**：连着失败时，等 2 分钟没有意义——
+    那时候该失败，让上层归因成「基础设施挂了」。
+    """
+    delay = min(_RETRY_BASE_DELAY * (2 ** attempt), _RETRY_MAX_DELAY)
+    return delay + random.uniform(0, delay * 0.3)
 
 
 class LLMError(RuntimeError):
@@ -342,31 +385,96 @@ def complete(
     if thinking:
         body["thinking"] = {"type": thinking}
 
-    try:
-        resp = httpx.post(
-            url,
-            json=body,
-            headers={
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
-            },
-            timeout=timeout,
+    # ---- 传输层重试：瞬时故障不该杀死整轮 ----
+    #
+    # **重试的是「同一件事」**，不是换个模型、不是换个 provider、
+    # 不是降级成规则版 —— 那些路一条都不走。
+    resp = None
+    last_exc: Exception | None = None
+    for attempt in range(TRANSPORT_RETRIES + 1):
+        try:
+            resp = httpx.post(
+                url,
+                json=body,
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=timeout,
+            )
+            last_exc = None
+            break
+        except httpx.TimeoutException as e:
+            last_exc = e
+            reason = f"llm call timed out after {timeout}s"
+        except httpx.HTTPError as e:
+            last_exc = e
+            reason = f"llm request failed: {_readable_error(str(e))}"
+        # 只有还能重试时才等
+        if attempt >= TRANSPORT_RETRIES:
+            raise LLMError(reason) from last_exc
+        delay = _backoff_delay(attempt)
+        print(
+            f"[llm] {reason}；{delay:.1f}s 后重试"
+            f"（第 {attempt + 1}/{TRANSPORT_RETRIES} 次）",
+            file=sys.stderr, flush=True,
         )
-    except httpx.TimeoutException as e:
-        raise LLMError(f"llm call timed out after {timeout}s") from e
-    except httpx.HTTPError as e:
-        raise LLMError(f"llm request failed: {_readable_error(str(e))}") from e
+        time.sleep(delay)
+
+    if resp is None:  # pragma: no cover —— 循环里要么成功要么抛了
+        raise LLMError("llm call failed for unknown reason")
 
     if resp.status_code != 200:
-        raise LLMError(
-            f"llm call failed (http {resp.status_code}): {_readable_error(resp.text)}"
-        )
+        # **5xx / 429 是瞬时的**，同样重试；4xx（凭证错、请求不合法）不重试
+        if resp.status_code in _TRANSIENT_STATUS:
+            last_exc = None
+            for attempt in range(TRANSPORT_RETRIES + 1):
+                if attempt >= TRANSPORT_RETRIES:
+                    raise LLMError(
+                        f"llm call failed (http {resp.status_code}): "
+                        f"{_readable_error(resp.text)}"
+                    )
+                delay = _backoff_delay(attempt)
+                print(
+                    f"[llm] http {resp.status_code}；{delay:.1f}s 后重试"
+                    f"（第 {attempt + 1}/{TRANSPORT_RETRIES} 次）",
+                    file=sys.stderr, flush=True,
+                )
+                time.sleep(delay)
+                try:
+                    resp = httpx.post(
+                        url,
+                        json=body,
+                        headers={
+                            "Authorization": f"Bearer {key}",
+                            "Content-Type": "application/json",
+                        },
+                        timeout=timeout,
+                    )
+                except httpx.TimeoutException as e:
+                    raise LLMError(f"llm call timed out after {timeout}s") from e
+                except httpx.HTTPError as e:
+                    raise LLMError(
+                        f"llm request failed: {_readable_error(str(e))}"
+                    ) from e
+                if resp.status_code == 200:
+                    break
+        else:
+            raise LLMError(
+                f"llm call failed (http {resp.status_code}): "
+                f"{_readable_error(resp.text)}"
+            )
 
     try:
         out = (resp.json()["choices"][0]["message"].get("content") or "").strip()
     except (ValueError, KeyError, IndexError, TypeError) as e:
         raise LLMError(f"unexpected response shape: {_readable_error(resp.text)}") from e
-        # 整轮空输出和"输出了但解析不了"是同一类随机故障，同样可重试
+    if not out:
+        # 整轮空输出和"输出了但解析不了"是同一类随机故障，同样可重试。
+        #
+        # **原来这行写在 except 后面，是死代码** —— 永远执行不到，
+        # 于是「模型整轮没说话」被当成「不是合法 JSON」报出来，
+        # 错误文案把运维引向完全错误的方向（去查提示词，而不是查 think 吃满额度）。
         raise LLMParseError("llm returned empty output")
     return out
 

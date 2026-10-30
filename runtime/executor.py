@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from core.beeline_models import Beeline, NextRef, Operation
-from runtime.llm import LLMError
+from runtime.llm import LLMError, LLMParseError
 from runtime.models import OperationRecord, TaskRun, TaskRunStatus
 from runtime.runner import HandlerRunner
 
@@ -166,70 +166,128 @@ class BeelineExecutor:
         max_steps = len(beeline.operations) * 3  # 安全网（防意外的环）
         step_count = 0
 
-        while current_op is not None:
-            step_count += 1
-            if step_count > max_steps:
-                task_run.transition_to(TaskRunStatus.FAILED, reason="step limit exceeded")
-                return task_run
+        try:
+            while current_op is not None:
+                step_count += 1
+                if step_count > max_steps:
+                    task_run.transition_to(TaskRunStatus.FAILED, reason="step limit exceeded")
+                    return task_run
 
-            task_run.current_op = current_op.op_id
-            task_run.event_log.append(event="op_start", op_id=current_op.op_id)
+                task_run.current_op = current_op.op_id
+                task_run.event_log.append(event="op_start", op_id=current_op.op_id)
 
-            # 记录 op 启动
-            record = OperationRecord(
-                op_id=current_op.op_id,
-                status="running",
-                started_at=datetime.now(timezone.utc),
-                input=op_input,
-            )
-            task_run.operations[current_op.op_id] = record
+                # 记录 op 启动
+                record = OperationRecord(
+                    op_id=current_op.op_id,
+                    status="running",
+                    started_at=datetime.now(timezone.utc),
+                    input=op_input,
+                )
+                task_run.operations[current_op.op_id] = record
 
-            try:
-                op_output = self.runner.run(current_op.type, op_input)
-            except Exception as e:
-                record.status = "failed"
+                try:
+                    op_output = self.runner.run(current_op.type, op_input)
+                except Exception as e:
+                    record.status = "failed"
+                    record.finished_at = datetime.now(timezone.utc)
+                    record.error = str(e)
+                    # 中止归因：LLM 是基础设施设施，runtime 认得它；盒子据此统计
+                    # 自己的调用失败率。判据不是业务知识，所以这层归类不算越界。
+                    # **三态归因，别把两件事混成一个**：
+                    # - llm_parse：模型答了但格式不对（提示词/约束的问题）
+                    # - llm_call：网络/凭证/服务端挂了（基础设施的问题）
+                    # - op_error：跟 LLM 无关，盒子的逻辑错了
+                    # 混成一个的后果：盒子的 llm_call_failure_rate 指标
+                    # 既反映不了网络稳定性，也反映不了模型服从度——
+                    # 一个数同时坏在两个方向上。
+                    if isinstance(e, LLMParseError):
+                        record.error_kind = "llm_parse"
+                    elif isinstance(e, LLMError):
+                        record.error_kind = "llm_call"
+                    else:
+                        record.error_kind = "op_error"
+                    task_run.event_log.append(
+                        event="op_finish",
+                        op_id=current_op.op_id,
+                        detail={"status": "failed", "error": str(e), "error_kind": record.error_kind},
+                    )
+                    task_run.transition_to(TaskRunStatus.FAILED, reason=f"op '{current_op.op_id}' failed: {e}")
+                    return task_run
+
+                # op 成功
+                record.status = "completed"
                 record.finished_at = datetime.now(timezone.utc)
-                record.error = str(e)
-                # 中止归因：LLM 是基础设施设施，runtime 认得它；盒子据此统计
-                # 自己的调用失败率。判据不是业务知识，所以这层归类不算越界。
-                record.error_kind = "llm_call" if isinstance(e, LLMError) else "op_error"
+                record.output = op_output
                 task_run.event_log.append(
                     event="op_finish",
                     op_id=current_op.op_id,
-                    detail={"status": "failed", "error": str(e), "error_kind": record.error_kind},
+                    detail={"status": "completed"},
                 )
-                task_run.transition_to(TaskRunStatus.FAILED, reason=f"op '{current_op.op_id}' failed: {e}")
-                return task_run
 
-            # op 成功
-            record.status = "completed"
-            record.finished_at = datetime.now(timezone.utc)
-            record.output = op_output
-            task_run.event_log.append(
-                event="op_finish",
-                op_id=current_op.op_id,
-                detail={"status": "completed"},
-            )
+                # 选 next
+                next_ref = _pick_next(current_op, op_output)
+                if next_ref is None:
+                    # 终态
+                    task_run.result = op_output  # 最终结果作为 task run result
+                    task_run.current_op = None
+                    break
 
-            # 选 next
-            next_ref = _pick_next(current_op, op_output)
-            if next_ref is None:
-                # 终态
-                task_run.result = op_output  # 最终结果作为 task run result
-                task_run.current_op = None
-                break
+                next_op = beeline.get_operation(next_ref.op_id)
+                if next_op is None:
+                    task_run.transition_to(TaskRunStatus.FAILED, reason=f"next op '{next_ref.op_id}' not found")
+                    return task_run
 
-            next_op = beeline.get_operation(next_ref.op_id)
-            if next_op is None:
-                task_run.transition_to(TaskRunStatus.FAILED, reason=f"next op '{next_ref.op_id}' not found")
-                return task_run
+                # 下个 op 的 input = 当前 op 的 output（按 input_from 链）
+                op_input = dict(op_output)
+                current_op = next_op
 
-            # 下个 op 的 input = 当前 op 的 output（按 input_from 链）
-            op_input = dict(op_output)
-            current_op = next_op
+            # running -> completed
+            if task_run.status == TaskRunStatus.RUNNING:
+                task_run.transition_to(TaskRunStatus.COMPLETED, reason="beeline finished")
 
-        # running -> completed
-        if task_run.status == TaskRunStatus.RUNNING:
-            task_run.transition_to(TaskRunStatus.COMPLETED, reason="beeline finished")
+
+        except Exception as e:
+            # ============================================================
+            # **兜底：任何异常路径都必须落成一条 failed 记录**
+            # ============================================================
+            #
+            # **为什么需要这段**（2026-10-30 调研实测）：
+            # 上面的 try 只包着 `runner.run(op)`。但整条链上还有几处会抛：
+            # - `_pick_next` 对不支持的 when 子句 raise ValueError
+            # - `op_input = dict(op_output)` —— op 输出不是 dict 就 TypeError
+            # - `transition_to` 非法转移
+            # 这些异常冒到 kanban/trigger.py，**直接跳过 store.append** →
+            # **这次履约在看板/store 里根本不存在**。
+            #
+            # 「失败但查无此事」是最贵的一种故障：连「它挂了」都看不到，
+            # 事后无从判断是哪一环、为什么。
+            #
+            # **这不是降级**：状态照旧是 failed，结论照旧是红。
+            # 变的只是「它现在能被查到了」。
+            reason = f"履约异常中断（{type(e).__name__}）：{e}"
+            rec = None
+            if current_op is not None:
+                rec = task_run.operations.get(current_op.op_id)
+            if rec is not None and rec.status == "running":
+                # 挂在还在跑的那个 op 头上 —— 归因要落到具体环节
+                rec.status = "failed"
+                rec.finished_at = datetime.now(timezone.utc)
+                rec.error = reason
+                rec.error_kind = "op_error"
+                task_run.event_log.append(
+                    event="op_finish",
+                    op_id=rec.op_id,
+                    detail={"status": "failed", "error": reason,
+                            "error_kind": "op_error"},
+                )
+            try:
+                task_run.transition_to(TaskRunStatus.FAILED, reason=reason)
+            except Exception:
+                # 连状态转移都非法（例：已经 terminal 了）→
+                # 强行落状态 + 事件，绝不让记录蒸发
+                task_run.status = TaskRunStatus.FAILED
+                task_run.event_log.append(
+                    event="status_change", detail={"reason": reason},
+                )
 
         return task_run

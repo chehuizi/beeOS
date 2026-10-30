@@ -56,8 +56,17 @@ def _llm_call_failure_rate(records: list[dict[str, Any]]) -> Measurement:
 
     分母是全部履约（含中止的）——分母只算跑完的那些，
     会把「挂了」从失败率里洗掉，那是自欺。
+
+    **口径涵盖两类 LLM 相关失败**（2026-10-30 归因细化后）：
+    - `llm_call`：网络/凭证/服务端挂了（传输类）
+    - `llm_parse`：模型答了但格式不对（模型不听话）
+    归因字段分细是为了**排查时能分清是谁的锅**；
+    指标口径不该跟着变——这个指标量的是「LLM 这条腿有多可靠」，
+    漏掉解析失败会让数字看着比实际好。
     """
-    return core_metrics.ratio_pct(records, lambda r: r.get("error_kind") == "llm_call")
+    return core_metrics.ratio_pct(
+        records, lambda r: r.get("error_kind") in ("llm_call", "llm_parse")
+    )
 
 
 def _capture_latency(records: list[dict[str, Any]]) -> Measurement:

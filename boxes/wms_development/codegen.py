@@ -339,6 +339,137 @@ def collect_all_sources(ws: Path) -> dict[str, str]:
     return out
 
 
+_MIGRATION_DIR_REL = "server/src/main/resources/db/migration"
+_MIGRATION_FILE_RE = re.compile(r"^V(\d+)__(.+)\.sql$")
+
+
+def _ws_rel(ws: Path, path: Path) -> str:
+    """工作区内的相对路径（统一用 resolve 后的根，避开 /tmp 软链差异）"""
+    return str(path.relative_to(ws.resolve()))
+
+
+def _migration_files(ws: Path) -> list[Path]:
+    mig_dir = (ws / _MIGRATION_DIR_REL).resolve()
+    if not mig_dir.exists():
+        return []
+    return sorted(p.resolve() for p in mig_dir.glob("*.sql"))
+
+
+def _migration_versions(ws: Path) -> dict[int, tuple[str, str]]:
+    """工作区里所有迁移：版本号 → (相对路径, 文件名)"""
+    out: dict[int, tuple[str, str]] = {}
+    for path in _migration_files(ws):
+        m = _MIGRATION_FILE_RE.match(path.name)
+        if m:
+            out[int(m.group(1))] = (_ws_rel(ws, path), path.name)
+    return out
+
+
+def _resolve_migration_target(
+    ws: Path,
+    path: Path,
+    created: Optional[set[str]],
+    renames: Optional[dict[str, str]],
+    notes: Optional[list[tuple[str, str]]],
+    is_new: bool = True,
+) -> Path:
+    """模型给的新建迁移路径 → 真正该写进去的路径
+
+    **为什么机械层要接管版本号**（2026-10-30 实测撞出来的）：
+    模型建了 `V5__seed_zone.sql`，而 V5 已经被占用了。
+    它想改名 —— 但 **edits 机制只能新建和改内容，不能删文件**，
+    所以它**既改不了名也删不掉**，那个版本号冲突就永远消不掉：
+    实测从第 20 轮到第 30 轮，每一轮的机械核对都报同一条
+    「迁移版本号 V5 重复」，18 个文件都写完了，轮数却耗尽。
+
+    **版本号是纯机械的事**（下一个可用号 = 仓里最大版本号 + 1），
+    模型算不明白、也删不掉自己写错的名字 —— 那就机械层替它算，
+    **但必须告诉它新名字**，否则它下一轮还在用旧路径。
+
+    **三条规则**（Flyway 的硬要求）：
+    1. 新迁移的版本号必须**大于仓里已有的最大版本号**
+       （Flyway 默认 out-of-order=false，倒着来直接拒绝启动）
+    2. 版本号**不许重复**
+    3. 同一个描述只许有一个文件 —— 两个同名迁移会被执行两遍
+
+    **不会攒出一堆同义迁移**：模型第 20 轮写 V5、第 25 轮又写 V5，
+    两次都落到**同一个**文件上。
+    """
+    if renames is None:
+        return path
+    mig_dir = (ws / _MIGRATION_DIR_REL).resolve()
+    if path.parent != mig_dir:
+        return path
+    m = _MIGRATION_FILE_RE.match(path.name)
+    if not m:
+        return path
+    version = int(m.group(1))
+    desc = m.group(2)
+    requested = _ws_rel(ws, path)
+    # **已经改过名了** → 稳定地落到同一个文件（不攒垃圾）
+    if requested in renames:
+        return (ws / renames[requested]).resolve()
+    # **这个路径已经有文件了** → 别动它。
+    # 机械层要是擅自改名，「重建一个已发布的迁移」就会被偷偷变成
+    # 「新建一个同义迁移」——那条迁移会被执行两遍。
+    # 该怎么处理是老规矩：交给「文件已存在」那条报错（它带着文件内容）。
+    if path.exists():
+        return path
+    # **不是新建** → 不做版本分配。
+    # 「改一个不存在的迁移文件」该由「文件不存在」那条报错说清楚，
+    # 机械层擅自改名只会把模型带偏。
+    if not is_new:
+        return path
+
+    versions = _migration_versions(ws)
+    max_version = max(versions) if versions else 0
+
+    # **同描述的迁移**：两个同名迁移会被执行两遍 → 不许
+    for _v, (rel, filename) in versions.items():
+        if not filename.endswith(f"__{desc}.sql"):
+            continue
+        if created and rel in created:
+            # 本次会话建的那一个 → 落到它身上（**不攒出第二份**）
+            renames[requested] = rel
+            if notes is not None:
+                notes.append((
+                    f"迁移文件名：{path.name} 和本次会话已经建好的 {filename} "
+                    f"是同一个迁移 → 我把它落到 {filename} 上了（请用这个路径）",
+                    rel,
+                ))
+            return (ws / rel).resolve()
+        raise CodegenError(
+            f"{path.name}：仓里已经有同名的迁移 {filename}——"
+            "**同名的迁移会被执行两遍**，第二次就撞主键/唯一约束，服务起不来。\n"
+            "**要加东西就写进一个新的、描述不同的迁移**"
+            f"（下一个可用版本号是 V{max_version + 1}）；\n"
+            "**要改它就改那个文件本身**（old 给要替换的原文，new 给改好的）。"
+        )
+
+    # **版本号被占 / 倒退** → 重新分配下一个可用号
+    if version in versions or version <= max_version:
+        new_version = max_version + 1
+        new_name = f"V{new_version}__{desc}.sql"
+        while (mig_dir / new_name).exists():
+            new_version += 1
+            new_name = f"V{new_version}__{desc}.sql"
+        new_rel = _ws_rel(ws, mig_dir / new_name)
+        renames[requested] = new_rel
+        if notes is not None:
+            if version in versions:
+                reason = f"版本号 V{version} 已经被占用"
+            else:
+                reason = f"版本号 V{version} 不大于仓里最大的 V{max_version}"
+            notes.append((
+                f"迁移文件名：{reason} → 我把它改名成 **{new_name}**"
+                "（**请用这个新路径**，不要再写老名字；"
+                "老路径在工作区里并不存在）",
+                new_rel,
+            ))
+        return (ws / new_rel).resolve()
+    return path
+
+
 def next_migration_version(files: dict[str, str]) -> int:
     """仓里现有迁移的最大版本号 + 1（新建迁移该用的版本号）
 
@@ -617,6 +748,8 @@ def _validate_edit(
     ws: Path,
     edit: Any,
     created: Optional[set[str]] = None,
+    renames: Optional[dict[str, str]] = None,
+    notes: Optional[list[str]] = None,
 ) -> tuple[Path, str, str]:
     """校验一处替换（不写盘）
 
@@ -642,6 +775,11 @@ def _validate_edit(
     if not rel or not isinstance(old, str) or not isinstance(new, str):
         raise CodegenError(f"edit 缺字段：{edit!r}")
     path = _resolve_edit_path(ws, rel)
+    # **迁移的版本号由机械层分配**（模型算不明白、也删不掉自己写错的名字）
+    path = _resolve_migration_target(
+        ws, path, created, renames, notes, is_new=(old == ""),
+    )
+    rel = _ws_rel(ws, path)
     if old == "":
         if path.exists():
             rel_key = str(path.relative_to(ws.resolve()))
@@ -677,6 +815,13 @@ def _validate_edit(
             f"edit 指向的文件不存在：{rel}" + _near_miss_hint(ws, rel)
         )
     text = path.read_text(encoding="utf-8")
+    # **删除**：`new` 是空字符串、且 `old` 命中全文 → 删掉这个文件
+    #
+    # **为什么要有删除能力**（2026-10-30 实测）：
+    # 模型建错了文件（版本号撞了），edits 只能新建和改内容，
+    # 它**删不掉** → 冲突永远消不掉 → 30 轮全耗在这上面。
+    if new == "" and text.strip() == old.strip():
+        return delete_file_for_edit(ws, rel)
     count = text.count(old)
     if count == 0:
         # **缩进/行尾差异的容错**：模型是照着文件抄的，
@@ -774,10 +919,54 @@ def _tail_for_error(text: str, lines: int = 25) -> str:
     return prefix + "\n".join(tail)
 
 
+def rename_migration_file(ws: Path, rel: str, new_name: str) -> str:
+    """把工作区里的迁移文件改名（内容不变），返回新的相对路径
+
+    **为什么需要它**（2026-10-30 实测撞出来的）：
+    模型新建了 `V5__seed_zone.sql`，而 V5 已经被占用了。
+    它想改名 —— 但 **edits 机制只能新建和改内容，不能删文件**，
+    所以它**既改不了名也删不掉**，那个版本号冲突就永远消不掉：
+    实测从第 20 轮到第 30 轮，每一轮的机械核对都报同一条
+    「迁移版本号 V5 重复」，18 个文件都写完了，轮数却耗尽。
+
+    **改名是纯机械操作**（版本号 → 下一个可用版本号），
+    模型做不了（它没有删除能力），那就机械层替它做 ——
+    但**必须告诉模型新路径**，否则它下一轮还在用旧路径。
+
+    **只改「本次新建的」那些**：仓里已发布的迁移不许动。
+    """
+    src = ws / rel
+    if not src.exists():
+        return rel
+    dest = src.with_name(new_name)
+    if dest.exists():
+        return rel
+    src.rename(dest)
+    return str(dest.relative_to(ws))
+
+
+def delete_file_for_edit(ws: Path, rel: str) -> str:
+    """删掉工作区里的一个文件，返回它原来的相对路径
+
+    **为什么要给 edits 加删除能力**：
+    模型建错了文件（比如版本号撞了、或者建了不该建的文件），
+    没有删除能力就**永远清不掉** —— 它只能一遍遍重建、覆盖，
+    冲突一直在，轮数耗尽。
+
+    删文件是纯机械操作，模型表达「old = 文件全文、new = 空」就行。
+    """
+    path = ws / rel
+    if path.exists():
+        path.unlink()
+    return rel
+
+
 def apply_edits(
     ws: Path,
     edits: list[dict[str, Any]],
     created: Optional[set[str]] = None,
+    renames: Optional[dict[str, str]] = None,
+    notes: Optional[list[str]] = None,
 ) -> list[str]:
     """把模型给的「精确片段替换」应用到工作区
 
@@ -789,7 +978,7 @@ def apply_edits(
     """
     planned: list[tuple[Path, str, str]] = []
     for edit in edits:
-        planned.append(_validate_edit(ws, edit, created))
+        planned.append(_validate_edit(ws, edit, created, renames, notes))
 
     applied: list[str] = []
     root = ws.resolve()
@@ -874,6 +1063,12 @@ def generate_edits(
     # 模型每一轮重出整份计划，它会再次「新建」上一轮建好的文件——
     # 机械层要认得出那些是它自己建的（见 _validate_edit）。
     created: set[str] = set()
+    # **机械层替模型分配的迁移版本号**（requested 路径 → 真正落盘的路径）
+    # 跨轮次记着：模型下一轮又写老名字时，落到同一个文件上，
+    # **不会攒出一堆同义迁移**。
+    renames: dict[str, str] = {}
+    # **要告诉模型的事**（改名/落点变更）—— 每轮清空
+    notes: list[tuple[str, str]] = []
     applied_all: list[str] = []
     done_files: list[str] = []
     summary = ""
@@ -926,12 +1121,24 @@ def generate_edits(
                 feedback = last_error
                 continue
             return applied_all, summary
+        notes.clear()
         try:
-            applied = apply_edits(ws, edits, created)
+            applied = apply_edits(ws, edits, created, renames, notes)
         except CodegenError as exc:
             last_error = str(exc)
             feedback = last_error
             continue
+        # **机械层替模型做的事，必须告诉它**（否则它下一轮还在用老路径）
+        rename_notes = [
+            text for text, target in notes if (ws / target).exists()
+        ]
+        notes_text = ""
+        if rename_notes:
+            notes_text = (
+                "**我替你改了一件事**（文件名/版本号是机械的事，不该你操心）：\n"
+                + "\n".join(rename_notes)
+                + "\n\n"
+            )
         for rel in applied:
             # 同一个文件被改多次只记一次——
             # 「改动清单」是**文件集合**，不是修改次数
@@ -950,7 +1157,7 @@ def generate_edits(
                     "\n（工作区里已经保留了你上一轮的改动，下面的源码就是**当前**内容——"
                     "请在当前内容上做增量修改，old 要逐字取自当前内容。）"
                 )
-                feedback = last_error
+                feedback = notes_text + last_error
                 continue
         # **证据不足 = 还有文件没写**：告诉它接着写下一个
         evidence_problems = verify_evidence() if verify_evidence is not None else []
@@ -961,7 +1168,7 @@ def generate_edits(
                 + "\n\n**接着写下一个文件**（一次 1-2 个）："
                 "还没写的部分就是上面点名的那几处。"
             )
-            feedback = last_error
+            feedback = notes_text + last_error
             continue
         # **证据齐了 → 跑完整核对（含编译）**。
         # 编译不过时，编译器会指名缺什么（"找不到符号 ZoneQuery"），
@@ -975,7 +1182,7 @@ def generate_edits(
                 "\n（工作区里已经保留了你上一轮的改动，下面的源码就是**当前**内容——"
                 "请在当前内容上做增量修改，old 要逐字取自当前内容。）"
             )
-            feedback = last_error
+            feedback = notes_text + last_error
             continue
         return applied_all, summary
     raise CodegenError(

@@ -646,11 +646,30 @@ def _validate_edit(
         if path.exists():
             rel_key = str(path.relative_to(ws.resolve()))
             if not (created and rel_key in created):
+                # **报错要带能修它的材料**（2026-10-30 实测撞出来的）：
+                # 只说「文件已存在、要给 old」的话，模型会拿 old="" 反复试
+                # ——实测在同一个文件上打了 25 轮，每轮都被同一条理由拦回去。
+                # 它不是不知道要改，是**不知道「改已有文件」长什么样**。
+                #
+                # 所以这里把两条路都写清楚，并把**文件现在的内容**给它：
+                # 1. 局部改：old 给要替换的那几行（逐字复制，唯一命中）
+                # 2. 整体重写：old 给**整个文件现在的内容**，new 给改好的
+                #    （整篇替换在机械层是合法的：old 唯一命中一次）
+                try:
+                    current = path.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    current = ""
                 raise CodegenError(
                     f"{rel}：old 留空表示新建文件，但这个文件已经存在"
-                    "（而且不是本次会话建的）——"
-                    "要改已有文件，必须给出要替换的原文片段"
-                    "（old 逐字复制，且在文件里只出现一次）"
+                    "（而且不是本次会话建的）。\n"
+                    "**要改它，二选一**：\n"
+                    "1. 局部改：`old` 给**要替换的那几行原文**"
+                    "（逐字复制，含缩进，在文件里只出现一次），"
+                    "`new` 给替换后的内容；\n"
+                    "2. 整体重写：`old` 给**这个文件现在的完整内容**"
+                    "（逐字复制），`new` 给改好的完整内容。\n"
+                    "**文件现在长这样（从这里逐字复制）**：\n"
+                    f"{_tail_for_error(current, lines=40)}"
                 )
         return path, old, new
     if not path.exists():

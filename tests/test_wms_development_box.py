@@ -267,6 +267,30 @@ class TestEditsAreAppliedMechanically:
                 "file": "server/src/main/java/A.java", "old": "", "new": "x",
             }])
 
+    def test_overwrite_error_tells_the_model_how_to_edit_an_existing_file(self, ws):
+        """「文件已存在」的报错必须说清**怎么改它**，并附上文件内容
+
+        2026-10-30 实测：只说「old 留空表示新建，但文件已存在」的话，
+        模型会拿 old="" 反复试 —— 实测在同一个文件上打了 25 轮，
+        每轮被同一条理由拦回去。它不是不知道要改，
+        是**不知道「改已有文件」长什么样**。
+
+        两条改法都要写清楚：
+        1. 局部改：old 给要替换的那几行
+        2. 整体重写：old 给**整个文件现在的内容**（机械层允许：
+           整篇唯一命中一次）
+        """
+        with pytest.raises(codegen.CodegenError) as err:
+            codegen.apply_edits(ws, [{
+                "file": "server/src/main/java/A.java", "old": "", "new": "x",
+            }])
+        message = str(err.value)
+        assert "局部改" in message, f"没说清怎么局部改：{message}"
+        assert "整体重写" in message, f"没说清怎么整体重写：{message}"
+        assert "int b = 2;" in message, (
+            "报错里必须带上文件里的真实内容，模型才有材料照着抄"
+        )
+
     def test_the_error_carries_the_material_the_model_needs_to_fix_it(self, ws):
         """报错必须带**文件内容**——不然模型只能瞎猜
 

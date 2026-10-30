@@ -156,12 +156,12 @@ def _collect_tasks(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def field_maps_payload() -> dict[str, Any]:
-    """各域的**场图**（结构化，可被程序调用，不只是画布上的一张图）
+    """各域的 **BeeBox Map**（结构化，可被程序调用，不只是画布上的一张图）
 
-    场图是从各盒 placement **派生**的（见 core/field_map.py）。
-    这里给的是它的结构化形状：哪些盒子在这个场里、边是什么类型、谁是汇点。
+    Map 是从各盒 placement **派生**的（见 core/field_map.py）。
+    这里给的是它的结构化形状：哪些盒子在这个域里、边是什么类型、谁是汇点。
 
-    「全部域」也给一条结论：跨域**没有场图**，附带一句能读懂的原因——
+    「全部域」也给一条结论：跨域**没有 Map**，附带一句能读懂的原因——
     不给的话，读者会以为「全部域」那张图缺了。
     """
     scopes = box_domains(registered_box_ids())
@@ -227,7 +227,7 @@ def dashboard_data(
 
     # ---- 任务（活）----
     #
-    # 左边那栏回答「现在有哪些任务在飞」，中间那栏回答「场里有哪些盒子」。
+    # 左边那栏回答「现在有哪些任务在飞」，中间那栏回答「这个域的 Map 里有哪些盒子」。
     # 两件事不是一回事：盒子的清单在中间已经全画出来了，左边再列一遍
     # 是同一份信息的第二遍——读者要滚动两处才能拼出一个全貌。
     tasks = _collect_tasks(store._cache)
@@ -735,8 +735,8 @@ HTML_PAGE = f"""<!DOCTYPE html>
     stroke-linecap: round; fill: none;
   }}
   .radial-legend .edge {{ stroke-width: 2; }}
-  /* ===== 场域边界 =====
-     虚线框 = 这个域的「场」的边界：里面是这个域的全部盒子和接线。
+  /* ===== BeeBox Map 的边界 =====
+     虚线框 = 这个域的 Map 的边界：里面是这个域的全部盒子和接线。
      画得比连线更淡——它是**范围**，连线才是**内容**，
      两者抢同一个视觉重量时，看的人会以为框线也是一条业务流。 */
   .edge-field {{
@@ -1766,7 +1766,7 @@ function currentScopeLayout(scopeLayouts) {{
 
 // ===== 左栏 = 任务（任务）=====
 //
-// 左栏回答「现在有哪些任务在飞」，中间的场回答「盒子和接线长什么样」。
+// 左栏回答「现在有哪些任务在飞」，中间的 BeeBox Map 回答「盒子和接线长什么样」。
 // 两件事不是一回事：盒子的清单在中间已经全画出来了，左栏再列一遍
 // 是同一份信息的第二遍——读者得在两处来回拼，才能拼出一个全貌。
 //
@@ -2422,7 +2422,7 @@ const RADIAL_R_FACTOR = 1.9;
 // 弦长算够之后再加这么一点富余，免得两张卡刚好贴上
 const RADIAL_CHORD_SLACK = 26;
 const RADIAL_PAD = 30;
-// 场域边界离卡片多远
+// BeeBox Map 边界离卡片多远
 const FIELD_PAD = 26;
 // 立方体 3D 投影探出卡片上沿的高度：画布按卡片量高不够，得给它留出来
 const CUBE_ALLOW = 46;
@@ -2544,10 +2544,10 @@ function renderRadial(layout, stats) {{
     // 中心卡底下还挂一行汇点标签，竖向要多给它留出这一行的位置
     spanY = Math.max(spanY, RADIAL_CARD_H / 2 + 22);
   }}
-  // ===== 场域边界 =====
+  // ===== BeeBox Map 的边界 =====
   //
-  // 虚线框 = 「这个域的场」的边界：里面是这个域的全部盒子和它们的接线。
-  // 它不是装饰——框里框外是**两个不同的范围**，框外的盒子不属于这个场。
+  // 虚线框 = 这个域的 Map 的边界：里面是这个域的全部盒子和它们的接线。
+  // 它不是装饰——框里框外是**两个不同的范围**，框外的盒子不属于这个域。
   //
   // 边界跟着卡片走（卡片外面留一圈 FIELD_PAD），不写死位置：
   // 环上多一只盒子，边界跟着长一圈；不跟着长的话，最后一只盒子就骑在框线上。
@@ -2566,9 +2566,11 @@ function renderRadial(layout, stats) {{
   const cy = H / 2;
 
   const edges = [];
-  // 场域边界（虚线）：先画 → 压在所有连线**下面**。
-  // 框 = 这个域的场，里面是本域的全部盒子和接线；框外的不属于这个场。
-  const fieldLabel = esc((layout.domain || '') + ' · 场');
+  // BeeBox Map 的边界（虚线）：先画 → 压在所有连线**下面**。
+  // 框 = 这个域的 Map，里面是本域的全部盒子和接线；框外的不属于这个域。
+  // 标签用产品自己的名字（BeeBox Map），不自造词——
+  // 「活儿」「场」这类自造词业务方看不懂，改了还得再解释一遍。
+  const fieldLabel = esc((layout.domain || '') + ' · BeeBox Map');
   edges.push(
     '<rect class="edge-field" x="' + (cx - fieldHalfX).toFixed(1) + '"'
     + ' y="' + (cy - fieldHalfY).toFixed(1) + '"'
@@ -3940,7 +3942,7 @@ function render(data) {{
     // 其中几只盒子——环上缺段还叫拓扑，那是骗人。所以任务一律平铺。
     const topology = (_view === VIEW_TOPOLOGY && canRadial && !_task);
     if (topology) {{
-      html += `<div class="section"><div class="section-title">${{esc(domainLabel(lay.domain))}} 域
+      html += `<div class="section"><div class="section-title">${{esc(domainLabel(lay.domain))}} 域的 BeeBox Map
         （环上 ${{lay.ring.length}} 只 · 汇点由接线推导）</div>`;
       html += renderRadial(lay, data.box_stats);
       html += `</div>`;
@@ -4056,7 +4058,7 @@ class KanbanRequestHandler(BaseHTTPRequestHandler):
             box_filter = (qs.get("box") or [None])[0] or None
             self._serve_json(box_filter, (qs.get("task") or [None])[0] or None)
         elif parsed.path == "/api/maps":
-            # 场图（BeeBox Map）：各域的接线结构。
+            # BeeBox Map：各域的接线结构。
             # 画布上那张图是它的一张照片——这个接口给的是**结构本身**，
             # 别的程序要读「WMS 域有哪些盒子、谁交给谁」时不用去解析 SVG。
             self._send_json(200, field_maps_payload())

@@ -1,28 +1,28 @@
-"""core/field_map.py —— 场图（BeeBox Map）
+"""core/field_map.py —— BeeBox Map（场图）
 
-**一个域的场**：这个域里有哪些盒子、谁交给谁、谁的产出汇进档案（汇点）、
+**一个域的 Map**：这个域里有哪些盒子、谁交给谁、谁的产出汇进档案（汇点）、
 哪条边是上一轮结论变成下一轮输入（闭环反馈）。
 
 ## 为什么它是**派生**的，不是一张手写的表
 
-场的接线事实**已经有一份了**——每只盒子自己的 `definition.placement`
+这个域的接线事实**已经有一份了**——每只盒子自己的 `definition.placement`
 （`feeds_into` / `feedback_into` / `domain`）。那是唯一的事实源，
 住在盒子里面：换掉看板，这只盒子照样知道自己接谁。
 
-再手写一张「WMS 场图」表，就是**第二份事实**。两份必然漂，而且漂了
+再手写一张「WMS 接线表」或「WMS Map」，就是**第二份事实**。两份必然漂，而且漂了
 **没有任何东西会报错**——图照常渲染，只是有一只盒子接错了对象。
-所以场图只能是**从 placement 推出来的视图**：改一只盒子的接线，
-场图自己跟着变；想让场图变，就去改那只盒子。
+所以Map 只能是**从 placement 推出来的视图**：改一只盒子的接线，
+Map自己跟着变；想让Map变，就去改那只盒子。
 
-## 跨域没有场图
+## 跨域没有 Map
 
-「全部域」不是一个场：各域的流水线互不相干，硬凑一个汇点等于
-替业务声明一条没人声明过的拓扑。所以跨域时**不给场图**，给的是
+「全部域」不是一个域的 Map：各域的流水线互不相干，硬凑一个汇点等于
+替业务声明一条没人声明过的拓扑。所以跨域时**不给Map**，给的是
 一句能读懂的原因（`reason`），而不是一张勉强画出来的图。
 
 ## 它是**结构**，不只是图
 
-场图是可以被程序读的东西：哪些盒子在这个场里、它们之间的边是什么类型、
+Map是可以被程序读的东西：哪些盒子在这个域的 Map 里、它们之间的边是什么类型、
 谁是汇点。画布上的虚线边界只是它的一张照片。
 """
 
@@ -34,9 +34,9 @@ from typing import Sequence
 
 @dataclass(frozen=True)
 class PlacementView:
-    """一只盒子在这个场里的位置和接线
+    """一只盒子在这个域的 Map 里的位置和接线
 
-    **只抄 placement 里跟场有关的那几项**——这样 `core` 不必认识
+    **只抄 placement 里跟 Map 有关的那几项**——这样 `core` 不必认识
     任何一只盒子，也不必认识注册表：注册表在 `kanban/trigger.py`，
     由它把 placement 抄成这个视图再交给这里推导。
     """
@@ -49,9 +49,9 @@ class PlacementView:
 
 @dataclass(frozen=True)
 class BeeBoxMap:
-    """一个域的场图
+    """一个域的 BeeBox Map
 
-    `reason` 为空 = 场图成立；非空 = **画不出来**，原因写在这里。
+    `reason` 为空 = Map成立；非空 = **画不出来**，原因写在这里。
     跨域、没有汇点、汇点不唯一、交接成环——四种情况各有各的原因，
     不合并成一个「画不出来」。
     """
@@ -67,7 +67,7 @@ class BeeBoxMap:
 
     @property
     def drawable(self) -> bool:
-        """场图画不画得出来（有没有汇点、环序排不排得出来）"""
+        """Map画不画得出来（有没有汇点、环序排不排得出来）"""
         return self.center is not None and not self.reason
 
     def to_dict(self) -> dict:
@@ -111,10 +111,10 @@ def _topo_within(ids: Sequence[str], edges: Sequence[tuple[str, str]]) -> tuple[
 
 
 def derive_field_map(domain: str, placements: Sequence[PlacementView]) -> BeeBoxMap:
-    """从各盒的 placement 推导出这个域的场图
+    """从各盒的 placement 推导出这个域的 BeeBox Map
 
     **纯函数**：只吃 placement，不认识注册表、不认识任何一只盒子。
-    这样它能被看板、API、将来产出场图的盒子共用同一份推导。
+    这样它能被看板、API、将来产出Map的盒子共用同一份推导。
     """
     ids = [p.box_id for p in placements]
     idset = set(ids)
@@ -190,9 +190,9 @@ def field_map_of_scope(
     scopes: dict[str, list[str]],
     placements: dict[str, PlacementView],
 ) -> BeeBoxMap:
-    """一个**范围**（可能横跨多个域）的场图
+    """一个**范围**（可能横跨多个域）的 Map
 
-    横跨多个域时**没有场图**：各域流水线互不相干，硬凑一个中心等于
+    横跨多个域时**没有Map**：各域流水线互不相干，硬凑一个中心等于
     替业务声明一条不存在的拓扑。给的是一句能读懂的原因。
     """
     domains = [d for d in scopes if d in scopes and scopes[d]]
@@ -203,7 +203,7 @@ def field_map_of_scope(
         return BeeBoxMap(
             domain=scope,
             # 盒子还是列出来——「这个范围里有哪几只盒子」是事实，
-            # 缺的只是**场**（共同汇点 + 接线）。
+            # 缺的只是**Map**（共同汇点 + 接线）。
             boxes=tuple(every),
             reason=(
                 "范围横跨多个域，各域流水线互不相干，没有共同汇点——"

@@ -1,14 +1,14 @@
-"""守卫：场图（BeeBox Map）是从 placement 派生的结构，不是手写的表
+"""守卫：Map（BeeBox Map）是从 placement 派生的结构，不是手写的表
 
 为什么要有这一组：
-- 「一个域的场」是真实存在的东西——它有名字之后，很多话才说得通
-  （这件任务在场图上走了哪几步）。但**它不能是一张人手维护的表**：
+- 「一个域的 Map」是真实存在的东西——它有名字之后，很多话才说得通
+  （这件任务在Map上走了哪几步）。但**它不能是一张人手维护的表**：
   各盒的 placement（domain + feeds_into + feedback_into）已经是唯一事实源，
   再写一张域接线表就是第二份事实，必然漂，而且漂了不报错。
 - 所以守三件事：
-  ① 场图的每条边都能追到某只盒子的 placement（派生，不是抄）；
-  ② 场图画不出来时**说清楚为什么**（跨域 / 没有汇点 / 汇点不唯一 / 成环）；
-  ③ 场图是一个**结构**：能被 API 读出来，不只是画布上的一张照片。
+  ① Map的每条边都能追到某只盒子的 placement（派生，不是抄）；
+  ② Map画不出来时**说清楚为什么**（跨域 / 没有汇点 / 汇点不唯一 / 成环）；
+  ③ Map是一个**结构**：能被 API 读出来，不只是画布上的一张照片。
 """
 from __future__ import annotations
 
@@ -39,9 +39,9 @@ def _p(box_id: str, domain: str = "WMS", feeds=(), feedback=()) -> PlacementView
 # ---------- 派生，不是抄 ----------
 
 def test_the_edges_come_from_the_placements():
-    """改一只盒子的 placement，场图的边跟着变
+    """改一只盒子的 placement，Map的边跟着变
 
-    这条是「派生」二字的机械证据：场图不是另抄了一份表，
+    这条是「派生」二字的机械证据：Map不是另抄了一份表，
     它读的就是 placement。
     """
     base = [
@@ -57,7 +57,7 @@ def test_the_edges_come_from_the_placements():
     assert m.handoffs == (("a", "b"), ("b", "c"))
     assert m.feeds_center == ("c",)
 
-    # 把 a 的下游从 b 改成 c：场图的边必须跟着变
+    # 把 a 的下游从 b 改成 c：Map的边必须跟着变
     changed = [
         _p("a", feeds=["c"]),
         _p("b", feeds=["c"]),
@@ -88,9 +88,9 @@ def test_the_feedback_edge_is_kept_out_of_the_handoff_chain():
 
 
 def test_the_field_map_carries_no_hardcoded_box_names():
-    """场图模块里不许出现任何一只盒子的名字
+    """Map模块里不许出现任何一只盒子的名字
 
-    出现 = 有人把业务事实写进了内核。场图只认 placement。
+    出现 = 有人把业务事实写进了内核。Map只认 placement。
     """
     src = (Path(__file__).resolve().parent.parent / "core" / "field_map.py").read_text()
     for box_id in BOX_REGISTRY:
@@ -101,7 +101,7 @@ def test_the_field_map_carries_no_hardcoded_box_names():
 # ---------- 画不出来时要说清楚 ----------
 
 def test_a_scope_spanning_two_domains_has_no_field_map():
-    """跨域 → 没有场图，但要把原因写出来
+    """跨域 → 没有Map，但要把原因写出来
 
     硬凑一个汇点等于替业务声明一条没人声明过的拓扑。
     """
@@ -115,7 +115,7 @@ def test_a_scope_spanning_two_domains_has_no_field_map():
     assert m.center is None
     assert not m.drawable
     assert "多个域" in m.reason
-    # 盒子还是列出来：「这个范围里有哪几只盒子」是事实，缺的只是场
+    # 盒子还是列出来：「这个范围里有哪几只盒子」是事实，缺的只是 Map
     assert set(m.boxes) == {"a", "b", "c", "d"}
 
 
@@ -161,7 +161,7 @@ def test_a_cyclic_handoff_chain_is_reported_not_guessed():
 # ---------- 它是一个结构，不只是一张图 ----------
 
 def test_the_registered_domains_all_have_a_field_map():
-    """每个真域都推得出场图，盒子的集合 == 该域的盒子集合"""
+    """每个真域都推得出Map，盒子的集合 == 该域的盒子集合"""
     views = placement_views()
     domains = {v.domain for v in views.values()}
     assert domains, "注册表里一个域都没有"
@@ -171,11 +171,11 @@ def test_the_registered_domains_all_have_a_field_map():
         assert set(m.boxes) == expected
         assert m.domain == domain
         if len(expected) >= 3:
-            assert m.drawable, f"{domain} 域推不出场图：{m.reason}"
+            assert m.drawable, f"{domain} 域推不出Map：{m.reason}"
 
 
 def test_the_board_layout_is_the_same_map():
-    """看板用的布局 == 场图（同一份事实，不是两份推导）
+    """看板用的布局 == Map（同一份事实，不是两份推导）
 
     两边各推一次的话，改了 placement 其中一边会忘改——
     而看板上看不出来。
@@ -189,16 +189,16 @@ def test_the_board_layout_is_the_same_map():
 
 
 def test_the_map_is_readable_as_a_structure(tmp_path: Path):
-    """场图能被程序读出来（不是只能看图）"""
+    """Map能被程序读出来（不是只能看图）"""
     from kanban.web import field_maps_payload
 
     payload = field_maps_payload()
-    assert "maps" in payload and payload["maps"], "没有各域的场图"
+    assert "maps" in payload and payload["maps"], "没有各域的Map"
     wms = payload["maps"]["WMS"]
     assert wms["center"]
     assert wms["handoffs"], "WMS 域的交接边不该是空的"
     assert wms["drawable"] is True
-    # 跨域范围也有一条结论：没有场图 + 原因
+    # 跨域范围也有一条结论：没有Map + 原因
     assert payload["scope_all"]["drawable"] is False
     assert payload["scope_all"]["reason"]
 
@@ -230,17 +230,32 @@ def test_the_radial_canvas_uses_the_vertical_centre():
 
 
 def test_the_field_boundary_is_drawn_and_follows_the_cards():
-    """场域边界（虚线）要画出来，而且跟着卡片走
+    """BeeBox Map 的边界（虚线）要画出来，而且跟着卡片走
 
     边界写死位置的话，环上多一只盒子，它就骑在框线上。
     """
     import kanban.web as W
 
     page = W.HTML_PAGE
-    assert 'class="edge-field"' in page, "场域边界没画"
+    assert 'class="edge-field"' in page, "BeeBox Map 的边界没画"
     assert "fieldHalfX" in page and "fieldHalfY" in page, (
         "边界必须由卡片位置算出来，不能写死"
     )
     assert "const FIELD_PAD" in page and "const CUBE_ALLOW" in page, (
         "边界余量 / 立方体投影余量得是常量（要跟着布局改）"
     )
+
+
+def test_the_boundary_is_labelled_with_the_products_own_name():
+    """边界上写的是 **BeeBox Map**——产品自己的名字，不自造词
+
+    「活儿」「场」这类自造词，业务方看不懂，还得再解释一遍；
+    而产品名（BeeBox）本来就在标题里出现过，是现成的词。
+    """
+    import kanban.web as W
+
+    page = W.HTML_PAGE
+    assert "' · BeeBox Map'" in page, (
+        "边界的标签应该写「<域> · BeeBox Map」"
+    )
+    assert "' · 场'" not in page, "别再用自造的词「场」当标签"

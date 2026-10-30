@@ -266,18 +266,18 @@ def domain_layout(domain: str) -> dict[str, Any]:
 ALL_DOMAINS_SCOPE = "__all__"
 
 
-# ===== 场图（BeeBox Map）=====
+# ===== Map（BeeBox Map）=====
 #
-# 场图是**派生**的：唯一事实源是各盒自己的 placement（domain + 接线），
+# Map是**派生**的：唯一事实源是各盒自己的 placement（domain + 接线），
 # 这里把它推成一份**可复用的结构**，而不是看板内部的一种画法。
-# 画布上的虚线场域边界只是它的一张照片。
+# 画布上的虚线边界只是它的一张照片。
 #
 # 「再手写一张域接线表」= 第二份事实 = 必然漂，而且漂了不报错。
-# 所以场图永远从 placement 推；想让场图变，就去改那只盒子。
+# 所以Map永远从 placement 推；想让Map变，就去改那只盒子。
 
 
 def placement_views() -> dict[str, PlacementView]:
-    """注册表里每只盒子的**场相关视图**（域 + 接线）"""
+    """注册表里每只盒子的 **Map 相关视图**（域 + 接线）"""
     views: dict[str, PlacementView] = {}
     for bid in registered_box_ids():
         p = BOX_REGISTRY[bid][0]().placement
@@ -291,7 +291,7 @@ def placement_views() -> dict[str, PlacementView]:
 
 
 def domain_field_map(domain: str) -> BeeBoxMap:
-    """一个域的**场图**：这个域里有哪些盒子、谁交给谁、谁是汇点"""
+    """一个域的**Map**：这个域里有哪些盒子、谁交给谁、谁是汇点"""
     views = placement_views()
     ids = [b for b in order_boxes_by_flow(registered_box_ids())
            if views[b].domain == domain]
@@ -299,7 +299,7 @@ def domain_field_map(domain: str) -> BeeBoxMap:
 
 
 def scope_field_map(scope: str) -> BeeBoxMap:
-    """一个**范围**的场图。横跨多个域 → 没有场图，给一句能读懂的原因。"""
+    """一个**范围**的Map。横跨多个域 → 没有Map，给一句能读懂的原因。"""
     if scope == ALL_DOMAINS_SCOPE:
         views = placement_views()
         scopes: dict[str, list[str]] = {}
@@ -310,7 +310,7 @@ def scope_field_map(scope: str) -> BeeBoxMap:
 
 
 def _layout_from_map(m: BeeBoxMap) -> dict[str, Any]:
-    """场图 → 看板的布局 dict（形状不变，只是多了一个来源）"""
+    """Map → 看板的布局 dict（形状不变，只是多了一个来源）"""
     return {
         "domain": m.domain,
         "layout": "radial" if m.drawable else "flat",

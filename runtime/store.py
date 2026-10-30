@@ -181,6 +181,8 @@ class TaskRunStore:
         #: 上次同步时文件的大小/行数（用来判断要不要重读）
         self._loaded_size = 0
         self._loaded_lines = 0
+        #: 是不是「视图」（过滤后的内存快照）——视图不做磁盘重读
+        self._is_view = False
         self._load()
 
     def _load(self) -> None:
@@ -235,6 +237,11 @@ class TaskRunStore:
         变了就重读——这个文件是「一次追加一行」的形态，
         全量重读代价可以接受（几千行以内毫秒级）。
         """
+        # **视图是快照，不做磁盘重读**——
+        # 视图装的是「过滤后的子集」，重读会把全量数据灌回去，
+        # 过滤就失效了（看板会显示未注册盒子的历史记录）。
+        if getattr(self, "_is_view", False):
+            return 0
         try:
             size = self.path.stat().st_size
         except OSError:
@@ -421,7 +428,19 @@ class TaskRunStore:
         用于看板只展示已注册盒子——未注册盒子的历史记录保留在 JSONL
         审计日志里，只是不显示。
         """
+        # **先把源 store 刷到最新**，再切快照——
+        # 否则视图装的是源 store 刷新前的旧数据。
+        self.refresh()
         v = TaskRunStore.__new__(TaskRunStore)
         v.path = self.path
         v._cache = [r for r in self._cache if r["box_id"] in box_ids]
+        # **视图自己的状态字段也要有**：
+        # 它是用 __new__ 造的（不走 __init__），
+        # 少一个字段就是一个「读的时候才炸」的暗雷——
+        # 实测：refresh 被挪进读路径后，view() 出来的对象
+        # 一调 list_recent 就 AttributeError，看板整个请求 500。
+        v.corrupt_lines = self.corrupt_lines
+        v._loaded_size = self._loaded_size
+        v._loaded_lines = self._loaded_lines
+        v._is_view = True
         return v

@@ -332,3 +332,79 @@ def test_store_write_is_flushed_to_disk(tmp_path):
     text = path.read_text(encoding="utf-8").strip()
     assert text, "落盘文件是空的"
     assert json.loads(text.splitlines()[0])["task_run_id"] == task_run.identity.task_run_id
+
+
+# ============================================================
+# 5) 视图（view）：过滤后的快照，不能被磁盘重读破坏
+# ============================================================
+
+def test_view_can_be_read_without_crashing(tmp_path):
+    """**view() 出来的对象要能正常读**
+
+    **注入**：view() 用 `TaskRunStore.__new__` 造对象（不走 __init__），
+    少一个状态字段就是一个「读的时候才炸」的暗雷。
+    实测：refresh 挪进读路径后，view 出来的对象一调 list_recent
+    就 AttributeError → 看板整个请求 500（连接被关闭）。
+    """
+    path = tmp_path / "runs.jsonl"
+    store = TaskRunStore(path)
+    store._cache = [
+        {"task_run_id": "a1", "box_id": "kept", "created_at": "2026-01-01"},
+        {"task_run_id": "a2", "box_id": "hidden", "created_at": "2026-01-02"},
+    ]
+
+    v = store.view({"kept"})
+
+    # 不该炸
+    assert v.list_recent(limit=10) is not None
+    assert v.get_run("a1") is not None
+
+
+def test_view_does_not_get_unfiltered_data_back(tmp_path):
+    """**视图不能被磁盘重读灌回全量数据**
+
+    **这是更危险的一半**：视图装的是「过滤后的子集」，
+    如果它去重读磁盘，过滤就失效了 →
+    **看板会显示未注册盒子的历史记录**（用户没要求隐藏的东西冒出来）。
+
+    **注入**：视图造好之后，往源文件里追加一条别的盒子的记录，
+    再让视图读一次 —— 它**不该**看到那条。
+    """
+    path = tmp_path / "runs.jsonl"
+    store = TaskRunStore(path)
+    store._cache = [
+        {"task_run_id": "a1", "box_id": "kept", "created_at": "2026-01-01"},
+    ]
+
+    v = store.view({"kept"})
+
+    # 源文件变化了（模拟别的进程写了新记录）
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "task_run_id": "a2", "box_id": "hidden", "created_at": "2026-01-02",
+        }) + "\n")
+
+    v.list_recent(limit=10)
+
+    assert v.get_run("a2") is None, \
+        "视图被磁盘重读灌回了未过滤的记录 —— 看板会显示本该隐藏的盒子"
+
+
+def test_source_store_is_refreshed_before_view_is_taken(tmp_path):
+    """**切视图之前，源 store 要先刷到最新**
+
+    否则视图装的是刷新前的旧数据 —— 看板少显示几条记录，
+    而且**没有任何报错**（数据陈旧长得跟「本来就没这些记录」一样）。
+    """
+    path = tmp_path / "runs.jsonl"
+    store = TaskRunStore(path)
+
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "task_run_id": "ext-9", "box_id": "kept", "created_at": "2026-01-03",
+        }) + "\n")
+
+    v = store.view({"kept"})
+
+    assert v.get_run("ext-9") is not None, \
+        "切视图前没刷新 —— 视图装的是旧数据（少显示记录且不报错）"

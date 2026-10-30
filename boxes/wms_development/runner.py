@@ -72,6 +72,7 @@ from boxes.wms_development.mapper_binding import (
     check_mapper_bindings,
     check_tests_not_shrunk,
     check_migration_covers_tables,
+    check_migration_creates_existing_table,
     check_migration_filenames,
 )
 from runtime.runner import HandlerRunner
@@ -330,6 +331,12 @@ def dev_code_handler(input_data: dict[str, Any]) -> dict[str, Any]:
         # 两种错误要给**不同的理由**，理由不对模型就会原地打转。
         problems.extend(check_migration_filenames(
             ws, changed_files(ws), base_ref=base_ref,
+        ))
+        # **重复建表**：新迁移里又建一遍别的迁移已经建过的表 →
+        # Flyway 跑到那一步报 relation already exists，**服务起不来**。
+        # （2026-10-30 实测：模型被拦住改已发布的 V5，转头在 V6 里又建了一遍）
+        problems.extend(check_migration_creates_existing_table(
+            ws, changed_files(ws),
         ))
         # **重名类**：模型为了表达归属关系，会把实体复制一份到别的包里
         # （实测：module/location/Zone.java + module/zone/Location.java）。

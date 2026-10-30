@@ -183,6 +183,100 @@ def check_migration_covers_tables(
     return problems
 
 
+def check_migration_creates_existing_table(
+    ws: Path,
+    changed_files: list[str],
+    base_ref: str = "",
+) -> list[str]:
+    """**新建的迁移不许再建一遍已经建过的表**
+
+    **为什么要有这条**（2026-10-30 实测撞出来的）：
+    模型被拦住「不许改已发布的 V5__create_zone_table.sql」之后，
+    转头在新建的 V6 里**又写了一遍 `CREATE TABLE wms_zone`** ——
+    结果 Flyway 跑到 V6 时报
+    `relation "wms_zone" already exists` → **服务根本起不来**。
+
+    **编译过、单测绿、判据全绿 —— 因为它根本没起来过**：
+    那一轮链跑报了「六盒全 accepted、落差 0」，实际测的是**旧实例**
+    （新构建启动就挂了，端口检查看到的是还没退干净的旧进程）。
+
+    `CREATE TABLE IF NOT EXISTS` **不算错**（幂等，撞了也不炸）——
+    只判「不带 IF NOT EXISTS 的重复建表」。
+
+    **报错要带能修它的材料**：说清哪个表已经建过了（哪个迁移建的），
+    以及该怎么写（只写 ALTER / INSERT 种子数据）。
+    """
+    mig_dir = ws / "server" / "src" / "main" / "resources" / "db" / "migration"
+    if not mig_dir.exists():
+        return []
+
+    # 表 → 建它的迁移（rel → 表名集合）
+    creates: dict[str, list[tuple[str, str]]] = {}
+    for path in sorted(mig_dir.glob("*.sql")):
+        rel = str(path.relative_to(ws))
+        for table, guarded in _created_tables(_read(path)):
+            creates.setdefault(table, []).append((rel, guarded))
+
+    problems: list[str] = []
+    for rel in changed_files:
+        if not rel.startswith("server/src/main/resources/db/migration"):
+            continue
+        if not rel.endswith(".sql"):
+            continue
+        path = ws / rel
+        if not path.exists():
+            continue
+        text = _read(path)
+        tables = _created_tables(text)
+        for table, guarded in tables:
+            if guarded:
+                continue  # IF NOT EXISTS：撞了也不炸
+            # **同一个迁移里建两次同一个表** → 第二次就炸
+            if sum(1 for name, _ in tables if name == table) > 1:
+                problems.append(
+                    f"{rel} 里建了两次表 {table} —— 第二次就会报 "
+                    f"relation \"{table}\" already exists，服务起不来"
+                )
+                continue
+            others = [
+                (other_rel, other_guarded)
+                for other_rel, other_guarded in creates.get(table, [])
+                if other_rel != rel
+            ]
+            if not others:
+                continue
+            built_by = "、".join(
+                other_rel for other_rel, other_guarded in others
+                if not other_guarded
+            ) or "、".join(other_rel for other_rel, _ in others)
+            problems.append(
+                f"{rel} 里又建了一次表 {table}，但 {built_by} 已经建过它了 ——\n"
+                f"Flyway 跑到这个迁移时会报 relation \"{table}\" already exists，"
+                "**服务启动时直接拒绝**（编译和单测都发现不了，"
+                "要等它真的起来才炸）。\n"
+                f"**要加东西就只写 ALTER / INSERT**（比如种子数据就写 "
+                f"INSERT INTO {table} ...），**不要重复建表**；\n"
+                "确实要建一个新表，就换一个仓里还没有的表名。"
+            )
+    return problems
+
+
+# 建表语句：`CREATE TABLE [IF NOT EXISTS] <表名>`
+_CREATE_TABLE_RE = re.compile(
+    r"CREATE\s+TABLE\s+(?:(IF\s+NOT\s+EXISTS)\s+)?([\w.\"]+)",
+    re.IGNORECASE,
+)
+
+
+def _created_tables(sql: str) -> list[tuple[str, bool]]:
+    """这个迁移建了哪些表 → [(表名, 是否 IF NOT EXISTS)]"""
+    out: list[tuple[str, bool]] = []
+    for m in _CREATE_TABLE_RE.finditer(sql):
+        name = m.group(2).strip('"').lower()
+        out.append((name, bool(m.group(1))))
+    return out
+
+
 def check_migration_filenames(
     ws: Path,
     changed_files: list[str],

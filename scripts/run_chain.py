@@ -107,8 +107,44 @@ def _port_open(port: int) -> bool:
         return sock.connect_ex(("127.0.0.1", port)) == 0
 
 
+# Spring Boot 打完这行 = 应用**真的起来了**（Flyway 也已经跑完）
+_STARTED_MARKERS = ("Started WmsApplication", "Started Application")
+
+
+def _started_ok(log_path: str, offset: int) -> bool:
+    """日志里（从 offset 之后）有没有「这次启动成功了」的标记
+
+    **为什么不能只看端口通不通**（2026-10-30 实测撞出来的）：
+    旧实例还没退干净的时候，端口也是通的 —— 那时候「端口通」
+    = **旧代码还在服务**。
+    实测：那一轮交付的新构建启动就挂了（Flyway 报 relation already exists），
+    而就绪检查看到端口通（其实是旧实例）→ 链报了「六盒全绿、落差 0」，
+    测试盒量的却是**旧代码**。
+
+    所以就绪 = ① 端口通 ② **新进程自己还活着** ③ **日志里有本次的启动成功标记**。
+    """
+    try:
+        with open(log_path, "rb") as fh:
+            fh.seek(offset)
+            text = fh.read().decode("utf-8", "ignore")
+    except OSError:
+        return False
+    if "Application run failed" in text:
+        return False
+    return any(marker in text for marker in _STARTED_MARKERS)
+
+
 def _stop_instance(port: int) -> list[int]:
-    """把占着端口的进程停掉（验证实例要换成新构建）"""
+    """把占着端口的进程停掉（验证实例要换成新构建）
+
+    **SIGTERM 之后还要 SIGKILL**（2026-10-30 实测撞出来的）：
+    JVM 收到 SIGTERM 会走优雅关闭（等在途请求），端口能拖住半分钟以上。
+    那段时间里「端口还开着」= **旧实例还在服务**——
+    就绪检查只看端口通不通 → 旧实例被当成了新构建 → 测试盒对着旧代码跑，
+    链却报「全绿」（那一轮的新构建其实启动就挂了）。
+
+    所以：**端口没放开就一直等；等到还不放，就 SIGKILL。**
+    """
     pids: list[int] = []
     try:
         out = subprocess.run(
@@ -124,6 +160,14 @@ def _stop_instance(port: int) -> list[int]:
         if not _port_open(port):
             break
         time.sleep(0.5)
+    # **还不放？** → 硬杀。留着它 = 旧实例继续服务 = 又一次假绿。
+    if _port_open(port):
+        for pid in pids:
+            subprocess.run(["kill", "-9", str(pid)], check=False)
+        for _ in range(60):
+            if not _port_open(port):
+                break
+            time.sleep(0.5)
     return pids
 
 
@@ -220,6 +264,16 @@ def _deploy_to_verify_instance(
     port = _port_of(verify_url)
     stopped = _stop_instance(port)
 
+    # **等旧进程真的把端口放出来**（2026-10-30 实测撞出来的）：
+    # 旧进程被 kill 后，JVM 要过一会儿才真正退出、端口才关。
+    # 那之前「端口开着」= **旧实例还在服务**——
+    # 而就绪检查只看「端口通不通」→ 旧实例被当成了新构建就绪，
+    # 测试盒于是对着**旧代码**跑，还报「全绿」。
+    # 那一轮交付的新构建其实启动就挂了（Flyway 报 relation already exists）。
+    deadline = time.time() + 60
+    while time.time() < deadline and _port_open(port):
+        time.sleep(0.5)
+
     # **先把验证库重置**：上一次实验留下的迁移（内容还不一样）
     # 会让 Flyway 报 checksum mismatch，服务起不来
     reset_note = _reset_verify_db(
@@ -242,20 +296,32 @@ def _deploy_to_verify_instance(
     if db_password:
         cmd.append(f"--spring.datasource.password={db_password}")
 
+    # **本次启动在日志里的起点**——只看它之后的内容，
+    # 免得把上一次启动的成功标记当成本次的。
+    log_offset = Path(log_path).stat().st_size if Path(log_path).exists() else 0
+
     with open(log_path, "ab") as log:
         log.write(
             f"\n===== 部署验证实例 {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n"
             f"jar: {jar}\ncmd: {' '.join(cmd)}\n".encode()
         )
         log.flush()
-        subprocess.Popen(
+        proc = subprocess.Popen(
             cmd, stdout=log, stderr=log, start_new_session=True,
         )
 
     # 等它真的能应答（Flyway 迁移也在这个过程里跑）
     deadline = time.time() + 120
     while time.time() < deadline:
-        if _port_open(port):
+        # **新进程自己退了** → 起来就挂（如 Flyway 报错）→ 中止，
+        # 绝不让测试盒去对着旧实例跑
+        if proc.poll() is not None:
+            raise SystemExit(
+                f"新构建启动就退出了（退出码 {proc.returncode}）——"
+                f"链不能继续：测试盒会对着旧实例跑，报告却说验过了。"
+                f"看日志 {log_path}"
+            )
+        if _port_open(port) and _started_ok(log_path, log_offset):
             return (
                 f"验证实例已换成开发盒交付的构建（jar={Path(jar).name}，"
                 f"停掉旧进程 {stopped or '无'}，{reset_note}，日志 {log_path}）"

@@ -143,6 +143,80 @@ class TestTheRenameIsToldToTheModel:
                 "改名这件事要说明白（它得知道该用哪个路径）"
 
 
+class TestPublishedMigrationsAreProtectedAtWriteTime:
+    """**写盘前**就拦住，不许改、不许删已发布的迁移
+
+    **为什么不能事后才报**（2026-10-30 实测撞出来的）：
+    原来只是事后报「不许改已发布的迁移」——
+    于是：改了 → 被报 → 它想回滚 → 抄不中原文（old 命中 0 次）→
+    再改 → 再报 → …… 30 轮全耗在这上面。
+    """
+
+    @pytest.fixture()
+    def gitws(self, tmp_path):
+        import subprocess
+
+        root = tmp_path / "gitws"
+        mig = root / MIG
+        mig.mkdir(parents=True)
+        (mig / "V1__init_schema.sql").write_text("CREATE TABLE a();\n", encoding="utf-8")
+        (mig / "V5__create_zone_table.sql").write_text(
+            "CREATE TABLE wms_zone(code varchar);\n", encoding="utf-8",
+        )
+        subprocess.run(["git", "init", "-q"], cwd=str(root), check=True)
+        subprocess.run(["git", "add", "-A"], cwd=str(root), check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-c", "user.email=t@t", "-c", "user.name=t",
+             "commit", "-q", "-m", "base"],
+            cwd=str(root), check=True, capture_output=True,
+        )
+        return root
+
+    def test_editing_a_published_migration_is_refused(self, gitws):
+        created, renames, notes = set(), {}, []
+        published = codegen._published_migrations(gitws)
+        assert f"{MIG}/V5__create_zone_table.sql" in published
+
+        with pytest.raises(codegen.CodegenError, match="已经发布过"):
+            codegen.apply_edits(gitws, [{
+                "file": f"{MIG}/V5__create_zone_table.sql",
+                "old": "CREATE TABLE wms_zone(code varchar);\n",
+                "new": "CREATE TABLE wms_zone(code varchar, name varchar);\n",
+            }], created, renames, notes, published)
+
+        # **文件没被动过**（这是关键：写盘前就拦住，模型不用去回滚）
+        assert (gitws / MIG / "V5__create_zone_table.sql").read_text(encoding="utf-8") \
+            == "CREATE TABLE wms_zone(code varchar);\n"
+
+    def test_deleting_a_published_migration_is_refused(self, gitws):
+        """删掉已发布的迁移 → 一样起不来（Flyway 校验历史迁移缺失）"""
+        created, renames, notes = set(), {}, []
+        published = codegen._published_migrations(gitws)
+        current = (gitws / MIG / "V5__create_zone_table.sql").read_text(encoding="utf-8")
+
+        with pytest.raises(codegen.CodegenError, match="已经发布过"):
+            codegen.apply_edits(gitws, [{
+                "file": f"{MIG}/V5__create_zone_table.sql",
+                "old": current, "new": "",
+            }], created, renames, notes, published)
+
+        assert (gitws / MIG / "V5__create_zone_table.sql").exists()
+
+    def test_the_error_says_what_to_do_instead(self, gitws):
+        """报错要带能修它的材料：下一个可用版本号 + 新建文件怎么写"""
+        created, renames, notes = set(), {}, []
+        published = codegen._published_migrations(gitws)
+        with pytest.raises(codegen.CodegenError) as exc:
+            codegen.apply_edits(gitws, [{
+                "file": f"{MIG}/V5__create_zone_table.sql",
+                "old": "CREATE TABLE wms_zone(code varchar);\n",
+                "new": "CREATE TABLE wms_zone(code varchar, name varchar);\n",
+            }], created, renames, notes, published)
+        message = str(exc.value)
+        assert "V6__" in message, "要告诉它下一个可用版本号"
+        assert "新建" in message, "要告诉它该新建一个迁移"
+
+
 class TestTheMechanicalLayerMayNotChangeMeaning:
     def test_recreating_a_published_migration_is_not_silently_renamed(self, ws):
         """重建一个**已发布**的迁移 → 走「文件已存在」那条报错。

@@ -365,6 +365,33 @@ def _migration_versions(ws: Path) -> dict[int, tuple[str, str]]:
     return out
 
 
+def _published_migrations(ws: Path) -> set[str]:
+    """工作区里**已经发布过**的迁移（仓里已跟踪的那些）
+
+    **为什么要有它**（2026-10-30 实测撞出来的）：
+    模型反复去改 `V5__create_zone_table.sql`（已发布的建库区表迁移）——
+    机械层**允许它写**，只是事后报「不许改」，
+    于是：改了 → 被报 → 它想回滚 → 抄不中原文（old 命中 0 次）→
+    再改 → 再报 → …… 30 轮全耗在这上面。
+
+    **机械层该拦的就要在写盘前拦**：已发布的迁移**既不许改也不许删**
+    （Flyway 比对 checksum，删掉一样起不来）。
+    """
+    proc = subprocess.run(
+        ["git", "ls-files", "--", _MIGRATION_DIR_REL],
+        cwd=str(ws), capture_output=True, text=True, timeout=60,
+    )
+    if proc.returncode != 0:
+        return set()
+    return {line.strip() for line in proc.stdout.splitlines() if line.strip()}
+
+
+def _next_migration_version_in_workspace(ws: Path) -> int:
+    """工作区里下一个可用的迁移版本号"""
+    versions = _migration_versions(ws)
+    return (max(versions) + 1) if versions else 1
+
+
 def _resolve_migration_target(
     ws: Path,
     path: Path,
@@ -749,7 +776,8 @@ def _validate_edit(
     edit: Any,
     created: Optional[set[str]] = None,
     renames: Optional[dict[str, str]] = None,
-    notes: Optional[list[str]] = None,
+    notes: Optional[list[tuple[str, str]]] = None,
+    published: Optional[set[str]] = None,
 ) -> tuple[Path, str, str]:
     """校验一处替换（不写盘）
 
@@ -780,6 +808,27 @@ def _validate_edit(
         ws, path, created, renames, notes, is_new=(old == ""),
     )
     rel = _ws_rel(ws, path)
+    # **已发布的迁移：写盘前就拦住**（2026-10-30 实测撞出来的）
+    #
+    # 原来只是**事后**报「不许改已发布的迁移」——
+    # 于是模型改了 → 被报 → 它想回滚 → 抄不中原文（old 命中 0 次）→
+    # 再改 → 再报 → …… 30 轮全耗在这上面。
+    # 机械层该拦的就要**在写盘前拦**：已发布的迁移既不许改也不许删。
+    if published and rel in published and not (created and rel in created):
+        next_ver = _next_migration_version_in_workspace(ws)
+        raise CodegenError(
+            f"{rel} 是**已经发布过的迁移**，不许改它、也不许删它——\n"
+            "Flyway 会比对每个迁移的 checksum，改了内容就是 checksum mismatch，"
+            "**服务启动时直接拒绝**（这不是编译期能发现的问题）。\n"
+            "\n"
+            "**要加东西（表、列、种子数据）就新建一个迁移**，edits 里这么写：\n"
+            f"  file: server/src/main/resources/db/migration/V{next_ver}__<描述>.sql\n"
+            "  old:  \"\"（留空 = 新建这个文件）\n"
+            "  new:  这个文件的完整 SQL\n"
+            f"下一个可用版本号是 **V{next_ver}**（仓里更高的版本号都被占了，"
+            "Flyway 遇到重复版本号也会直接拒绝启动）。\n"
+            f"**描述自己起名**（例如 `seed_zone`、`add_zone_column`）。"
+        )
     if old == "":
         if path.exists():
             rel_key = str(path.relative_to(ws.resolve()))
@@ -966,7 +1015,8 @@ def apply_edits(
     edits: list[dict[str, Any]],
     created: Optional[set[str]] = None,
     renames: Optional[dict[str, str]] = None,
-    notes: Optional[list[str]] = None,
+    notes: Optional[list[tuple[str, str]]] = None,
+    published: Optional[set[str]] = None,
 ) -> list[str]:
     """把模型给的「精确片段替换」应用到工作区
 
@@ -978,7 +1028,7 @@ def apply_edits(
     """
     planned: list[tuple[Path, str, str]] = []
     for edit in edits:
-        planned.append(_validate_edit(ws, edit, created, renames, notes))
+        planned.append(_validate_edit(ws, edit, created, renames, notes, published))
 
     applied: list[str] = []
     root = ws.resolve()
@@ -1122,8 +1172,10 @@ def generate_edits(
                 continue
             return applied_all, summary
         notes.clear()
+        # **已发布的迁移**（仓里已跟踪的）→ 写盘前就拦住，不许改也不许删
+        published = _published_migrations(ws)
         try:
-            applied = apply_edits(ws, edits, created, renames, notes)
+            applied = apply_edits(ws, edits, created, renames, notes, published)
         except CodegenError as exc:
             last_error = str(exc)
             feedback = last_error

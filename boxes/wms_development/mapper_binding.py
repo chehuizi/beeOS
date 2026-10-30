@@ -216,16 +216,35 @@ def check_migration_filenames(
     **报错要带能修它的材料**：直接告诉它「新建 V6」，
     模型的下一轮就会走对路。
     """
-    # 基线里已有的迁移（用来区分「新增」和「改已发布的」）
+    # **已发布的迁移**（= 不许改、不许删的那些）
+    #
+    # **判据要同时看两处**（2026-10-30 实测踩出来的）：
+    # 1. **当前仓里已跟踪的**（`git ls-files`）——
+    #    这些是会被发布出去的，改了就是 checksum mismatch。
+    #    单看基线会漏掉一类：**基线之后主线才加的迁移**，
+    #    开发盒起跑时它还不存在，但它现在就在仓里。
+    # 2. **基线里有的**（`git ls-tree`）——
+    #    万一有人把已发布的迁移**删了**，它已经不在 ls-files 里了，
+    #    但删掉一样起不来（Flyway 报 checksum mismatch / missing migration）。
+    #
+    # 两个集合取并集：改 + 删，两种破坏方式都拦住。
     baseline_migrations: set[str] = set()
+    mig_rel = "server/src/main/resources/db/migration"
+    proc = subprocess.run(
+        ["git", "ls-files", "--", mig_rel],
+        cwd=str(ws), capture_output=True, text=True, timeout=60,
+    )
+    if proc.returncode == 0:
+        baseline_migrations = {
+            line.strip() for line in proc.stdout.splitlines() if line.strip()
+        }
     if base_ref:
         proc = subprocess.run(
-            ["git", "ls-tree", "-r", "--name-only", base_ref,
-             "--", "server/src/main/resources/db/migration"],
+            ["git", "ls-tree", "-r", "--name-only", base_ref, "--", mig_rel],
             cwd=str(ws), capture_output=True, text=True, timeout=60,
         )
         if proc.returncode == 0:
-            baseline_migrations = {
+            baseline_migrations |= {
                 line.strip() for line in proc.stdout.splitlines() if line.strip()
             }
     problems: list[str] = []
@@ -248,10 +267,14 @@ def check_migration_filenames(
             continue  # 可重复脚本没有版本号，正常
         bad_names.append(rel)
 
+    # **仓里所有迁移的最大版本号**（建议新迁移时用）
+    # —— 必须在下面用它之前算好。
+    top_all = max(versions.values()) if versions else 0
+
     for rel in bad_names:
         problems.append(
             f"{rel} 的文件名不符合 Flyway 规范——"
-            "必须是 V<版本号>__<描述>.sql（例如 V5__create_wms_zone.sql）"
+            f"必须是 V<版本号>__<描述>.sql（例如 V{top_all + 1}__create_wms_zone.sql）"
             "或 R__<描述>.sql。"
             "写成 V__xxx.sql（没有版本号）的话，Flyway 启动时会直接拒绝："
             "Invalid version separator —— 服务根本起不来"
@@ -261,7 +284,6 @@ def check_migration_filenames(
     seen: dict[int, list[str]] = {}
     for rel, ver in versions.items():
         seen.setdefault(ver, []).append(rel)
-    top_all = max(versions.values()) if versions else 0
     for ver, rels in sorted(seen.items()):
         if len(rels) > 1:
             # **说清楚该用哪个版本号**——只说「重复」的话，
@@ -276,6 +298,18 @@ def check_migration_filenames(
     # 版本号必须比「本次没改的那些」的最大版本号大
     unchanged = [v for rel, v in versions.items() if rel not in changed]
     if unchanged:
+        # **版本上限取「当前工作区里所有迁移」的最大版本号**，
+        # 不取基线里那些（2026-10-30 实测踩出来的）：
+        # 基线是开发盒起跑时的那个提交，可能**早于后来主线上的迁移**。
+        # 那时仓里已经有 V5__create_zone_table.sql，
+        # 而基线里最大只有 V4 → 反馈一直建议「新建 V5」→
+        # 模型照做 → 又被同一条理由拦回去 → **打了 30 轮**。
+        #
+        # **报错给的建议版本号必须是真的能用的那个**——
+        # 给一个已被占用的版本号，比不给方向更坏：
+        # 模型会**照着做**，然后被同一条理由再拦一次。
+        # **判据的版本上限 = 「本次没改的那些」的最大版本号**（不含自己）——
+        # 新增迁移只要比**别的**迁移大就行，拿自己比自己会误伤。
         top = max(unchanged)
         for rel, ver in sorted(versions.items(), key=lambda kv: kv[1]):
             if rel not in changed:
@@ -287,7 +321,7 @@ def check_migration_filenames(
                     "Flyway 会比对每个迁移的 checksum，改了内容就是 "
                     "checksum mismatch，**服务启动时直接拒绝**。"
                     f"要加东西（表、列、种子数据）就**新建一个迁移**："
-                    f"V{top + 1}__<描述>.sql"
+                    f"V{top_all + 1}__<描述>.sql"
                     "（新迁移的版本号必须比仓里已有的最大版本号大）"
                 )
                 continue
@@ -296,7 +330,7 @@ def check_migration_filenames(
                     f"{rel} 的版本号 V{ver} 不大于仓里已有的最大版本号 V{top}——"
                     "Flyway 默认不认乱序，版本号撞了或倒退了它会在启动时拒绝："
                     "Detected resolved migration not applied to database。"
-                    f"新建迁移的话用 V{top + 1}__<描述>.sql"
+                    f"新建迁移的话用 V{top_all + 1}__<描述>.sql"
                 )
     return problems
 

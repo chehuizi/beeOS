@@ -925,7 +925,10 @@ class TestMigrationFilenamesAreChecked:
         ])
         assert problems, "没有版本号的迁移文件必须被报出来"
         assert any("V__create_wms_zone.sql" in p for p in problems)
-        assert any("V5__create_wms_zone.sql" in p for p in problems), (
+        # **示例里的版本号 = 当前可用的那个**（仓里只有 V1 → 下一个是 V2）——
+        # 写死一个版本号的话，它会变成「建议用这个号」，
+        # 而那个号可能早就被占了（实测空转 30 轮）。
+        assert any("V2__create_wms_zone.sql" in p for p in problems), (
             "报错要带能修它的材料：给出正确的文件名长什么样"
         )
 
@@ -1402,3 +1405,61 @@ class TestWorkspaceIsolation:
         monkeypatch.setenv(codegen.WMS_REPO_ENV, str(tmp_path))
         with pytest.raises(codegen.CodegenError, match="不是 git 仓"):
             codegen.repo_path()
+
+
+# ============================================================
+# 迁移版本号的建议必须是真的能用的那个
+# ============================================================
+
+def test_migration_advice_uses_current_workspace_max_not_stale_baseline(tmp_path):
+    """**建议的新迁移版本号 = 当前工作区最大版本号 + 1**
+
+    **为什么这是条硬要求**（2026-10-30 实测踩出来的）：
+    反馈里写「新建 V5」，而 V5 **已经被占了**（主线后来加的）→
+    模型**照着做** → 新建了一个 V5 → 又被「版本号重复」拦回去 →
+    **同一件事空转 30 轮**。
+
+    **给一个已被占用的版本号，比不给方向更坏**：
+    不给方向它会自己猜；给了错的方向它会照做，然后被同一条理由再拦一次。
+
+    **注入**：造一个真 git 仓 —— 基线提交里最大版本号是 V4，
+    但工作区里已经有 V5（模拟「主线后来加了迁移」）。
+    """
+    import subprocess
+
+    from boxes.wms_development.mapper_binding import check_migration_filenames
+
+    ws = tmp_path / "repo"
+    mig = ws / "server" / "src" / "main" / "resources" / "db" / "migration"
+    mig.mkdir(parents=True)
+
+    def run(*args):
+        return subprocess.run(args, cwd=str(ws), capture_output=True, text=True)
+
+    run("git", "init", "-q")
+    run("git", "config", "user.email", "t@t")
+    run("git", "config", "user.name", "t")
+
+    # 基线：只有 V1~V4
+    for i in range(1, 5):
+        (mig / f"V{i}__seed.sql").write_text("select 1;\n", encoding="utf-8")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "base")
+
+    # 主线后来加上了 V5，**并且已经提交**（= 已发布的迁移）
+    v5 = mig / "V5__create_zone_table.sql"
+    v5.write_text("create table wms_zone (...);\n", encoding="utf-8")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "add v5")
+
+    problems = check_migration_filenames(
+        ws,
+        ["server/src/main/resources/db/migration/V5__create_zone_table.sql"],
+        # **基线是 V5 之前那次提交**（模拟开发盒起跑时基线早于主线）
+        base_ref="HEAD~1",
+    )
+
+    text = "\n".join(problems)
+    assert "V6" in text, f"建议的版本号不是当前可用的那个：\n{text}"
+    assert "新建一个迁移：V5" not in text, \
+        f"建议了一个已被占用的版本号（模型会照做然后被再拦一次）：\n{text}"

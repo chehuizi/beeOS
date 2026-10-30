@@ -927,6 +927,10 @@ HTML_PAGE = f"""<!DOCTYPE html>
     text-transform: none; letter-spacing: 0; font-weight: 400;
     color: #94a3b8; margin-left: 8px; font-size: 11px;
   }}
+  /* 品牌名**不许被大写**：`text-transform: uppercase` 会把 BeeBox Map
+     变成 BEEBOX MAP——产品的名字被改写了，就不是那个名字了。
+     （标题全大写是为了排版，不是为了改词。） */
+  .section-title .brand-case {{ text-transform: none; letter-spacing: 0.02em; }}
 
   /* ===== 顶部筛选条 =====
      「视图」和「范围」两块并排，贴在它俩所控制的画面正上方。
@@ -3942,7 +3946,8 @@ function render(data) {{
     // 其中几只盒子——环上缺段还叫拓扑，那是骗人。所以任务一律平铺。
     const topology = (_view === VIEW_TOPOLOGY && canRadial && !_task);
     if (topology) {{
-      html += `<div class="section"><div class="section-title">${{esc(domainLabel(lay.domain))}} 域的 BeeBox Map
+      html += `<div class="section"><div class="section-title">${{esc(domainLabel(lay.domain))}} 域的
+        <span class="brand-case">BeeBox Map</span>
         （环上 ${{lay.ring.length}} 只 · 汇点由接线推导）</div>`;
       html += renderRadial(lay, data.box_stats);
       html += `</div>`;

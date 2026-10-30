@@ -787,6 +787,7 @@ def generate_edits(
     verify_fast: Optional[Callable[[], list[str]]] = None,
     verify_evidence: Optional[Callable[[], list[str]]] = None,
     tree: Optional[list[str]] = None,
+    migration_note: str = "",
 ) -> tuple[list[str], str]:
     """让模型出改动并落下去；落不下去就把错误原样回给它改
 
@@ -855,6 +856,7 @@ def generate_edits(
             expectations, locations, files, feedback=feedback,
             concepts=concepts, must_implement=must_implement,
             done_files=done_files, tree=tree,
+            migration_note=migration_note,
         )
         _log(f"第 {round_no + 1} 轮：问模型（上下文 {len(files)} 个文件）")
         raw = llm_call(prompt)

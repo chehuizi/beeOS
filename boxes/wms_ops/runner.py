@@ -79,16 +79,39 @@ def _names_the_build(text: str, artifact: dict[str, Any]) -> bool:
 
     **为什么必须指名**：变更单写「上线拣货准确率」，放行的却是另一份构建，
     那这份验收就白做了——它验的不是要上线的东西。
+
+    **基线提交也算指名**（2026-10-30 实测撞出来的）：
+    方案已经在代码里了 → 开发盒正确地**零改动** → 没有新提交，
+    可这次**照样要放行一份构建**（那份构建来自基线提交）。
+    变更单要指名的是**要放的那份构建**，不是「有没有新提交」——
+    所以认 `base_commit`（制品的来源提交）。
     """
     commit = str(artifact.get("commit_sha") or "").strip()
+    base = str(artifact.get("base_commit") or "").strip()
     digest = str(artifact.get("artifact_digest") or "").strip()
-    if not commit and not digest:
+    if not commit and not base and not digest:
         return False
-    if commit and (commit[:8] in text or commit in text):
-        return True
+    for sha in (commit, base):
+        if sha and (sha[:8] in text or sha in text):
+            return True
     if digest and (digest in text or (len(digest) > 16 and digest[:16] in text)):
         return True
     return False
+
+
+def _named_build(artifact: dict[str, Any]) -> str:
+    """这份制品是「哪次构建」（有新的就报新的，没有就报基线那份）
+
+    **为什么要有这个**：变更被指名之后，得说清「放的是哪一份」——
+    说「放行 00000000」等于没说。
+    """
+    commit = str(artifact.get("commit_sha") or "").strip()
+    if commit:
+        return commit[:8]
+    base = str(artifact.get("base_commit") or "").strip()
+    if base:
+        return base[:8]
+    return str(artifact.get("artifact_digest") or "")[:8]
 
 
 def _verification_ok(verification: dict[str, Any]) -> tuple[bool, str]:
@@ -163,13 +186,13 @@ def ops_handle_handler(input_data: dict[str, Any]) -> dict[str, Any]:
         named = _names_the_build(str(change.get("text") or ""), artifact)
         approved = verified and named
         if approved:
-            reason = f"{verify_reason}；变更指名了构建 {str(artifact.get('commit_sha'))[:8]}"
+            reason = f"{verify_reason}；变更指名了构建 {_named_build(artifact)}"
         elif not verified:
             reason = verify_reason
         else:
             reason = (
                 "变更没有指名它要放的那份构建"
-                f"（构建 commit={str(artifact.get('commit_sha') or '')[:8]}）——"
+                f"（构建 commit={_named_build(artifact)}）——"
                 "验的不是要上线的东西"
             )
         change["approved"] = approved

@@ -1242,6 +1242,46 @@ def generate_edits(
     )
 
 
+def head_sha(ws: Path) -> str:
+    """工作区当前 HEAD 的提交号（取不到就空字符串）
+
+    **用来记「这份东西是从哪个提交来的」**：
+    零改动时没有新提交，制品却是从基线编出来的——
+    基线提交号得**记下来**，否则「制品来自哪个提交」就没人说得清了。
+    """
+    out = _run(["git", "rev-parse", "HEAD"], cwd=ws)
+    if out.returncode != 0:
+        return ""
+    return out.stdout.strip()
+
+
+def is_symlink_path(ws: Path, rel_path: str) -> bool:
+    """这个路径在仓里是不是**符号链接**
+
+    **为什么符号链接不能进交付物**（2026-10-30 实测撞出来的）：
+    开发盒在隔离工作区里给前端挂了一个 `web/node_modules` 软链
+    （worktree 里没有 gitignore 的依赖，不挂就没法跑 `npm run build`）。
+    那个软链是**为了让构建能跑**临时挂上去的，**不是这次需求的产出**。
+
+    可它会混进「改动清单」：`.gitignore` 的 `node_modules/` 只匹配
+    **目录**，不匹配软链 → git 认不出它该被忽略 → porcelain 把它
+    当成未跟踪文件报出来。于是：
+
+    - 判据说「改了方案没覆盖的文件：web/node_modules」——
+      **判红的理由完全在骗人**（真正的原因是这次什么都没改）；
+    - 更坏的是：清单里混进了它，`git add -A` 又会把它暂存进去
+      （`_drop_symlinks_from_index` 只在提交那一步才剔）。
+
+    所以规则是：**符号链接不是交付物**——不改 `.gitignore`
+    （那是方案外的文件），不针对 node_modules 打补丁，
+    任何符号链接都不许进改动清单。
+    """
+    try:
+        return (ws / rel_path).is_symlink()
+    except OSError:
+        return False
+
+
 def changed_files(ws: Path) -> list[str]:
     """工作区里被改动的文件（相对 HEAD）
 
@@ -1255,10 +1295,15 @@ def changed_files(ws: Path) -> list[str]:
     后果很隐蔽：路径里仍然含 "mapper/ReportMapper" 这类位置片段，
     所以「改动在不在范围内」的判断照样过，**没有报错**。
     但任何拿路径去**打开文件**的检查都会拿到一个不存在的路径，
-    然后静默跳过——本轮那条「新增 Mapper 方法必须��对应 SQL」的校验
+    然后静默跳过——本轮那条「新增 Mapper 方法必须有对应 SQL」的校验
     就是这么被废掉的：它看见的是 `erver/src/...`，文件不存在 → 跳过。
+
+    **未跟踪的文件要逐个列出来**（`-uall`）：默认的 porcelain 把未跟踪的
+    **目录**折叠成一个条目（`?? server/.../module/newthing/`）——
+    清单里躺着一个目录，拿路径去**打开文件**的检查全都打不开
+    （静默跳过），「新增 Mapper 方法必须有对应 SQL」这类校验就废了。
     """
-    out = _run(["git", "status", "--porcelain"], cwd=ws)
+    out = _run(["git", "status", "--porcelain", "-uall"], cwd=ws)
     if out.returncode != 0:
         return []
     files = []
@@ -1269,8 +1314,14 @@ def changed_files(ws: Path) -> list[str]:
             continue
         # porcelain 格式：XY path（重命名是 "R  old -> new"）
         path = line.split(" -> ")[-1].strip() if " -> " in line else line[3:].strip()
-        if path:
-            files.append(path)
+        if not path:
+            continue
+        # **符号链接不进清单**（2026-10-30 实测）：临时挂的
+        # `web/node_modules` 软链会被 git 当成未跟踪文件报出来，
+        # 混进清单后判据会拿它判红——理由在骗人。详见 `is_symlink_path`。
+        if is_symlink_path(ws, path):
+            continue
+        files.append(path)
     return files
 
 
@@ -1316,15 +1367,42 @@ def commit_changes(ws: Path, message: str) -> tuple[Optional[str], Optional[str]
     所以提交不能只活在临时工作区里——要挂到主仓的分支上。
 
     Returns: (commit_sha, branch)；没提交成返回 (None, None)
+
+    **没提交成就是没提交成，不许拿基线 sha 顶替**（2026-10-30 实测撞出来的）：
+    零改动时 `git add -A` 暂存的是那个临时软链，剔掉软链后暂存区空了 →
+    `git commit` 失败（nothing to commit）→ 可这里原来**不看提交成不成功**，
+    直接 `git rev-parse HEAD` → 拿回**基线那个 sha**。
+
+    后果是三重的假信号：
+    - `commit_count=1`（谎报有提交）
+    - `branch=beeos/dev-<基线sha>` 指向基线（交付分支是空的）
+    - `artifact_traceable` 判**绿**（提交在仓里、分支也在仓里、还一致——
+      因为它俩都是基线！）
+
+    读者拿到的却是「追得回去」的结论，可那个提交里**什么都没有**。
+    「记录不许凭空消失」的反面是「记录不许凭空出现」——
+    没有提交就不能有提交号。
     """
     _run(["git", "add", "-A"], cwd=ws)
     _drop_symlinks_from_index(ws)
-    _run(["git", "-c", "user.name=beeos", "-c", "user.email=beeos@local",
-          "commit", "-m", message], cwd=ws)
+    # **暂存区里到底有没有东西可提交**：剔掉软链后如果是空的，
+    # 说明这次真的什么都没改 → 不能拿基线 sha 冒充提交。
+    staged = _run(["git", "diff", "--cached", "--name-only"], cwd=ws)
+    if staged.returncode != 0 or not staged.stdout.strip():
+        return None, None
+    head_before = _run(["git", "rev-parse", "HEAD"], cwd=ws).stdout.strip()
+    commit = _run(["git", "-c", "user.name=beeos", "-c", "user.email=beeos@local",
+                   "commit", "-m", message], cwd=ws)
+    if commit.returncode != 0:
+        # 提交失败 → 没有提交。**不许往下走**（下一步就是拿基线 sha）。
+        return None, None
     sha = _run(["git", "rev-parse", "HEAD"], cwd=ws)
     if sha.returncode != 0:
         return None, None
     commit_sha = sha.stdout.strip()
+    if not commit_sha or commit_sha == head_before:
+        # HEAD 没动 → 这次没有真的提交（不能让基线 sha 冒充交付）
+        return None, None
     repo = repo_path()
     branch = f"beeos/dev-{commit_sha[:8]}"
     created = _run(["git", "branch", "-f", branch, commit_sha], cwd=repo)

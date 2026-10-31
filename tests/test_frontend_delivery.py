@@ -434,7 +434,10 @@ def test_commit_changes_drops_symlinks(tmp_path, monkeypatch):
 
     from boxes.wms_development.codegen import commit_changes
 
+    # **有真改动才有提交**：只挂了一个软链 = 这次什么都没改
+    (repo / "real.txt").write_text("y", encoding="utf-8")
     sha, _branch = commit_changes(repo, "test")
+    assert sha, "有真改动就该提交成功"
 
     listed = subprocess.run(
         ["git", "ls-tree", "-r", "--name-only", sha],
@@ -443,6 +446,44 @@ def test_commit_changes_drops_symlinks(tmp_path, monkeypatch):
     assert "web/node_modules" not in listed, \
         f"符号链接进了交付物：{listed}"
     assert "real.txt" in listed, "普通文件被误删了"
+
+
+def test_a_workspace_with_only_a_symlink_reports_no_commit(tmp_path, monkeypatch):
+    """只挂了一个软链 = 这次什么都没改 → **不许报一个提交号**
+
+    2026-10-30 实测：旧口径下这里会拿**基线 sha** 顶替
+    → `commit_count=1`（谎报有提交）、`artifact_traceable` 判**绿**
+    （提交在仓里、分支也在仓里、还一致——因为它俩都是基线）。
+
+    读者拿到「追得回去」的结论，可那个提交里**什么都没有**。
+    """
+    import subprocess
+
+    repo = tmp_path / "repo2"
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=str(repo), capture_output=True, text=True,
+        )
+
+    git("init", "-q")
+    git("config", "user.name", "t")
+    git("config", "user.email", "t@t")
+    (repo / "real.txt").write_text("x", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "init")
+    (repo / "web").mkdir()
+    (repo / "web" / "node_modules").symlink_to(repo / "real.txt")
+
+    monkeypatch.setenv("BEEOS_WMS_REPO", str(repo))
+    monkeypatch.setenv("BEEOS_DEV_WORKSPACE", str(tmp_path / "ws"))
+
+    from boxes.wms_development.codegen import commit_changes
+
+    sha, branch = commit_changes(repo, "test")
+    assert sha is None, f"没提交成却报了个提交号：{sha}"
+    assert branch is None
 
 
 # ============================================================

@@ -62,6 +62,7 @@ from boxes.wms_development.codegen import (
     migration_note_for,
     commit_changes,
     generate_edits,
+    head_sha,
     prepare_workspace,
     prune_stale_workspaces,
     repo_path,
@@ -208,6 +209,10 @@ def dev_code_handler(input_data: dict[str, Any]) -> dict[str, Any]:
 
     prune_stale_workspaces()
     ws = prepare_workspace(base_ref, dev_task_id)
+    # **基线提交号**：工作区此刻的 HEAD。
+    # 零改动时没有新提交，制品却是从基线编出来的——
+    # 「它是从哪个提交编出来的」得有人记着（判据据此判可追溯）。
+    base_commit = head_sha(ws)
     files = collect_context(ws, locations)
     if not files:
         raise CodegenError(
@@ -230,8 +235,23 @@ def dev_code_handler(input_data: dict[str, Any]) -> dict[str, Any]:
     # 「pickAccuracy」→ 判成「已实现」就放行了。可业务方要的是
     # **「在库存看板看得到」**——那个字段在看板 VO 上，它压根不在。
     # 全仓匹配分不出「看板上有这个数」和「别处有个同名方法」。
-    source_text = "\n".join(files.values())
-    states = implementation_states(concepts, source_text, files)
+    #
+    # **必须用全量工作区，不能用喂给模型的那份上下文**（2026-10-30 实测撞出来的）：
+    # 上下文是**截断**的（文件数/字节数有上限，优先给各落点各一份），
+    # 同一个概念在两个口径下会得到**两个答案**——
+    # 实测：zone 的证据文件在截断的 40 个文件之外 →
+    # 用上下文算 = 「missing」，用全量 227 个文件算 = 「implemented」。
+    #
+    # 后果不是「多跑一轮」，是**判据自己在骗人**：
+    # 「missing」会把 zone 塞进 `must_implement` → 模型被要求
+    # 「新增实现」一个早就存在的东西 → 它试了半天改不动 → 实际零改动 →
+    # 判红，理由还写着「改了方案没覆盖的文件」——
+    # 而真正的原因是「这次什么都不用改」。
+    #
+    # **判据和证据核对必须同源**：`_verify_evidence` 用的是
+    # `collect_all_sources`，这里也用 `collect_all_sources`。
+    # 同一份事实只能有一个答案。
+    all_sources = collect_all_sources(ws)
     # **只算预期挂着的概念**：模型元素里的实体（sku/lot…）不是这次要验的东西，
     # 它们没有实现证据也不该拖垮这次交付的判定。
     expectation_concepts = [
@@ -239,6 +259,15 @@ def dev_code_handler(input_data: dict[str, Any]) -> dict[str, Any]:
             str(e.get("wms_kind") or "") for e in expectations
         ) if c
     ]
+    # **要判的概念 = 方案的概念 ∪ 预期挂着的概念**：
+    # 判据问的是「**需求要的东西**落地了没有」，
+    # 所以需求提到的每个概念都得有状态——哪怕设计盒没把它列进 concepts。
+    judge_concepts = list(dict.fromkeys(
+        [str(c) for c in concepts if c] + expectation_concepts
+    ))
+    states = implementation_states(
+        judge_concepts, "\n".join(all_sources.values()), all_sources,
+    )
     missing = [
         (c, implementation_evidence_description(c))
         for c, s in states.items() if s == "missing"
@@ -403,21 +432,38 @@ def dev_code_handler(input_data: dict[str, Any]) -> dict[str, Any]:
             f" {len(concepts)} 个 WMS 概念（{'、'.join(concepts) or '-'}）",
         )
 
-    # **以基线为准的权威改动清单**：git diff（基线…工作区）。
-    # 用它而不是「git status」——后者在提交后就空了。
-    final_changed = commit_range_files(ws, base_ref) or dirty
+    # **以基线为准的权威改动清单**：提交了就用 git diff（基线…工作区）；
+    # **没提交就是没改**——不许拿 dirty 兜底。
+    #
+    # **为什么不能 `or dirty`**（2026-10-30 实测撞出来的）：
+    # 「相对基线的改动」和「工作区脏文件」是**两回事**，混起来会造出
+    # 一次根本不存在的交付：diff 为空（没提交）→ 兜底成 dirty →
+    # dirty 里只有那个临时软链 → 判据说「改了方案没覆盖的文件：
+    # web/node_modules」——**判红的理由完全在骗人**
+    # （真正的原因是：这次什么都不用改）。
+    final_changed = commit_range_files(ws, base_ref) if commit_sha else dirty
+
+    # **最终的实现状态**：模型改完之后重新算一遍。
+    # 判据问的是「方案落地了没有」——落地与否是**改完之后**的事实，
+    # 不是起跑时的快照。起跑时的状态只用来决定「要不要让模型去实现」。
+    final_sources = collect_all_sources(ws)
+    final_states = implementation_states(
+        judge_concepts, "\n".join(final_sources.values()), final_sources,
+    )
 
     return {
         "dev_task_id": dev_task_id,
         "commit_sha": commit_sha or "",
         "branch": branch or "",
+        # **基线提交号**：没有新提交时，制品就是从它编出来的
+        "base_commit": base_commit,
         "commit_count": 1 if commit_sha else 0,
         "changed_files": final_changed,
         "codegen_summary": summary,
         "workspace_path": str(ws),
         # **机械核对出来的实现状态**（不是模型说的）
         "concept_states": [
-            {"concept": c, "state": st} for c, st in states.items()
+            {"concept": c, "state": st} for c, st in final_states.items()
         ],
         "expectation_concepts": expectation_concepts,
         # 往下带
@@ -462,6 +508,8 @@ def dev_build_handler(input_data: dict[str, Any]) -> dict[str, Any]:
         "dev_task_id": dev_task_id,
         "commit_sha": str(input_data.get("commit_sha") or ""),
         "branch": str(input_data.get("branch") or ""),
+        # **基线提交号**跟着走：没有新提交时它就是制品的来源
+        "base_commit": str(input_data.get("base_commit") or ""),
         "workspace_path": workspace_path,
         "commit_count": int(input_data.get("commit_count") or 0),
         "changed_files": input_data.get("changed_files") or [],
@@ -511,6 +559,8 @@ def build_packager_handler(input_data: dict[str, Any]) -> dict[str, Any]:
         commit_sha = str(input_data.get("commit_sha") or "")
         branch = str(input_data.get("branch") or "")
         digest = str(input_data.get("artifact_digest") or "")
+        # **基线提交号**：零改动时没有新提交，制品是从它编出来的
+        base_commit = str(input_data.get("base_commit") or "")
 
         review_ok, review_reason, _detail = review.coverage(
             changed, locations,
@@ -524,6 +574,7 @@ def build_packager_handler(input_data: dict[str, Any]) -> dict[str, Any]:
         try:
             trace_ok, trace_reason, _tdetail = review.traceable(
                 commit_sha or None, branch or None, digest or None, repo_path(),
+                base_commit or None,
             )
         except CodegenError as exc:
             trace_ok, trace_reason = False, str(exc)
@@ -586,6 +637,8 @@ def build_packager_handler(input_data: dict[str, Any]) -> dict[str, Any]:
             # ---- 证据 ----
             "commit_sha": commit_sha,
             "branch": branch,
+            # **基线提交号**：没有新提交时，制品的来源就是它
+            "base_commit": base_commit,
             "changed_files": changed,
             # **这次改动瞄准了哪些预期**——不是「实现了哪些预期」：
             # 「实现了」得由测试盒跑真实场景来回答，这儿只能声明目标。
@@ -601,6 +654,13 @@ def build_packager_handler(input_data: dict[str, Any]) -> dict[str, Any]:
             ],
             "review_reason": review_reason,
             "trace_reason": trace_reason,
+            # **判据的凭据也落在制品里**（2026-10-30 补）：
+            # 上一轮线上判红，理由是「改了方案没覆盖的文件：web/node_modules」，
+            # 而看板上**查不到**任何一个概念的实现状态——
+            # 读者只看到「红了」，没法判断是「真没落地」还是「判据在骗人」。
+            # 判红的理由必须指向真正的原因，而「真正的原因」得**看得见**。
+            "concept_states": input_data.get("concept_states") or [],
+            "expectation_concepts": input_data.get("expectation_concepts") or [],
             "codegen_summary": str(input_data.get("codegen_summary") or ""),
             "artifact_path": artifact_path,
             # ---- 前端 ----

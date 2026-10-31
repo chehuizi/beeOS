@@ -1463,3 +1463,524 @@ def test_migration_advice_uses_current_workspace_max_not_stale_baseline(tmp_path
     assert "V6" in text, f"建议的版本号不是当前可用的那个：\n{text}"
     assert "新建一个迁移：V5" not in text, \
         f"建议了一个已被占用的版本号（模型会照做然后被再拦一次）：\n{text}"
+
+
+# ============================================================
+# 2026-10-30 实测撞出来的四个 bug
+#
+# 线上那次链跑里，开发盒判了红：
+#   review_coverage=false，理由「改了方案没覆盖的文件：web/node_modules」
+#   artifact_traceable=true（追得到「提交」449a699——那其实是**基线**）
+#
+# 真相是：基线上库区早就完整落地，模型正确地**零改动**，
+# 而这只盒子自己的四个 bug 把「正确的零改动」判成了红，
+# 还给了一个**完全在骗人**的理由。
+#
+# 四个 bug：
+#   1. 实现状态用**截断的上下文**算 → zone 被判「missing」
+#      → 模型被要求「新增实现」一个早就存在的东西
+#   2. 临时软链 `web/node_modules` 混进改动清单
+#   3. 提交失败时**拿基线 sha 顶替** → commit_count=1、artifact_traceable 假绿
+#   4. 判据问「这次有没有改动」，而不是「方案落没落地」
+# ============================================================
+
+
+def _git_repo_with_a_symlink(tmp_path):
+    """一个真的 git 仓 + 一个临时软链（模拟前端依赖软链）
+
+    软链是开发盒自己挂的：worktree 里没有 gitignore 的依赖，
+    不挂就没法跑 `npm run build`。
+    """
+    import subprocess
+
+    repo = tmp_path / "wms"
+    (repo / "server/src/main/java/com/wms/entity").mkdir(parents=True)
+    (repo / "web").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    (repo / "server/src/main/java/com/wms/entity/Location.java").write_text(
+        "class Location {}\n", encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+    # 主仓的依赖目录（**在仓外**——仓里的话它自己就成了待提交的改动）
+    deps = tmp_path / "deps"
+    deps.mkdir()
+    (deps / "vue.js").write_text("//\n", encoding="utf-8")
+    # worktree 里的软链
+    (repo / "web" / "node_modules").symlink_to(deps, target_is_directory=True)
+    # **另一个**软链：规则是「任何符号链接都不是交付物」，
+    # 不是「node_modules 这一个不是」
+    (repo / "web" / "vendor_shared").symlink_to(deps, target_is_directory=True)
+    return repo
+
+
+class TestTheTemporarySymlinkIsNotADeliverable:
+    """符号链接不是交付物
+
+    2026-10-30 实测：开发盒在隔离工作区里给前端挂了
+    `web/node_modules` 软链（不挂就没法跑前端构建）。
+    `.gitignore` 的 `node_modules/` 只匹配**目录**，不匹配软链 →
+    git 把它当未跟踪文件报出来 → 混进改动清单 →
+    判据说「改了方案没覆盖的文件：web/node_modules」。
+
+    **判红的理由在骗人**：真正的原因是这次什么都没改。
+    """
+
+    def test_the_symlink_is_not_in_the_changed_list(self, tmp_path):
+        from boxes.wms_development.codegen import changed_files
+
+        repo = _git_repo_with_a_symlink(tmp_path)
+        files = changed_files(repo)
+        assert "web/node_modules" not in files, (
+            f"临时软链混进了改动清单：{files}"
+        )
+        assert "web/vendor_shared" not in files, (
+            f"软链混进了改动清单（规则是「任何符号链接」，不是一个名字）：{files}"
+        )
+        # **清单里不许躺着一个目录**：porcelain 默认把未跟踪的目录折叠成
+        # 一个条目（`?? web/`），拿路径去**打开文件**的检查全都打不开
+        # （静默跳过）→「新增 Mapper 方法必须有对应 SQL」这类校验就废了。
+        assert files == [], (
+            f"工作区里只有软链，清单却不是空的：{files}"
+        )
+
+    def test_a_real_change_is_still_listed(self, tmp_path):
+        """剔软链不许把真改动也剔掉"""
+        from boxes.wms_development.codegen import changed_files
+
+        repo = _git_repo_with_a_symlink(tmp_path)
+        target = repo / "server/src/main/java/com/wms/entity/Location.java"
+        target.write_text("class Location { int x; }\n", encoding="utf-8")
+        files = changed_files(repo)
+        assert "server/src/main/java/com/wms/entity/Location.java" in files
+
+    def test_the_symlink_is_not_in_the_commit(self, tmp_path, monkeypatch):
+        from boxes.wms_development import codegen
+
+        repo = _git_repo_with_a_symlink(tmp_path)
+        monkeypatch.setenv(codegen.WMS_REPO_ENV, str(repo))
+        target = repo / "server/src/main/java/com/wms/entity/Location.java"
+        target.write_text("class Location { int x; }\n", encoding="utf-8")
+
+        sha, _branch = codegen.commit_changes(repo, "改了点东西")
+        assert sha, "有真改动就该提交成功"
+        import subprocess
+        listed = subprocess.run(
+            ["git", "show", "--name-only", "--pretty=format:", sha],
+            cwd=repo, capture_output=True, text=True,
+        ).stdout.split()
+        assert "web/node_modules" not in listed, (
+            f"软链进了提交：{listed}"
+        )
+
+
+class TestNoCommitIsNeverFaked:
+    """没提交成就不能有提交号
+
+    2026-10-30 实测：零改动时 `git commit` 失败（nothing to commit），
+    可代码不看提交成不成功，直接 `git rev-parse HEAD` → 拿回**基线 sha**。
+    后果是三重的假信号：`commit_count=1`（谎报有提交）、
+    `branch=beeos/dev-<基线sha>`（交付分支是空的）、
+    `artifact_traceable` 判**绿**（提交在仓里、分支也在仓里、还一致——
+    因为它俩都是基线）。
+
+    读者拿到「追得回去」的结论，可那个提交里**什么都没有**。
+    「记录不许凭空消失」的反面是「记录不许凭空出现」。
+    """
+
+    def test_a_workspace_with_nothing_to_commit_reports_no_commit(
+        self, tmp_path, monkeypatch,
+    ):
+        from boxes.wms_development import codegen
+
+        repo = _git_repo_with_a_symlink(tmp_path)
+        monkeypatch.setenv(codegen.WMS_REPO_ENV, str(repo))
+        sha, branch = codegen.commit_changes(repo, "空提交")
+        assert sha is None, f"没提交成却报了个提交号：{sha}"
+        assert branch is None
+
+    def test_the_reported_sha_is_not_the_baseline(self, tmp_path, monkeypatch):
+        """拿基线 sha 顶替是最阴的一种：它看着完全正常"""
+        import subprocess
+
+        from boxes.wms_development import codegen
+
+        repo = _git_repo_with_a_symlink(tmp_path)
+        monkeypatch.setenv(codegen.WMS_REPO_ENV, str(repo))
+        baseline = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo,
+            capture_output=True, text=True,
+        ).stdout.strip()
+
+        sha, _branch = codegen.commit_changes(repo, "空提交")
+        assert sha != baseline
+
+    def test_the_run_reports_no_commit_when_nothing_was_changed(
+        self, tmp_path, monkeypatch,
+    ):
+        """端到端：工作区里只有临时软链 → 这一跳没改任何东西
+
+        旧口径下这里会报出「提交 = 基线」「改动 = web/node_modules」。
+        """
+        from boxes.wms_development import runner
+
+        repo = _git_repo_with_a_symlink(tmp_path)
+        monkeypatch.setattr(runner, "prune_stale_workspaces", lambda: None)
+        monkeypatch.setattr(runner, "prepare_workspace", lambda *a: repo)
+        monkeypatch.setattr(
+            runner, "generate_edits", lambda *a, **k: ([], "这次不用改"),
+        )
+        monkeypatch.setenv("BEEOS_WMS_REPO", str(repo))
+
+        result = runner.dev_code_handler({
+            "dev_task_id": "t-symlink",
+            "locations": ["entity/Location"],
+            "concepts": ["location"],
+            "expectations": [{"wms_kind": "location", "statement": "库位"}],
+        })
+        assert result["changed_files"] == [], (
+            f"没改任何东西，却报出了改动：{result['changed_files']}"
+        )
+        assert result["commit_sha"] == ""
+        assert result["commit_count"] == 0
+
+
+class TestTheImplementationStateIsMeasuredOnTheWholeWorkspace:
+    """实现状态必须和证据核对**同源**（全量工作区）
+
+    2026-10-30 实测：实现状态用的是**喂给模型的上下文**（截断的 40 个文件），
+    证据核对用的是**全量工作区**（227 个文件）——
+    同一个概念（zone）在两个口径下得到两个答案：
+    截断口径说「missing」，全量口径说「implemented」。
+
+    后果不是「多跑一轮」，是**判据自己在骗人**：
+    「missing」把 zone 塞进 must_implement → 模型被要求新增实现
+    一个早就存在的东西 → 它改不动 → 实际零改动 → 判红。
+    """
+
+    def test_a_concept_outside_the_truncated_context_is_still_implemented(
+        self, tmp_path, monkeypatch,
+    ):
+        from boxes.wms_development import runner
+
+        ws = tmp_path / "ws"
+        (ws / "server/src/main/java/com/wms/entity").mkdir(parents=True)
+        (ws / "server/src/main/java/com/wms/mapper").mkdir(parents=True)
+        (ws / "server/src/main/java/com/wms/module/location/controller").mkdir(
+            parents=True,
+        )
+        (ws / "server/src/main/java/com/wms/entity/Location.java").write_text(
+            "class Location {}\n", encoding="utf-8",
+        )
+        (ws / "server/src/main/java/com/wms/mapper/LocationMapper.java").write_text(
+            "interface LocationMapper {}\n", encoding="utf-8",
+        )
+        (ws / "server/src/main/java/com/wms/module/location/controller/"
+           "LocationController.java").write_text(
+            "class LocationController {}\n", encoding="utf-8",
+        )
+
+        monkeypatch.setattr(runner, "prune_stale_workspaces", lambda: None)
+        monkeypatch.setattr(runner, "prepare_workspace", lambda *a: ws)
+        # **喂给模型的上下文是截断的**：只给第一个文件
+        monkeypatch.setattr(
+            runner, "collect_context",
+            lambda ws_, locs: {
+                "server/src/main/java/com/wms/entity/Location.java":
+                    "class Location {}\n",
+            },
+        )
+        seen: dict = {}
+
+        def fake_generate_edits(ws_, expectations, locations, files, **kw):
+            seen["must_implement"] = kw.get("must_implement")
+            return [], "这次不用改"
+
+        monkeypatch.setattr(runner, "generate_edits", fake_generate_edits)
+
+        result = runner.dev_code_handler({
+            "dev_task_id": "t-states",
+            "locations": ["entity/Location"],
+            "concepts": ["location"],
+            "expectations": [{"wms_kind": "location", "statement": "库位"}],
+        })
+
+        states = {row["concept"]: row["state"] for row in result["concept_states"]}
+        assert states.get("location") == "implemented", (
+            f"实现状态不是按全量工作区算的：{result['concept_states']}"
+        )
+        assert seen["must_implement"] == [], (
+            "模型被要求「新增实现」一个早就存在的东西："
+            f"{seen['must_implement']}"
+        )
+
+
+class TestZeroChangeIsJudgedByWhetherTheSchemeLanded:
+    """零改动也要能判绿——但得有外部神谕
+
+    2026-10-30 实测：基线上库区早就完整落地，模型正确地零改动，
+    判据却问「有改动吗」→ 判红。
+
+    「有没有改动」是**过程**，「方案落没落地」才是**交付**。
+    用过程判交付，等于把「方案已落地」判成「没干活」。
+    """
+
+    def test_a_scheme_already_in_the_code_is_a_delivery(self):
+        ok, reason, _detail = review.coverage(
+            [], locations_for(["zone", "location", "warehouse"]),
+            states={
+                "zone": "implemented",
+                "location": "implemented",
+                "warehouse": "implemented",
+            },
+            expectation_concepts=["zone", "location", "warehouse"],
+        )
+        assert ok is True, reason
+
+    def test_a_concept_the_code_lacks_is_still_red(self):
+        """零改动不等于放行——查不到实现照样红"""
+        ok, reason, _detail = review.coverage(
+            [], locations_for(["zone", "wms_pick_accuracy"]),
+            states={"zone": "implemented", "wms_pick_accuracy": "missing"},
+            expectation_concepts=["zone", "wms_pick_accuracy"],
+        )
+        assert ok is False
+        assert "wms_pick_accuracy" in reason
+
+    def test_a_concept_the_design_asked_for_is_missing_is_still_red(self):
+        """方案说要实现的某个概念查不到 → 方案没落地
+
+        **哪怕它不在需求的预期清单里**：设计包说了要实现它，
+        源码里就查不到 → 那就是没落地。
+        放宽成「只查需求清单里的」= 漏判。
+        """
+        ok, reason, _detail = review.coverage(
+            [], locations_for(["zone", "fefo"]),
+            states={"zone": "implemented", "fefo": "missing"},
+            expectation_concepts=["zone"],
+        )
+        assert ok is False
+        assert "fefo" in reason
+
+    def test_the_designs_own_concepts_are_judged_too(self):
+        """没有预期清单时，判据问的是**方案自己说的那几个概念**
+
+        旧口径下这里直接判红，理由写着
+        「方案要么代码里已经有了（模型自述，不可作数）」——
+        可我们手里**有机械证据**（源码里查得到），
+        说它是「模型自述」是在骗人。
+        """
+        ok, reason, _detail = review.coverage(
+            [], locations_for(["fefo"]),
+            states={"fefo": "implemented"},
+            expectation_concepts=[],
+        )
+        assert ok is True, reason
+        assert "自述" not in reason
+
+    def test_the_verdict_names_the_concepts_it_judged(self):
+        """判红的理由要指出是哪些概念——读者才查得动"""
+        _ok, reason, detail = review.coverage(
+            [], locations_for(["zone"]),
+            states={"zone": "unknown"},
+            expectation_concepts=["zone"],
+        )
+        assert "zone" in reason
+        assert detail["concept_states"] == {"zone": "unknown"}
+
+    def test_the_artifact_carries_the_evidence_of_the_verdict(self):
+        """判红要可查：制品里必须带得上判据用的那份凭据
+
+        上一轮线上判红，理由是「改了方案没覆盖的文件：web/node_modules」，
+        而看板上查不到任何一个概念的实现状态——
+        读者没法判断是「真没落地」还是「判据在骗人」。
+        """
+        result = build_packager_handler({
+            "dev_task_id": "t1",
+            "commit_count": 0,
+            "workspace_path": "",
+            "changed_files": [],
+            "locations": locations_for(["zone"]),
+            "commit_sha": "",
+            "branch": "",
+            "artifact_digest": "sha256:abc",
+            "concept_states": [{"concept": "zone", "state": "implemented"}],
+            "expectation_concepts": ["zone"],
+        })
+        assert result["concept_states"] == [{"concept": "zone", "state": "implemented"}]
+        assert result["expectation_concepts"] == ["zone"]
+
+    def test_the_artifact_says_where_the_jar_came_from(self, tmp_path, monkeypatch):
+        """零改动时读者要能看出「这份 jar 是基线编的」
+
+        制品里没有这句话，读者只能靠猜——
+        而「追得回去」这句话必须**指向一个具体的提交**。
+        """
+        import subprocess
+
+        from boxes.wms_development import runner
+
+        repo = tmp_path / "fake-wms"
+        repo.mkdir()
+        for cmd in (["init", "-q"], ["config", "user.email", "t@t"],
+                    ["config", "user.name", "t"]):
+            subprocess.run(["git", *cmd], cwd=repo, check=True,
+                           capture_output=True)
+        (repo / "A.java").write_text("class A {}\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True,
+                       capture_output=True)
+        baseline = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo,
+            capture_output=True, text=True,
+        ).stdout.strip()
+        monkeypatch.setattr(runner, "repo_path", lambda: repo)
+
+        result = build_packager_handler({
+            "dev_task_id": "t1",
+            "commit_count": 0,
+            "workspace_path": "",
+            "changed_files": [],
+            "locations": locations_for(["zone"]),
+            "commit_sha": "",
+            "branch": "",
+            "base_commit": baseline,
+            "artifact_digest": "sha256:abc",
+            "concept_states": [{"concept": "zone", "state": "implemented"}],
+            "expectation_concepts": ["zone"],
+        })
+        assert result["base_commit"] == baseline
+        assert "基线" in result["trace_reason"], result["trace_reason"]
+
+
+class TestEveryJudgedConceptHasACriterion:
+    """需求要的概念都得有判据——「判不了」不能当成「已实现」
+
+    2026-10-30 实测：需求提到「库位归属在库区上」→
+    期望的概念是 zone / location / warehouse。
+    zone 有实现证据，**location 和 warehouse 没登记** →
+    状态「判不了」→ 零改动的交付被判红。
+
+    「判不了」不等于「没实现」，可它**也不能算已实现**。
+    真正的解法是把证据补上——仓里明明有这些主数据，
+    登记表却漏了。
+    """
+
+    def test_the_master_data_concepts_have_implementation_evidence(self):
+        from boxes.wms_development.code_map import implementation_evidence
+
+        for concept in ("zone", "sku", "inventory", "location",
+                        "warehouse", "inbound", "outbound", "wave", "count"):
+            assert implementation_evidence(concept), (
+                f"{concept} 没有登记实现证据 → 状态只能是「判不了」"
+            )
+
+    def test_the_evidence_is_structural_not_a_field_name(self):
+        """证据抄的是**结构**（实体 + Mapper + 对外接口），不是名字
+
+        只登记一个字段名 = 给模型开了一道「加个同名字段就算实现」的
+        免检门——那比没有证据更坏（假实现）。
+        """
+        from boxes.wms_development.code_map import implementation_evidence
+
+        for concept in ("sku", "inventory", "location", "warehouse",
+                        "inbound", "outbound", "wave", "count"):
+            hints = [hint for hint, _tok, *_rest in implementation_evidence(concept)]
+            assert any(h.startswith("entity/") for h in hints), concept
+            assert any(h.startswith("mapper/") for h in hints), concept
+            assert any(h.startswith("module/") for h in hints), concept
+
+
+class TestTheZeroChangeArtifactIsStillTraceable:
+    """零改动的交付也要追得回去——追的是**基线提交**
+
+    2026-10-30 实测：方案已经在代码里了 → 模型正确地不改动 →
+    没有新提交 → 按老口径「没有提交」判红。
+
+    可这份 jar **确实**是从某个提交编出来的——基线那个提交
+    （工作区一个字节没动，编出来的就是基线的内容）。
+
+    「追不回去」问的是「读者能不能说出它是哪次改动编出来的」，
+    不是「这次有没有新提交」。
+
+    **但不许拿基线冒充新提交**：那是另一个 bug（没提交成却报提交号，
+    读者以为追得到「这次改动」，实际那个提交里什么都没有）。
+    区别就在**说清楚是基线还是新提交**。
+    """
+
+    @pytest.fixture()
+    def repo(self, tmp_path):
+        """一个真的 git 仓（有一个基线提交）"""
+        import subprocess
+
+        root = tmp_path / "fake-wms"
+        root.mkdir()
+        run = lambda *a: subprocess.run(  # noqa: E731
+            ["git", *a], cwd=str(root), capture_output=True, text=True, check=True,
+        )
+        run("init", "-q")
+        run("config", "user.email", "t@t")
+        run("config", "user.name", "t")
+        (root / "A.java").write_text("class A {}\n", encoding="utf-8")
+        run("add", "-A")
+        run("commit", "-qm", "base")
+        return root
+
+    def test_a_zero_change_artifact_traces_to_the_baseline(self, repo):
+        import subprocess
+
+        baseline = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo,
+            capture_output=True, text=True,
+        ).stdout.strip()
+        ok, reason, detail = review.traceable(
+            None, None, "sha256:abc", repo, base_commit=baseline,
+        )
+        assert ok is True, reason
+        assert "基线" in reason
+        assert detail["base_commit"] == baseline
+
+    def test_without_any_commit_it_is_not_traceable(self, repo):
+        """既没有新提交、也没记基线 → 追不回去（不许含糊过去）"""
+        ok, reason, _detail = review.traceable(
+            None, None, "sha256:abc", repo,
+        )
+        assert ok is False
+        assert "没有提交" in reason
+
+    def test_a_baseline_that_is_not_in_the_repo_is_not_traceable(self, repo):
+        ok, reason, _detail = review.traceable(
+            None, None, "sha256:abc", repo, base_commit="0" * 40,
+        )
+        assert ok is False
+        assert "不在仓里" in reason
+
+    def test_the_run_records_where_the_artifact_came_from(
+        self, tmp_path, monkeypatch,
+    ):
+        """这一跳必须把基线提交号带下去"""
+        from boxes.wms_development import runner
+
+        repo = _git_repo_with_a_symlink(tmp_path)
+        monkeypatch.setattr(runner, "prune_stale_workspaces", lambda: None)
+        monkeypatch.setattr(runner, "prepare_workspace", lambda *a: repo)
+        monkeypatch.setattr(
+            runner, "generate_edits", lambda *a, **k: ([], "这次不用改"),
+        )
+        monkeypatch.setenv("BEEOS_WMS_REPO", str(repo))
+
+        result = runner.dev_code_handler({
+            "dev_task_id": "t-base",
+            "locations": ["entity/Location"],
+            "concepts": ["location"],
+            "expectations": [{"wms_kind": "location", "statement": "库位"}],
+        })
+        assert result["base_commit"], "没记基线提交号——制品的来源就没人说得清了"
+        import subprocess
+        baseline = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo,
+            capture_output=True, text=True,
+        ).stdout.strip()
+        assert result["base_commit"] == baseline

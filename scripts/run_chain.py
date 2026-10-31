@@ -204,6 +204,43 @@ def _reset_verify_db(db_url: str, db_user: str) -> str:
     return f"已重置 {dbname}（Flyway 会重新跑迁移 + 种子数据）"
 
 
+def _build_change_request(
+    dev_result: dict, expectations: list[dict],
+) -> str:
+    """运维盒的变更单：**指名要放的那份构建**
+
+    **为什么不能只认 commit_sha**（2026-10-30 实测撞出来的）：
+    开发盒诚实地说「这次没有新改动（方案已落地）」→ 没有 commit_sha →
+    变更单成了空字符串 → 运维盒收到一条空变更单 →
+    「什么都没干」→ 运维盒判红。
+
+    可这次**照样要放行一份构建**——那份构建来自基线提交。
+    变更单问的是「要放哪份构建」，不是「有没有新提交」。
+
+    **指名要写清楚是哪一份**：有新提交就写新提交，
+    没有就写基线提交**并说清「本次没有新改动」**——
+    不然读变更单的人会以为这次改了代码。
+
+    **内容不许写死**：原来这里写死一句「（拣货准确率上库存看板）」，
+    换个需求就成了假话。改成从**这次的预期**里推。
+    """
+    commit_sha = str(dev_result.get("commit_sha") or "").strip()
+    base_commit = str(dev_result.get("base_commit") or "").strip()
+    kinds = list(dict.fromkeys(
+        str(e.get("wms_kind") or "") for e in expectations
+        if isinstance(e, dict) and str(e.get("wms_kind") or "").strip()
+    ))
+    label = "、".join(kinds) or "本次需求"
+    if commit_sha:
+        return f"放行 {commit_sha[:8]} 这份构建（{label}）"
+    if base_commit:
+        return (
+            f"放行 {base_commit[:8]} 这份构建（{label}；"
+            "本次没有新改动，方案已落地，这份构建来自基线提交）"
+        )
+    return ""
+
+
 def _web_base_from(prod_url: str) -> str:
     """从生产 API 根推导**前端部署的 base**（vite 的 base）
 
@@ -438,11 +475,7 @@ def main() -> int:
     }, chain_ref=chain_ref, chain_kind=chain_kind)
 
     # ---- 5) 运维盒（真读生产 + 真核对上游）----
-    commit_sha = str(dev_result.get("commit_sha") or "")
-    change_request = (
-        f"放行 {commit_sha[:8]} 这份构建（拣货准确率上库存看板）"
-        if commit_sha else ""
-    )
+    change_request = _build_change_request(dev_result, expectations)
     rollback_target = _git_head(wms_repo) if wms_repo else ""
     alerts = [a.strip() for a in (args.alerts or "").split(",") if a.strip()]
     ops = trigger_task("wms_ops_box", "handle_ops_request", {

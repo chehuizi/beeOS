@@ -227,6 +227,52 @@ WMS_CONCEPT_IMPL_EVIDENCE: dict[str, tuple[tuple[str, ...], ...]] = {
              # 库位页面里真的用上了库区接口（ts_usage 排除只 import）。
              ("web/src/views/location", "zoneApi", "ts_usage")),
 
+    # ---- 主数据与单据：实体 + Mapper + 对外接口 ----
+    #
+    # **为什么补这一组**（2026-10-30 实测撞出来的）：
+    # 上一轮链跑里，需求提到「库位归属在库区上」→ 期望的概念是
+    # zone / location / warehouse。zone 有实现证据（判「已实现」），
+    # **location 和 warehouse 没有登记** → 状态是「判不了」→
+    # 零改动的交付被判红，理由写着「实现状态判不了（没有登记实现证据）」。
+    #
+    # 「判不了」不等于「没实现」，可它**也不能算已实现**
+    # （认不出就判红）。真正的解法是**把证据补上**——
+    # 证据表是「这个概念在代码里长什么样」的登记表，
+    # 仓里明明有这些主数据，登记表却漏了。
+    #
+    # **证据只登记「结构性」的**（实体 + Mapper + 对外接口）：
+    # 这三样齐了 = 这个业务对象存在、能存、能被调。
+    # 这是**结构**层面的事实，抄名字不抄机制——
+    # 机制类概念（fifo/frozen/safety_stock/unique_slot/wave_merge…）
+    # 的证据必须是**机制**（像 fefo 的「按 expire_date 排序」），
+    # 只登记一个字段名 = 给模型开了一道「加个同名字段就算实现」的免检门，
+    # 那比没有证据更坏（假实现）。所以机制类概念宁可留「判不了」。
+    "sku": (("entity/Sku", "class Sku"),
+            ("mapper/SkuMapper", "SkuMapper"),
+            ("module/sku", "SkuController")),
+    "inventory": (("entity/Inventory", "class Inventory"),
+                  ("mapper/InventoryMapper", "InventoryMapper"),
+                  ("module/inventory", "InventoryController")),
+    "location": (("entity/Location", "class Location"),
+                 ("mapper/LocationMapper", "LocationMapper"),
+                 ("module/location", "LocationController")),
+    "warehouse": (("entity/Warehouse", "class Warehouse"),
+                  ("mapper/WarehouseMapper", "WarehouseMapper"),
+                  ("module/warehouse", "WarehouseController")),
+    "inbound": (("entity/InboundOrder", "class InboundOrder"),
+                ("mapper/InboundOrderMapper", "InboundOrderMapper"),
+                ("module/inbound", "InboundOrderController")),
+    "outbound": (("entity/OutboundOrder", "class OutboundOrder"),
+                 ("mapper/OutboundOrderMapper", "OutboundOrderMapper"),
+                 ("module/outbound", "OutboundOrderController")),
+    "wave": (("entity/Wave", "class Wave"),
+             ("mapper/WaveMapper", "WaveMapper"),
+             ("module/outbound", "WaveController")),
+    # 盘点：整条单据链齐了才算盘点存在
+    "count": (("entity/StocktakeOrder", "class StocktakeOrder"),
+              ("mapper/StocktakeMapper", "StocktakeMapper"),
+              ("module/stocktake", "StocktakeOrderController")),
+
     # ---- 约束：实现的机制 ----
     "fefo": (("mapper/InventoryMapper", "ORDER BY expire_date"),),
     "lot": (("mapper/InventoryMapper", "expire_date"),),

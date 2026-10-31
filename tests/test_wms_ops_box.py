@@ -465,3 +465,100 @@ class TestNotApplicableIsNotPass:
         )
         assert record["runtime_state_recorded"] is False
         assert record["ops_determined"] is False
+
+
+# ============================================================
+# 零改动的交付照样要放行（2026-10-30 实测撞出来的）
+#
+# 开发盒诚实地说「这次没有新改动（方案已落地）」→ 没有 commit_sha →
+# 链脚本给的变更单成了空字符串 → 运维盒收到一条空变更单 →
+# 「什么都没干」→ 判红。
+#
+# 可这次**照样要放行一份构建**——那份构建来自基线提交。
+# 变更单问的是「要放哪份构建」，不是「有没有新提交」。
+# ============================================================
+
+
+class TestAZeroChangeDeliveryIsStillReleased:
+    def _artifact_without_a_new_commit(self) -> dict:
+        """零改动：没有新提交，制品来自基线提交"""
+        return {
+            "commit_sha": "",
+            "branch": "",
+            "base_commit": "449a6992275e0e09910ee92563a04e542ca14b39",
+            "artifact_digest": "sha256:deadbeefcafebabe",
+            "commit_count": 0,
+            "build_failed": False,
+            "build_reproducibility": True,
+            "unit_test_green": True,
+            "review_coverage": True,
+            "artifact_traceable": True,
+        }
+
+    def _run(self, change_request: str, artifact: dict) -> dict:
+        intake = ops_intake_handler({
+            "ops_task_id": "ops_1",
+            "change_request": change_request,
+            "alerts": [],
+            "rollback_target": "abc1234",
+            "verification_ref": _verification(),
+            "artifact_ref": artifact,
+        })
+        return ops_handle_handler(intake)
+
+    def test_a_change_naming_the_baseline_build_is_approved(self):
+        """指名基线那份构建 = 指名了要放的东西"""
+        out = self._run(
+            "放行 449a6992 这份构建（zone；本次没有新改动，方案已落地）",
+            self._artifact_without_a_new_commit(),
+        )
+        assert out["changes"][0]["approved"] is True, out["changes"][0]["reason"]
+        assert "449a6992" in out["changes"][0]["reason"]
+
+    def test_a_change_naming_another_build_is_not_approved(self):
+        """指名别的构建照样不行——放的东西得是验过的那份"""
+        out = self._run(
+            "放行 00000000 这份构建",
+            self._artifact_without_a_new_commit(),
+        )
+        assert out["changes"][0]["approved"] is False
+        assert "指名" in out["changes"][0]["reason"]
+
+    def test_the_chain_builds_a_change_request_even_without_a_new_commit(self):
+        """链脚本：没有新提交也要给出一份**指名了构建**的变更单
+
+        空变更单 → 运维盒「什么都没干」→ 判红。
+        """
+        import importlib.util
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[1] / "scripts" / "run_chain.py"
+        spec = importlib.util.spec_from_file_location("run_chain_under_test", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        request = mod._build_change_request(
+            {"commit_sha": "", "base_commit": "449a6992275e0e09910ee92563a04e542ca14b39"},
+            [{"wms_kind": "zone"}, {"wms_kind": "location"}],
+        )
+        assert "449a6992" in request
+        assert "zone" in request
+        assert "没有新改动" in request, (
+            f"变更单没说清这次没改代码：{request}"
+        )
+
+    def test_the_change_request_names_the_new_commit_when_there_is_one(self):
+        import importlib.util
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[1] / "scripts" / "run_chain.py"
+        spec = importlib.util.spec_from_file_location("run_chain_under_test2", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        request = mod._build_change_request(
+            {"commit_sha": "abcdef1234567890", "base_commit": "449a6992275e0e09910ee92563a04e542ca14b39"},
+            [{"wms_kind": "zone"}],
+        )
+        assert "abcdef12" in request
+        assert "没有新改动" not in request
